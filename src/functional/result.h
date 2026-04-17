@@ -12,16 +12,25 @@ template <typename T>
 class Result {
 
     const std::optional<T> m_result;
-    const std::exception m_exception;
+    const std::optional<std::exception> m_exception;
 
 public:
     Result(T res) : m_result(res) {}
     Result(std::exception e) : m_exception(e) {}
+    Result(const Result& r) : m_exception(r.m_exception)
+    {
+        m_result = r.m_result;
+    }
+    Result(Result&& r) : m_exception(r.m_exception)
+    {
+        m_result = r.m_result;
+    }
 
     template <typename R> static Result<R> success(R res) { return Result<R>(res); }
     template <typename R> static Result<R> failure(std::exception e) { return Result<R>(e); }
 
     bool is_success() { return m_result.has_value(); }
+    bool is_failure() { return !is_success(); }
 
     T& get()
     {
@@ -31,7 +40,7 @@ public:
 
     template <typename U> Result<U> map(std::function<U (T&)> func)
     {
-        if (!is_success()) return Result::failure(m_exception); // propagates exception down the path
+        if (is_failure()) return Result::failure(m_exception); // propagates exception down the path
         try { return Result::success(func(get())); }
         catch (std::exception e) { return Result::failure(e); }
     }
