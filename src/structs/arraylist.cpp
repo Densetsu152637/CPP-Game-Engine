@@ -82,15 +82,23 @@ void ArrayList<T>::_pop_and_shuffle_down(size_t i)
 template <typename T>
 ArrayList<T>::ArrayList(const ArrayList& arr)
 {
+    // shallow copy
     if (nullptr != m_arr) delete[] m_arr;
-    m_arr = arr.m_arr;
-    m_capacity = arr.m_capacity;
+    m_arr = new T[arr.m_capacity];
     m_size = arr.m_size;
+    m_capacity = arr.m_capacity;
+
+    // deep copy elements from other array into this one
+    for (int i = 0; i < arr.m_size; i++)
+    {
+        m_arr[i] = arr.m_arr[i];
+    }
 }
 
 template <typename T>
-ArrayList<T>::ArrayList(ArrayList&& arr)
+ArrayList<T>::ArrayList(ArrayList&& arr) noexcept
 {
+    // takes ownership of arr's memory
     if (nullptr != m_arr) delete[] m_arr;
     m_arr = arr.m_arr;
     m_capacity = arr.m_capacity;
@@ -99,4 +107,11 @@ ArrayList<T>::ArrayList(ArrayList&& arr)
     arr.m_arr = nullptr;
     arr.m_capacity = 0;
     arr.m_size = 0;
+}
+
+template <typename T>
+T& ArrayList<T>::at(size_t index)
+{
+    _wrap_around_size(index);
+    return m_arr[index];
 }

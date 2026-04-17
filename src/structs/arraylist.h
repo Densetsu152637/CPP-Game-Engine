@@ -6,6 +6,7 @@
 #define CPP_GAME_ENGINE_ARRAYLIST_H
 
 #include <cstddef>
+#include <functional>
 
 size_t round_to_nearest_2n(size_t size);
 
@@ -27,10 +28,10 @@ public:
     ArrayList() : ArrayList(16) {}
 
     ArrayList(const size_t initial_capacity)
-    { _resize(initial_capacity); }
+    { _resize(round_to_nearest_2n(initial_capacity)); }
 
     ArrayList(const ArrayList& arr);
-    ArrayList(ArrayList&& arr);
+    ArrayList(ArrayList&& arr) noexcept;
 
     size_t size() const
     { return m_size; }
@@ -52,6 +53,34 @@ public:
 
     void clamp_size()
     { restrict(m_size); }
+
+    T& at(size_t index);
+
+    template <typename U> void for_each(std::function<U (T&)> func)
+    {
+        for (int i = 0; i < m_size; i++)
+        {
+            T& t = m_arr[i];
+            if (NULL != t)
+            {
+                func(t);
+            }
+        }
+    }
+
+    template <typename U> ArrayList<U> map(std::function<U (T&)> func)
+    {
+        ArrayList<U> dest(m_capacity);
+        for (int i = 0; i < m_size; i++)
+        {
+            T& t = m_arr[i];
+            if (NULL != t)
+            {
+                dest.marr[i] = func(t);
+            }
+        }
+        return dest;
+    }
 
 };
 
