@@ -27,6 +27,8 @@ add_executable(CPPGameEngine
         src/functional/Result.h
         src/structs/smartstring.cpp
         src/structs/smartstring.h
+        src/structs/string_search.cpp
+        src/structs/string_search.h
 
 )
 

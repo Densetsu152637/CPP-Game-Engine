@@ -18,6 +18,9 @@ void ArrayList<T>::_resize(size_t new_size)
     if (new_size < m_size)
     { new_size = m_size; }
 
+    if (new_size < 0)
+    { new_size = ArrayList::DEFAULT_INITIAL_CAPACITY; }
+
     size_t old_size = m_size;
     T* new_arr = new T[new_size]; // allocate new array on heap
     if (nullptr != m_arr)
@@ -117,12 +120,21 @@ T& ArrayList<T>::at(size_t index)
 }
 
 template <typename T>
-void ArrayList<T>::append(const T* ts, size_t elems)
+ArrayList<T>& ArrayList<T>::append(const T* ts, size_t elems)
 {
     for (int i = 0; i < elems; i++)
     {
         append(ts[i]);
     }
+    return *this;
+}
+template <typename T>
+ArrayList<T> ArrayList<T>::concat(const ArrayList<T>& arr)
+{
+    ArrayList<T> ret(this->m_size + arr.m_size);
+    ret.append(this);
+    ret.append(arr);
+    return ret;
 }
 
 

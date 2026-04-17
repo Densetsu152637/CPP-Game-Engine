@@ -13,6 +13,8 @@ size_t round_to_nearest_2n(size_t size);
 template <typename T>
 class ArrayList {
 
+    static constexpr int DEFAULT_INITIAL_CAPACITY = 16;
+
     T* m_arr;
     size_t m_size = 0;
     size_t m_capacity = 0;
@@ -25,7 +27,10 @@ class ArrayList {
 
 public:
 
-    ArrayList() : ArrayList(16) {}
+    using iterator = T*;
+    using const_iterator = const T*;
+
+    ArrayList() : ArrayList(DEFAULT_INITIAL_CAPACITY) {}
 
     ArrayList(const size_t initial_capacity)
     { _resize(round_to_nearest_2n(initial_capacity)); }
@@ -50,20 +55,50 @@ public:
 
     //
 
+    T& operator[](const size_t index) { return at(index); };
     T& at(size_t index);
 
-    void append(const T& t)
-    { append(t, m_size); }
+    ArrayList<T>& append(const T& t)
+    {
+        append(t, m_size);
+        return *this;
+    }
 
-    void append(const T& t, const size_t i)
-    { _append_and_shuffle_up(t, i); }
+    ArrayList<T>& append(const T& t, const size_t i)
+    {
+        _append_and_shuffle_up(t, i);
+        return *this;
+    }
 
-    void append(const ArrayList<T>& arr)
-    { append(arr.m_arr, arr.m_size); }
+    ArrayList<T>& append(const ArrayList<T>& arr)
+    {
+        append(arr.m_arr, arr.m_size);
+        return *this;
+    }
 
-    void append(const T* ts, size_t elems);
+    ArrayList<T>& append(const T* ts, size_t elems);
+
+    ArrayList<T> concat(const ArrayList<T>& arr);
 
     //
+
+    iterator begin()
+    { return m_arr; }
+
+    iterator end()
+    { return m_arr + m_size; }
+
+    const_iterator begin() const
+    { return m_arr; }
+
+    const_iterator end() const
+    { return m_arr + m_size; }
+
+    const_iterator cbegin() const
+    { return m_arr; }
+
+    const_iterator cend() const
+    { return m_arr + m_size; }
 
     template <typename U> void for_each(std::function<U (T&)> func)
     {
