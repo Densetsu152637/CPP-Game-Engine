@@ -115,3 +115,14 @@ T& ArrayList<T>::at(size_t index)
     _wrap_around_size(index);
     return m_arr[index];
 }
+
+template <typename T>
+void ArrayList<T>::append(const T* ts, size_t elems)
+{
+    for (int i = 0; i < elems; i++)
+    {
+        append(ts[i]);
+    }
+}
+
+

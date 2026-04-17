@@ -33,17 +33,11 @@ public:
     ArrayList(const ArrayList& arr);
     ArrayList(ArrayList&& arr) noexcept;
 
-    size_t size() const
+    size_t length() const
     { return m_size; }
 
     size_t capacity() const
     { return m_capacity; }
-
-    void append(const T& t)
-    { append(t, m_size); }
-
-    void append(const T& t, const size_t i)
-    { _append_and_shuffle_up(t, i); }
 
     void reserve(size_t space)
     { _resize(round_to_nearest_2n(m_capacity + space)); }
@@ -54,7 +48,22 @@ public:
     void clamp_size()
     { restrict(m_size); }
 
+    //
+
     T& at(size_t index);
+
+    void append(const T& t)
+    { append(t, m_size); }
+
+    void append(const T& t, const size_t i)
+    { _append_and_shuffle_up(t, i); }
+
+    void append(const ArrayList<T>& arr)
+    { append(arr.m_arr, arr.m_size); }
+
+    void append(const T* ts, size_t elems);
+
+    //
 
     template <typename U> void for_each(std::function<U (T&)> func)
     {
