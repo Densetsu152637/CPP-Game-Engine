@@ -18,7 +18,7 @@ find_package(Vulkan REQUIRED)
 
 add_executable(CPPGameEngine
 
-    src/main.cpp
+        src/main.cpp
         src/structs/vector.cpp
         src/structs/vector.h
         src/structs/arraylist.cpp
