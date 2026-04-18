@@ -16,147 +16,183 @@
 #include "lock/waiter.h"
 
 template <typename T>
-class Promise {
+class Promise
+{
+public:
+
+    using Listener = std::function<void(const Result<T>&)>;
+
+private:
 
     struct State
     {
-        const Threadpool* pool = nullptr;
-        ArrayList<std::function<void(Result<T>&)>> listeners;
-        Result<T> result;
-        Waiter wait;
         std::mutex mutex;
+        std::condition_variable cv;
+
         bool done = false;
+        Result<T> result;
+
+        ArrayList<Listener> listeners;
+        Threadpool* executor = nullptr;
     };
 
     std::shared_ptr<State> m_state = std::make_shared<State>();
 
-    void _attach(std::function<void(Result<T>&)> listener);
-
 public:
 
-    Promise(const Threadpool* p)
+    explicit Promise(Threadpool* exec = nullptr)
     {
-        m_state->pool = p;
-    };
+        m_state->executor = exec;
+    }
     ~Promise() = default;
 
     void complete(Result<T> result);
     Result<T>& await();
 
-    template <typename U> Promise<U> then(Function<T, U>&& f);
-    Promise<T> catch_error(Function<std::exception, T>&& f);
+    Promise<T> on_error(std::function<T(std::exception_ptr)> handler);
+
+    template <typename U>
+    Promise<U> then(std::function<U(T)> mapper)
+    {
+        Promise<U> next(m_state->executor);
+
+        attach([next, mapper](const Result<T>& res) mutable {
+
+            if (res.is_success())
+            {
+                try
+                {
+                    U value = mapper(res.get());
+                    next.complete(Result<U>::success(std::move(value)));
+                }
+                catch (...)
+                {
+                    next.complete(Result<U>::failure(std::current_exception()));
+                }
+            }
+            else
+            {
+                next.complete(Result<U>::failure(res.exception()));
+            }
+        });
+
+        return next;
+    }
 
 };
 
 template <typename T>
 void Promise<T>::_attach(std::function<void(Result<T>&)> listener)
 {
-    bool ready = false;
+    bool execute_now = false;
+    Result<T> snapshot;
+
     {
-        std::scoped_lock lock(m_state->mutex);
-        if (m_state->done)
+        std::lock_guard<std::mutex> lock(m_state->mutex);
+
+        if (!m_state->done)
         {
-            ready = true;
+            m_state->listeners.push_back(std::move(listener));
+            return;
+        }
+
+        execute_now = true;
+        snapshot = m_state->result;
+    }
+
+    if (execute_now)
+    {
+        if (m_state->executor)
+        {
+            m_state->executor->submit([listener, snapshot]() mutable {
+                listener(snapshot);
+            });
         }
         else
         {
-            m_state->listeners.append(listener);
+            listener(snapshot);
         }
-    }
-
-    if (ready)
-    {
-        listener(m_state->result);
     }
 }
 
 template <typename T>
 void Promise<T>::complete(Result<T> result)
 {
-    ArrayList<std::function<void(Result<T>&)>> listeners;
+    ArrayList<Listener> listeners;
+
     {
-        std::scoped_lock lock(m_state->mutex);
+        std::lock_guard<std::mutex> lock(m_state->mutex);
+
         if (m_state->done)
-        {
             return;
+
+        m_state->done = true;
+        m_state->result = std::move(result);
+
+        listeners = std::move(m_state->listeners);
+        m_state->listeners.clear();
+    }
+
+    m_state->cv.notify_all();
+
+    if (!listeners.empty() && m_state->executor)
+    {
+        ArrayList<Runnable> tasks;
+        tasks.reserve(listeners.size());
+
+        for (auto& l : listeners)
+        {
+            tasks.append([l, result]() mutable {
+                l(result);
+            });
         }
 
-        m_state->result = std::move(result);
-        m_state->done = true;
-        listeners = std::move(m_state->listeners);
-        m_state->listeners = ArrayList<std::function<void(Result<T>&)>>();
+        m_state->executor->submitBatch(tasks);
     }
-
-    for (auto& listener : listeners)
+    else
     {
-        listener(m_state->result);
+        for (auto& l : listeners)
+            l(m_state->result);
     }
-
-    m_state->wait.signal();
 }
 
 template <typename T>
 Result<T>& Promise<T>::await()
 {
-    m_state->wait.await();
+    std::unique_lock<std::mutex> lock(m_state->mutex);
+
+    m_state->cv.wait(lock, [&] {
+        return m_state->done;
+    });
+
     return m_state->result;
 }
 
 template <typename T>
-template <typename U>
-Promise<U> Promise<T>::then(Function<T, U>&& f)
+Promise<T> Promise<T>::on_error(std::function<T(std::exception_ptr)> handler)
 {
-    Promise<U> next;
-    _attach([next, func = std::move(f)](Result<T>& result) mutable {
-        if (result.is_failure())
-        {
-            next.complete(Result<U>::failure(result.exception()));
-            return;
-        }
+    Promise<T> next(m_state->executor);
 
-        try
-        {
-            next.complete(Result<U>::success(func.apply(result.get())));
-        }
-        catch (...)
-        {
-            next.complete(Result<U>::failure(std::current_exception()));
-        }
-    });
-    return next;
-}
+    attach([next, handler](const Result<T>& res) mutable {
 
-template <typename T>
-Promise<T> Promise<T>::catch_error(Function<std::exception, T>&& f)
-{
-    Promise<T> next;
-    _attach([next, func = std::move(f)](Result<T>& result) mutable {
-        if (result.is_success())
-        {
-            next.complete(Result<T>::success(result.get()));
-            return;
-        }
-
-        try
-        {
-            std::rethrow_exception(result.exception());
-        }
-        catch (std::exception& e)
+        if (res.is_failure())
         {
             try
             {
-                next.complete(Result<T>::success(func.apply(e)));
+                T value = handler(res.exception());
+                next.complete(Result<T>::success(std::move(value)));
             }
             catch (...)
             {
                 next.complete(Result<T>::failure(std::current_exception()));
             }
         }
-        catch (...)
+        else
         {
-            next.complete(Result<T>::failure(std::current_exception()));
+            next.complete(res);
         }
     });
+
     return next;
 }
 

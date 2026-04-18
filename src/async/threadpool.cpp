@@ -11,66 +11,61 @@ size_t get_num_processors()
     return std::thread::hardware_concurrency();
 }
 
-void Threadpool::thread_global_entrance_point(const Thread* thread)
+void Threadpool::thread_global_entrance_point(Threadpool* pool)
 {
-    Threadpool* pool = thread->pool;
-
     while (true)
     {
         Runnable task;
-        Runnable* r_ptr = nullptr;
 
-        if (pool->m_stopping)
         {
-            break;
+            std::unique_lock<std::mutex> lock(pool->m_mutex);
+
+            pool->m_cv.wait(lock, [&] {
+                return pool->m_stopping || !pool->m_queue.empty();
+            });
+
+            if (pool->m_stopping && pool->m_queue.empty())
+                return;
+
+            task = std::move(pool->m_queue.peek());
+            pool->m_queue.pop();
         }
 
-        int q_length = pool->m_queue.use([](Queue<Runnable>& q) { return q.length(); });
-
-        if (0 == q_length)
-        {
-            pool->m_notifier.await();
-        }
-
-        // pop task off the queue
-        pool->m_queue.consume([&](Queue<Runnable>& q) {
-            if (0 == q.length()) return;
-            task = std::move(q.pop());
-            r_ptr = &task;
-        });
-
-        if (nullptr != r_ptr)
+        try
         {
             task();
+        }
+        catch (...)
+        {
+            // logging hook if needed
         }
     }
 }
 
-Threadpool::Threadpool(const size_t threads, std::string&& name)
+Threadpool::Threadpool(size_t threads, std::string name = "Threadpool")
+    : m_name(std::move(name))
 {
-    m_name = name;
-    m_pool.reserve(threads);
-    for (int i = 0; i < threads; i++)
+    threads = std::max<size_t>(1, threads);
+
+    for (size_t i = 0; i < threads; ++i)
     {
-        m_pool[i] = Thread {
-            std::thread( thread_global_entrance_point, &m_pool[i] ),
-            this
-        };
-        m_pool.ptr().size++;
+        m_pool.append(std::move(std::thread { thread_global_entrance_point, this }));
     }
 }
 
 void Threadpool::shutdown()
 {
-    m_stopping = true;
-    m_notifier.notify_many(m_pool.length()); // wake all waiting threads
-
-    for (Thread& worker : m_pool)
     {
-        if (std::thread& thread = worker.thread; thread.joinable())
-        {
-            thread.join();
-        }
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_stopping = true;
+    }
+
+    m_cv.notify_all();
+
+    for (auto& t : m_pool)
+    {
+        if (t.joinable())
+            t.join();
     }
 }
 
@@ -94,11 +89,12 @@ Promise<T> Threadpool::submit(const Supplier<T>& fn)
         }
     });
 
-    m_queue.consume([&](Queue<Runnable>& q) {
-        q.append(std::move(task));
-    });
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_queue.append(std::move(task));
+    }
 
-    m_notifier.notify_one();
+    m_cv.notify_one();
 
     return promise;
 }

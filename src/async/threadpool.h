@@ -10,30 +10,26 @@
 #include "../structs/arraylist.h"
 #include "../structs/smartstring.h"
 #include "../structs/queue.h"
-#include "../async/lock/syncronized.h"
 #include "../functional/functions.h"
-#include "lock/atomic.h"
 #include "lock/notifier.h"
 
 class Threadpool;
-
-struct Thread
-{
-    std::thread thread;
-    Threadpool* pool;
-};
 
 size_t get_num_processors();
 
 class Threadpool {
 
-    static void thread_global_entrance_point(const Thread* thread);
+    static void thread_global_entrance_point(Threadpool* thread);
 
-    ArrayList<Thread> m_pool;
-    SmartString m_name;
-    Syncronized<Queue<Runnable>> m_queue;
-    Notifier m_notifier;
-    Atomic<bool> m_stopping = false;
+        ArrayList<std::thread> m_pool;
+        std::string m_name;
+
+        Queue<Runnable> m_queue;
+
+        std::mutex m_mutex;
+        std::condition_variable m_cv;
+
+        bool m_stopping = false;
 
 public:
 

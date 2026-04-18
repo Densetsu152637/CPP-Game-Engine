@@ -41,6 +41,8 @@ add_executable(CPPGameEngine
         src/async/lock/waiter.h
         src/async/lock/notifier.h
         src/async/thread_timer.h
+        src/async/buffer/double_buffer.h
+        src/async/buffer/triple_buffer.h
 
 )
 
