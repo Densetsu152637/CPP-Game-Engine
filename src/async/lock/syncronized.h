@@ -10,7 +10,7 @@
 template <typename T>
 class Syncronized {
 
-    volatile T m_var;
+    T m_var{};
     std::mutex m_mutex;
 
 public:
@@ -18,13 +18,24 @@ public:
     Syncronized() {}
     ~Syncronized() = default;
 
+    Syncronized<T>& operator=(const T&& other)
+    {
+        this->set(other);
+    }
+
     void set(T&& t)
     {
         std::unique_lock lock(m_mutex);
         m_var = std::move(t);
     }
 
-    T& get() {
+    void set(const T& t)
+    {
+        std::unique_lock lock(m_mutex);
+        m_var = t;
+    }
+
+    T get() {
         std::unique_lock lock(m_mutex);
         return m_var;
     }

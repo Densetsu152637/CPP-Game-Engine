@@ -5,17 +5,36 @@
 #ifndef CPP_GAME_ENGINE_WAITER_H
 #define CPP_GAME_ENGINE_WAITER_H
 
+#include <condition_variable>
+#include <mutex>
+
 class Waiter
 {
-
     bool signaled = false;
-
+    std::mutex m_mutex;
+    std::condition_variable m_cv;
 
 public:
+    void reset_signal()
+    {
+        std::scoped_lock lock(m_mutex);
+        signaled = false;
+    }
 
-    void reset_signal();
-    void signal();
-    void await();
+    void signal()
+    {
+        {
+            std::scoped_lock lock(m_mutex);
+            signaled = true;
+        }
+        m_cv.notify_all();
+    }
+
+    void await()
+    {
+        std::unique_lock lock(m_mutex);
+        m_cv.wait(lock, [this] { return signaled; });
+    }
 
 };
 

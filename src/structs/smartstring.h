@@ -4,6 +4,8 @@
 
 #ifndef CPP_GAME_ENGINE_SMARTSTRING_H
 #define CPP_GAME_ENGINE_SMARTSTRING_H
+
+#include <cstddef>
 #include <string>
 
 #include "arraylist.h"
@@ -14,22 +16,23 @@ class SmartString {
     ArrayList<char> m_str;
     int m_sI = 0, m_fI = -1;
 
-    size_t _scaled_index(size_t t);
+    size_t _scaled_index(size_t t) const;
 
 public:
 
     SmartString() : m_fI(0) {}
     SmartString(const std::string& s) : m_str(string_search::to_list(s)), m_fI(m_str.length()) {}
+    SmartString(const std::string&& s) : m_str(string_search::to_list(s)), m_fI(m_str.length()) {}
     SmartString(const ArrayList<char>& ref_arr) : m_str(ref_arr), m_fI(ref_arr.length()) {}
     SmartString(const ArrayList<char>& ref_arr, const int sI, const int fI) : m_str(ref_arr), m_sI(sI), m_fI(fI) {}
-    SmartString(ArrayList<char>&& move_arr) : m_str(move_arr), m_fI(move_arr.length()) {}
-    SmartString(ArrayList<char>&& move_arr, const int sI, const int fI) : m_str(move_arr), m_sI(sI), m_fI(fI) {}
+    SmartString(ArrayList<char>&& move_arr) : m_str(std::move(move_arr)), m_fI(m_str.length()) {}
+    SmartString(ArrayList<char>&& move_arr, const int sI, const int fI) : m_str(std::move(move_arr)), m_sI(sI), m_fI(fI) {}
 
-    bool operator=(const SmartString& other);
+    bool operator==(const SmartString& other) const;
 
-    size_t length() const { return m_str.length(); }
+    size_t length() const { return static_cast<size_t>(m_fI - m_sI); }
     bool is_empty() const { return length() == 0; }
-    char at(size_t i) { return m_str.at(i); }
+    char at(size_t i) const { return m_str.at(_scaled_index(i)); }
 
     SmartString slice() { return *this; };
     SmartString slice(const size_t start) { return SmartString(m_str, _scaled_index(start), m_fI); };

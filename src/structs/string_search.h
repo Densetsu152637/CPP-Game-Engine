@@ -13,9 +13,9 @@ namespace string_search
 
     ArrayList<char> to_list(const std::string& s);
 
-    int find_first(ArrayList<char>& str, const std::string& pattern, int start, int finish);
-    int find_last(ArrayList<char>& str, const std::string& pattern, int start, int finish);
-    ArrayList<int> z_search(ArrayList<char>& str, const std::string& pattern, int start, int finish);
+    int find_first(const ArrayList<char>& str, const std::string& pattern, int start, int finish);
+    int find_last(const ArrayList<char>& str, const std::string& pattern, int start, int finish);
+    ArrayList<int> z_search(const ArrayList<char>& str, const std::string& pattern, int start, int finish);
     ArrayList<int> z_algo(const ArrayList<char>& txt);
 
 }

@@ -4,48 +4,75 @@
 
 #ifndef CPP_GAME_ENGINE_RESULT_H
 #define CPP_GAME_ENGINE_RESULT_H
+
 #include <exception>
 #include <functional>
 #include <optional>
+#include <utility>
 
 template <typename T>
 class Result {
-
-    const std::optional<T> m_result;
-    const std::optional<std::exception> m_exception;
+    std::optional<T> m_result;
+    std::exception_ptr m_exception;
 
 public:
-    Result(T res) : m_result(res) {}
-    Result(std::exception e) : m_exception(e) {}
-    Result(const Result& r) : m_exception(r.m_exception)
-    {
-        m_result = r.m_result;
-    }
-    Result(Result&& r) : m_exception(r.m_exception)
-    {
-        m_result = r.m_result;
-    }
+    Result() = default;
+    explicit Result(T res) : m_result(std::move(res)) {}
+    explicit Result(std::exception_ptr e) : m_exception(std::move(e)) {}
+    Result(const Result& r) = default;
+    Result(Result&& r) noexcept = default;
+    Result& operator=(const Result& r) = default;
+    Result& operator=(Result&& r) noexcept = default;
     ~Result() = default;
 
     template <typename R> static Result<R> success(R res) { return Result<R>(res); }
-    template <typename R> static Result<R> failure(std::exception e) { return Result<R>(e); }
+    template <typename R> static Result<R> failure(const std::exception& e) { return Result<R>(std::make_exception_ptr(e)); }
+    template <typename R> static Result<R> failure(std::exception_ptr e) { return Result<R>(std::move(e)); }
 
-    bool is_success() { return m_result.has_value(); }
-    bool is_failure() { return !is_success(); }
+    bool is_success() const { return m_result.has_value(); }
+    bool is_failure() const { return !is_success(); }
 
     T& get()
     {
-        if (!is_success()) throw m_exception;
-        return m_result;
+        if (!is_success())
+        {
+            std::rethrow_exception(m_exception);
+        }
+
+        return *m_result;
+    }
+
+    const T& get() const
+    {
+        if (!is_success())
+        {
+            std::rethrow_exception(m_exception);
+        }
+
+        return *m_result;
+    }
+
+    std::exception_ptr exception() const
+    {
+        return m_exception;
     }
 
     template <typename U> Result<U> map(std::function<U (T&)> func)
     {
-        if (is_failure()) return Result::failure(m_exception); // propagates exception down the path
-        try { return Result::success(func(get())); }
-        catch (std::exception e) { return Result::failure(e); }
-    }
+        if (is_failure())
+        {
+            return Result<U>::failure(m_exception);
+        }
 
+        try
+        {
+            return Result<U>::success(func(get()));
+        }
+        catch (...)
+        {
+            return Result<U>::failure(std::current_exception());
+        }
+    }
 };
 
 #endif //CPP_GAME_ENGINE_RESULT_H

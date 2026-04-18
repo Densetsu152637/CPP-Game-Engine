@@ -4,30 +4,23 @@
 
 #ifndef CPP_GAME_ENGINE_FUNCTIONS_H
 #define CPP_GAME_ENGINE_FUNCTIONS_H
-#include <memory>
-#include <functional>
 
-template <typename T>
+#include <functional>
+#include <memory>
+#include <stdexcept>
+
 class Runnable
 {
-
-    std::shared_ptr<std::function<void()>> m_fn;
+    std::function<void()> m_fn;
 
 public:
-
-    Runnable() {}
-    Runnable(std::function<void(void)> fn) : Runnable(std::make_shared<std::function<void()>>(fn)) {}
-    Runnable(std::shared_ptr<std::function<void()>> fn) : m_fn(fn) {}
-    ~Runnable() = default;
-
-    void run()
-    {
-        this->m_fn.get()->operator()();
-    }
+    Runnable() = default;
+    explicit Runnable(std::function<void()> fn) : m_fn(std::move(fn)) {}
 
     void operator()()
     {
-        this->run();
+        if (!m_fn) throw std::bad_function_call();
+        m_fn();
     }
 
 };
@@ -35,76 +28,61 @@ public:
 template <typename T>
 class Consumer
 {
-
-    std::shared_ptr<std::function<void(T&)>> m_fn;
+    std::function<void(T&)> m_fn;
 
 public:
-
-    Consumer() {}
-    Consumer(std::function<void(T&)> fn) : Runnable(std::make_shared<std::function<void(T&)>>(fn)) {}
-    Consumer(std::shared_ptr<std::function<void(T&)>> fn) : m_fn(fn) {}
-    ~Consumer() = default;
-
-    void consume(T& t)
-    {
-        return this->m_fn.get()->operator()(t);
-    }
+    Consumer() = default;
+    explicit Consumer(std::function<void(T&)> fn) : m_fn(std::move(fn)) {}
 
     void operator()(T& t)
     {
-        return this->consume(t);
+        if (!m_fn) throw std::bad_function_call();
+        m_fn(t);
     }
-
 };
 
 template <typename T>
 class Supplier
 {
-
-    std::shared_ptr<std::function<T()>> m_fn;
+    std::function<T()> m_fn;
 
 public:
-
-    Supplier() {}
-    Supplier(std::function<T()> fn) : Runnable(std::make_shared<std::function<T()>>(fn)) {}
-    Supplier(std::shared_ptr<std::function<T()>> fn) : m_fn(fn) {}
-    ~Supplier() = default;
-
-    T get()
-    {
-        return m_fn.get()->operator()();
-    }
+    Supplier() = default;
+    explicit Supplier(std::function<T()> fn) : m_fn(std::move(fn)) {}
 
     T operator()()
     {
-        return this->get();
+        if (!m_fn) throw std::bad_function_call();
+        return m_fn();
     }
+
 
 };
 
 template <typename T, typename U>
 class Function
 {
-
-    std::shared_ptr<std::function<T(U&)>> m_fn;
+    std::function<U(T&)> m_fn;
 
 public:
+    Function() = default;
+    explicit Function(std::function<U(T&)> fn) : m_fn(std::move(fn)) {}
 
-    Supplier() {}
-    Supplier(std::function<T(U&)> fn) : Runnable(std::make_shared<std::function<T(U&)>>(fn)) {}
-    Supplier(std::shared_ptr<std::function<T(U&)>> fn) : m_fn(fn) {}
-    ~Supplier() = default;
-
-    T apply(U& u)
+    U operator()(T& t)
     {
-        return m_fn.get()->operator()(u);
+        if (!m_fn) throw std::bad_function_call();
+        return m_fn(t);
     }
-
-    T operator()(U& u)
-    {
-        return this->apply(u);
-    }
-
 };
+
+inline Supplier<void> to_supplier(Runnable fn)
+{
+    return Supplier<void>([fn = std::move(fn)]() mutable {
+        fn();
+        return;
+    });
+}
+
+
 
 #endif //CPP_GAME_ENGINE_FUNCTIONS_H

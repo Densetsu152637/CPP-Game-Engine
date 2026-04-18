@@ -4,22 +4,23 @@
 
 #include "smartstring.h"
 
+#include <cctype>
 #include <stdexcept>
 
-size_t SmartString::_scaled_index(size_t t)
+size_t SmartString::_scaled_index(size_t t) const
 {
     size_t scaled = t + m_sI;
     if (scaled > m_fI)
     {
-        throw std::out_of_range(std::format("Failed to fetch char at {} from {} (scaled from {})", scaled, m_fI, t));
+        throw std::out_of_range("SmartString index out of range");
     }
     return scaled;
 };
 
-bool SmartString::operator=(const SmartString& other)
+bool SmartString::operator==(const SmartString& other) const
 {
     if (length() != other.length()) return false; // if lengths are not equal
-    for (int i = 0; i < length(); i++)
+    for (size_t i = 0; i < length(); i++)
     {
         if (at(i) != other.at(i)) return false; // if chars do not equal each other
     }
@@ -28,7 +29,16 @@ bool SmartString::operator=(const SmartString& other)
 
 SmartString SmartString::concat(const SmartString& other)
 {
-    return SmartString(m_str.concat(other.m_str), m_sI, m_fI + other.length());
+    ArrayList<char> joined(length() + other.length());
+    for (int i = m_sI; i < m_fI; ++i)
+    {
+        joined.append(m_str.at(i));
+    }
+    for (size_t i = 0; i < other.length(); ++i)
+    {
+        joined.append(other.at(i));
+    }
+    return SmartString(std::move(joined));
 }
 
 ArrayList<SmartString> SmartString::split_on(std::string pattern)
@@ -52,12 +62,12 @@ ArrayList<SmartString> SmartString::split_on(std::string pattern)
 
 bool SmartString::contains(const std::string& pattern)
 {
-    return find(pattern) != -1;
+    return find(pattern) != static_cast<size_t>(-1);
 }
 
 bool SmartString::rcontains(const std::string& pattern)
 {
-    return rfind(pattern) != -1;
+    return rfind(pattern) != static_cast<size_t>(-1);
 }
 
 bool SmartString::starts_with(const std::string& prefix)
@@ -89,8 +99,8 @@ size_t SmartString::find(const std::string& pattern)
 
 size_t SmartString::find(const std::string& pattern, size_t start)
 {
-    int hit = string_search::find_first(m_str, pattern, _scaled_index(start),m_fI);
-    return hit == -1 ? -1 : hit - m_sI;
+    int hit = string_search::find_first(m_str, pattern, static_cast<int>(_scaled_index(start)), m_fI);
+    return hit == -1 ? static_cast<size_t>(-1) : static_cast<size_t>(hit - m_sI);
 }
 
 size_t SmartString::rfind(const std::string& pattern)
@@ -100,8 +110,8 @@ size_t SmartString::rfind(const std::string& pattern)
 
 size_t SmartString::rfind(const std::string& pattern, size_t end)
 {
-    int hit = string_search::find_first(m_str, pattern, m_sI, _scaled_index(end));
-    return hit == -1 ? -1 : hit - m_sI;
+    int hit = string_search::find_last(m_str, pattern, m_sI, static_cast<int>(_scaled_index(end)));
+    return hit == -1 ? static_cast<size_t>(-1) : static_cast<size_t>(hit - m_sI);
 }
 
 int SmartString::count(const std::string& pattern)
@@ -112,7 +122,7 @@ int SmartString::count(const std::string& pattern)
 SmartString SmartString::lstrip()
 {
     int start = m_sI;
-    while (start < m_fI && ' ' != m_str[start]) {
+    while (start < m_fI && std::isspace(static_cast<unsigned char>(m_str.at(start)))) {
         start++;
     }
     return SmartString(m_str, start, m_fI);
@@ -121,7 +131,7 @@ SmartString SmartString::lstrip()
 SmartString SmartString::rstrip()
 {
     int finish = m_fI;
-    while (finish > m_sI && ' ' != m_str[finish - 1]) {
+    while (finish > m_sI && std::isspace(static_cast<unsigned char>(m_str.at(finish - 1)))) {
         finish--;
     }
     return SmartString(m_str, m_sI, finish);
@@ -143,11 +153,14 @@ SmartString SmartString::remove_suffix(const std::string& suffix)
 
 SmartString SmartString::replace(char old_value, char new_value)
 {
-    std::function<char(char&)> func = [&old_value, &new_value](const char& c) -> char {
-        return c == old_value ? new_value : c;
-    };
+    ArrayList<char> replaced(length());
+    for (int i = m_sI; i < m_fI; ++i)
+    {
+        const char c = m_str.at(i);
+        replaced.append(c == old_value ? new_value : c);
+    }
 
-    return SmartString(m_str.map(func));
+    return SmartString(std::move(replaced));
 }
 
 
@@ -181,7 +194,7 @@ SmartString SmartString::replace(const std::string& old_pattern, const std::stri
     ArrayList<char> new_chars = string_search::to_list(new_pattern);
     Array<char> src = m_str.ptr();
     Array<char> dst = replaced_chars.ptr();
-    Array<char> replacement = new_chars.ptr();
+    const Array<char>& replacement = new_chars.ptr();
 
     int src_index = m_sI;
     int dst_index = 0;
@@ -212,48 +225,51 @@ SmartString SmartString::replace(const std::string& old_pattern, const std::stri
 SmartString SmartString::repeat(int count)
 {
     if (count <= 0 || is_empty()) {
-        return SmartString("");
+        return SmartString(std::string());
     }
 
     ArrayList<char> repeated(length() * count);
     for (int i = 0; i < count; i++) {
-        repeated.append(m_str);
+        for (int j = m_sI; j < m_fI; ++j)
+        {
+            repeated.append(m_str.at(j));
+        }
     }
-    return SmartString(repeated);
+    return SmartString(std::move(repeated));
 }
 
 ArrayList<SmartString> SmartString::partition(const std::string& separator)
 {
-    int hit = find(separator);
-    if (hit == -1) {
+    size_t hit = find(separator);
+    if (hit == static_cast<size_t>(-1)) {
         return ArrayList<SmartString>(3)
             .append(*this)
-            .append(SmartString(""))
-            .append(SmartString(""));
+            .append(SmartString(std::string()))
+            .append(SmartString(std::string()));
     }
 
-    int absoluteHit = _scaled_index(hit);
+    int absoluteHit = static_cast<int>(_scaled_index(hit));
     return ArrayList<SmartString>(3)
         .append(SmartString(m_str, m_sI, absoluteHit))
-        .append(SmartString(m_str, absoluteHit, absoluteHit + separator.length()))
-        .append(SmartString(m_str, absoluteHit + separator.length(), m_fI));
+        .append(SmartString(m_str, absoluteHit, absoluteHit + static_cast<int>(separator.length())))
+        .append(SmartString(m_str, absoluteHit + static_cast<int>(separator.length()), m_fI));
 }
 
 ArrayList<SmartString> SmartString::rpartition(const std::string& separator)
 {
-    int hit = rfind(separator);
-    if (hit == -1) {
+    size_t hit = rfind(separator);
+    if (hit == static_cast<size_t>(-1)) {
         return ArrayList<SmartString>(3)
             .append(*this)
-            .append(SmartString(""))
-            .append(SmartString(""));
+            .append(SmartString(std::string()))
+            .append(SmartString(std::string()));
     }
 
-    int absoluteHit = _scaled_index(hit);
+    int absoluteHit = static_cast<int>(_scaled_index(hit));
     return ArrayList<SmartString>(3)
         .append(SmartString(m_str, m_sI, absoluteHit))
-        .append(SmartString(m_str, absoluteHit, absoluteHit + separator.length()))
-        .append(SmartString(m_str, absoluteHit + separator.length(), m_fI));
+        .append(SmartString(m_str, absoluteHit, absoluteHit + static_cast<int>(separator.length())))
+        .append(SmartString(m_str, absoluteHit + static_cast<int>(separator.length()), m_fI));
 }
 
 std::string SmartString::to_string()
