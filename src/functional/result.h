@@ -25,6 +25,7 @@ public:
     {
         m_result = r.m_result;
     }
+    ~Result() = default;
 
     template <typename R> static Result<R> success(R res) { return Result<R>(res); }
     template <typename R> static Result<R> failure(std::exception e) { return Result<R>(e); }

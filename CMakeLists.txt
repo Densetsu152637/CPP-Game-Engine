@@ -29,6 +29,20 @@ add_executable(CPPGameEngine
         src/structs/smartstring.h
         src/structs/string_search.cpp
         src/structs/string_search.h
+        src/util/stopwatch.cpp
+        src/util/stopwatch.h
+        src/async/threadpool.cpp
+        src/async/threadpool.h
+        src/async/promise.cpp
+        src/async/promise.h
+        src/async/lock/syncronized.cpp
+        src/async/lock/syncronized.h
+        src/structs/queue.cpp
+        src/structs/queue.h
+        src/async/lock/atomic.cpp
+        src/async/lock/atomic.h
+        src/functional/functions.h
+        src/async/lock/waiter.h
 
 )
 

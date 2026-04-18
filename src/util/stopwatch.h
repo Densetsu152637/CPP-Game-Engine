@@ -24,6 +24,7 @@ class StopWatch {
 public:
 
     StopWatch() { restart(); }
+    ~StopWatch() = default;
 
     void start()
     {

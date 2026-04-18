@@ -143,9 +143,11 @@ SmartString SmartString::remove_suffix(const std::string& suffix)
 
 SmartString SmartString::replace(char old_value, char new_value)
 {
-    return SmartString(m_str.map([old_value, new_value](const char& c) -> char {
+    std::function<char(char&)> func = [&old_value, &new_value](const char& c) -> char {
         return c == old_value ? new_value : c;
-    }));
+    };
+
+    return SmartString(m_str.map(func));
 }
 
 
@@ -235,7 +237,6 @@ ArrayList<SmartString> SmartString::partition(const std::string& separator)
         .append(SmartString(m_str, m_sI, absoluteHit))
         .append(SmartString(m_str, absoluteHit, absoluteHit + separator.length()))
         .append(SmartString(m_str, absoluteHit + separator.length(), m_fI));
-    };
 }
 
 ArrayList<SmartString> SmartString::rpartition(const std::string& separator)
