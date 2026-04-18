@@ -40,6 +40,7 @@ add_executable(CPPGameEngine
         src/functional/functions.h
         src/async/lock/waiter.h
         src/async/lock/notifier.h
+        src/async/thread_timer.h
 
 )
 
