@@ -151,7 +151,59 @@ SmartString SmartString::replace(char old_value, char new_value)
 
 SmartString SmartString::replace(const std::string& old_pattern, const std::string& new_pattern)
 {
+    if (old_pattern.empty()) {
+        return *this;
+    }
 
+    ArrayList<int> raw_hits = string_search::z_search(m_str, old_pattern, m_sI, m_fI);
+    ArrayList<int> hits(raw_hits.length());
+    int next_allowed = m_sI;
+    for (const int hit : raw_hits) {
+        if (hit < next_allowed) {
+            continue;
+        }
+        hits.append(hit);
+        next_allowed = hit + old_pattern.length();
+    }
+
+    const int old_length = static_cast<int>(old_pattern.length());
+    const int new_length_delta = static_cast<int>(new_pattern.length()) - old_length;
+    const int source_length = m_fI - m_sI;
+    const int replaced_length = source_length + (new_length_delta * static_cast<int>(hits.length()));
+
+    ArrayList<char> replaced_chars(replaced_length);
+    for (int i = 0; i < replaced_length; i++) {
+        replaced_chars.append('\0');
+    }
+
+    ArrayList<char> new_chars = string_search::to_list(new_pattern);
+    Array<char> src = m_str.ptr();
+    Array<char> dst = replaced_chars.ptr();
+    Array<char> replacement = new_chars.ptr();
+
+    int src_index = m_sI;
+    int dst_index = 0;
+    for (const int hit : hits) {
+        int copy_length = hit - src_index;
+        if (copy_length > 0) {
+            array_cpy(dst, dst_index, src, src_index, copy_length);
+            dst_index += copy_length;
+        }
+
+        if (replacement.size > 0) {
+            array_cpy(dst, dst_index, replacement, 0, static_cast<int>(replacement.size));
+            dst_index += static_cast<int>(replacement.size);
+        }
+
+        src_index = hit + old_length;
+    }
+
+    int remaining_length = m_fI - src_index;
+    if (remaining_length > 0) {
+        array_cpy(dst, dst_index, src, src_index, remaining_length);
+    }
+
+    return SmartString(std::move(replaced_chars));
 }
 
 

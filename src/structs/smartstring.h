@@ -20,7 +20,10 @@ public:
 
     SmartString() : m_fI(0) {}
     SmartString(const std::string& s) : m_str(string_search::to_list(s)), m_fI(m_str.length()) {}
-    SmartString(const ArrayList<char>& str, const int sI, const int fI) : m_str(str), m_sI(sI), m_fI(fI) {}
+    SmartString(const ArrayList<char>& ref_arr) : m_str(ref_arr), m_fI(ref_arr.length()) {}
+    SmartString(const ArrayList<char>& ref_arr, const int sI, const int fI) : m_str(ref_arr), m_sI(sI), m_fI(fI) {}
+    SmartString(ArrayList<char>&& move_arr) : m_str(move_arr), m_fI(move_arr.length()) {}
+    SmartString(ArrayList<char>&& move_arr, const int sI, const int fI) : m_str(move_arr), m_sI(sI), m_fI(fI) {}
 
     bool operator=(const SmartString& other);
 
