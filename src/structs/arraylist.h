@@ -77,7 +77,7 @@ class ArrayList {
     void _assert_within_bounds(size_t& i) const;
     void _wrap_around_size(size_t& i) const;
     void _pop_and_shuffle_down(size_t i);
-    void _append_and_shuffle_up(const T& t, size_t i);
+    void _shuffle_up(size_t i);
 
 public:
 
@@ -137,7 +137,9 @@ public:
 
     ArrayList<T>& append(const T& t, const size_t i)
     {
-        this->_append_and_shuffle_up(t, i);
+        this->_shuffle_up(i);
+        m_arr[i] = t;
+        ++m_arr.size;
         return *this;
     }
 
@@ -150,6 +152,31 @@ public:
     ArrayList<T>& append(const T* ts, size_t elems);
 
     ArrayList<T> concat(const ArrayList<T>& arr);
+
+    template<typename... Args>
+    T& emplace(size_t i, Args&&... args)
+    {
+        this->_shuffle_up(i);
+
+        // Construct in-place
+        new (m_arr.ptr + i) T(std::forward<Args>(args)...);
+
+        ++m_arr.size;
+        return m_arr[i];
+    }
+
+    template<typename... Args>
+    T& emplace(Args&&... args)
+    {
+        size_t i = m_arr.size;
+        _resize_if_necessary();
+
+        // Construct in-place
+        new (m_arr.ptr + i) T(std::forward<Args>(args)...);
+
+        ++m_arr.size;
+        return m_arr[i];
+    }
 
     //
 
@@ -251,7 +278,7 @@ void ArrayList<T>::_wrap_around_size(size_t& i) const
 }
 
 template <typename T>
-void ArrayList<T>::_append_and_shuffle_up(const T& t, size_t i)
+void ArrayList<T>::_shuffle_up(size_t i)
 {
     if (i > m_arr.size)
     {
@@ -264,9 +291,6 @@ void ArrayList<T>::_append_and_shuffle_up(const T& t, size_t i)
     {
         m_arr[j] = std::move(m_arr[j - 1]);
     }
-
-    m_arr[i] = t;
-    ++m_arr.size;
 }
 
 template <typename T>
@@ -367,10 +391,10 @@ const T& ArrayList<T>::at(size_t index) const
 template <typename T>
 ArrayList<T>& ArrayList<T>::append(const T* ts, size_t elems)
 {
-    reserve(m_arr.size + elems);
+    this->reserve(m_arr.size + elems);
     for (size_t i = 0; i < elems; i++)
     {
-        append(ts[i]);
+        this->append(ts[i]);
     }
     return *this;
 }
@@ -383,3 +407,5 @@ ArrayList<T> ArrayList<T>::concat(const ArrayList<T>& arr)
     ret.append(arr);
     return ret;
 }
+
+
