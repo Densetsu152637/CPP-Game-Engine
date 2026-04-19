@@ -2,8 +2,7 @@
 // Created by Nicholas on 17/04/26.
 //
 
-#ifndef CPP_GAME_ENGINE_ARRAYLIST_H
-#define CPP_GAME_ENGINE_ARRAYLIST_H
+#pragma once
 
 #include <algorithm>
 #include <functional>
@@ -384,5 +383,3 @@ ArrayList<T> ArrayList<T>::concat(const ArrayList<T>& arr)
     ret.append(arr);
     return ret;
 }
-
-#endif //CPP_GAME_ENGINE_ARRAYLIST_H

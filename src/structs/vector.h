@@ -2,8 +2,7 @@
 // Created by Nicholas on 17/04/26.
 //
 
-#ifndef CPP_GAME_ENGINE_VECTOR_H
-#define CPP_GAME_ENGINE_VECTOR_H
+#pragma once
 
 #include <cfloat>
 #include <climits>
@@ -1027,5 +1026,3 @@ union Matrix4f
 #undef CPP_GAME_ENGINE_HAS_SSE41
 #undef CPP_GAME_ENGINE_HAS_SSE
 #undef CPP_GAME_ENGINE_HAS_SSE2
-
-#endif //CPP_GAME_ENGINE_VECTOR_H

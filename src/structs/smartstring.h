@@ -2,8 +2,7 @@
 // Created by Nicholas on 17/04/26.
 //
 
-#ifndef CPP_GAME_ENGINE_SMARTSTRING_H
-#define CPP_GAME_ENGINE_SMARTSTRING_H
+#pragma once
 
 #include <cstddef>
 #include <string>
@@ -71,8 +70,3 @@ public:
 
 };
 
-
-
-
-
-#endif //CPP_GAME_ENGINE_SMARTSTRING_H

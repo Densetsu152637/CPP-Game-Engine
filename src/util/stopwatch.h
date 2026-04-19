@@ -2,8 +2,7 @@
 // Created by Nicholas on 18/04/26.
 //
 
-#ifndef CPP_GAME_ENGINE_STOPWATCH_H
-#define CPP_GAME_ENGINE_STOPWATCH_H
+#pragma once
 
 #include <chrono>
 
@@ -56,7 +55,3 @@ public:
     float delta_s() { return delta_ns() / 1000000000.0f; }
 
 };
-
-
-
-#endif //CPP_GAME_ENGINE_STOPWATCH_H

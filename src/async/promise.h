@@ -2,8 +2,7 @@
 // Created by Nicholas on 18/04/26.
 //
 
-#ifndef CPP_GAME_ENGINE_PROMISE_H
-#define CPP_GAME_ENGINE_PROMISE_H
+#pragma once
 
 #include <functional>
 #include <memory>
@@ -196,6 +195,3 @@ Promise<T> Promise<T>::on_error(std::function<T(std::exception_ptr)> handler)
     return next;
 }
 
-
-
-#endif //CPP_GAME_ENGINE_PROMISE_H

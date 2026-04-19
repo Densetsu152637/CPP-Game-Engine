@@ -2,8 +2,7 @@
 // Created by Nicholas on 17/04/26.
 //
 
-#ifndef CPP_GAME_ENGINE_RESULT_H
-#define CPP_GAME_ENGINE_RESULT_H
+#pragma once
 
 #include <exception>
 #include <functional>
@@ -74,5 +73,3 @@ public:
         }
     }
 };
-
-#endif //CPP_GAME_ENGINE_RESULT_H

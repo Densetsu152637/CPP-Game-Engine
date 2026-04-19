@@ -2,8 +2,8 @@
 // Created by Nicholas on 18/04/26.
 //
 
-#ifndef CPP_GAME_ENGINE_SYNCRONIZED_H
-#define CPP_GAME_ENGINE_SYNCRONIZED_H
+#pragma once
+
 #include <mutex>
 #include <functional>
 
@@ -60,7 +60,3 @@ public:
     }
 
 };
-
-
-
-#endif //CPP_GAME_ENGINE_SYNCRONIZED_H

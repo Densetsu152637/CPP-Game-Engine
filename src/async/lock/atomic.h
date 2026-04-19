@@ -2,8 +2,8 @@
 // Created by Nicholas on 18/04/26.
 //
 
-#ifndef CPP_GAME_ENGINE_ATOMIC_H
-#define CPP_GAME_ENGINE_ATOMIC_H
+#pragma once
+
 #include <functional>
 #include <utility>
 #include <atomic>
@@ -43,6 +43,3 @@ public:
 
 };
 
-
-
-#endif //CPP_GAME_ENGINE_ATOMIC_H

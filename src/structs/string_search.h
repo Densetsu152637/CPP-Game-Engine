@@ -2,8 +2,8 @@
 // Created by Nicholas on 18/04/26.
 //
 
-#ifndef CPP_GAME_ENGINE_STRING_SEARCH_H
-#define CPP_GAME_ENGINE_STRING_SEARCH_H
+#pragma once
+
 #include <string>
 
 #include "arraylist.h"
@@ -19,6 +19,3 @@ namespace string_search
     ArrayList<int> z_algo(const ArrayList<char>& txt);
 
 }
-
-
-#endif //CPP_GAME_ENGINE_STRING_SEARCH_H

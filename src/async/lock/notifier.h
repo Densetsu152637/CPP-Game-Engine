@@ -2,8 +2,8 @@
 // Created by Nicholas on 18/04/26.
 //
 
-#ifndef CPP_GAME_ENGINE_NOTIFIER_H
-#define CPP_GAME_ENGINE_NOTIFIER_H
+#pragma once
+
 #include <condition_variable>
 
 class Notifier
@@ -53,5 +53,3 @@ public:
         }
     }
 };
-
-#endif //CPP_GAME_ENGINE_NOTIFIER_H

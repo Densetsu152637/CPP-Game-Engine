@@ -2,8 +2,7 @@
 // Created by Nicholas on 18/04/26.
 //
 
-#ifndef CPP_GAME_ENGINE_TRIPLE_BUFFER_H
-#define CPP_GAME_ENGINE_TRIPLE_BUFFER_H
+#pragma once
 
 #include <functional>
 #include <mutex>
@@ -110,5 +109,3 @@ public:
         return static_cast<bool>(copier);
     }
 };
-
-#endif //CPP_GAME_ENGINE_TRIPLE_BUFFER_H

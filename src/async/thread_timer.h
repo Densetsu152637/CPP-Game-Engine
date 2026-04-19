@@ -2,8 +2,7 @@
 // Created by Nicholas on 18/04/26.
 //
 
-#ifndef CPP_GAME_ENGINE_THREAD_TIMER_H
-#define CPP_GAME_ENGINE_THREAD_TIMER_H
+#pragma once
 
 // TODO
 // add global pool of threads to ensure threads are safely executed and managed
@@ -70,5 +69,3 @@ Result<T> ThreadTimer<T>::run(Supplier<T> fn, Duration timeout)
         );
     }
 }
-
-#endif //CPP_GAME_ENGINE_THREAD_TIMER_H

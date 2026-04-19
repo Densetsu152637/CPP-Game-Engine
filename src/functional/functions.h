@@ -2,8 +2,7 @@
 // Created by Nicholas on 18/04/26.
 //
 
-#ifndef CPP_GAME_ENGINE_FUNCTIONS_H
-#define CPP_GAME_ENGINE_FUNCTIONS_H
+#pragma once
 
 #include <functional>
 #include <memory>
@@ -82,7 +81,3 @@ inline Supplier<void> to_supplier(Runnable fn)
         return;
     });
 }
-
-
-
-#endif //CPP_GAME_ENGINE_FUNCTIONS_H

@@ -2,8 +2,8 @@
 // Created by Nicholas on 18/04/26.
 //
 
-#ifndef CPP_GAME_ENGINE_THREADPOOL_H
-#define CPP_GAME_ENGINE_THREADPOOL_H
+#pragma once
+
 #include <thread>
 
 #include "promise.h"
@@ -42,9 +42,7 @@ public:
     Threadpool(Threadpool&&) = delete;
 
     ~Threadpool()
-    {
-        shutdown();
-    }
+    { shutdown(); }
 
     void shutdown();
 
@@ -61,9 +59,3 @@ public:
     );
 
 };
-
-
-
-
-
-#endif //CPP_GAME_ENGINE_THREADPOOL_H

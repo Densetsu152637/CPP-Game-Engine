@@ -43,6 +43,9 @@ add_executable(CPPGameEngine
         src/async/thread_timer.h
         src/async/buffer/double_buffer.h
         src/async/buffer/triple_buffer.h
+        src/util/fader.h
+        src/util/toolbox.cpp
+        src/util/toolbox.h
 
 )
 
