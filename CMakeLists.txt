@@ -46,6 +46,11 @@ add_executable(CPPGameEngine
         src/util/fader.h
         src/util/toolbox.cpp
         src/util/toolbox.h
+        src/logging/logger.cpp
+        src/logging/logger.h
+        src/logging/text_colour.h
+        src/logging/text_colour.cpp
+        src/logging/logger.cpp
 
 )
 

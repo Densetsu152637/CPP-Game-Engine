@@ -5,20 +5,35 @@
 #pragma once
 
 #include <chrono>
+#include <string>
+
+inline long get_time_ns()
+{
+    auto now = std::chrono::high_resolution_clock::now();
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+              now.time_since_epoch()
+          ).count();;
+}
+
+inline std::string formatDateTime(long timestamp) {
+    // 1. Convert long to time_t
+    time_t rawTime = (time_t)timestamp;
+
+    // 2. Convert to local time structure
+    struct tm *timeInfo = localtime(&rawTime);
+
+    // 3. Format the string (e.g., YYYY-MM-DD HH:MM:SS)
+    char buffer[80]; // should be safe (hopefully)
+    strftime(buffer, sizeof(buffer), "%Y-%m-%d %HH:%MM:%SS", timeInfo);
+
+    return std::string(buffer);
+}
 
 class StopWatch {
 
     long vStart;
     long vStop;
     bool stopped;
-
-    long get_time_ms()
-    {
-        auto now = std::chrono::high_resolution_clock::now();
-        return std::chrono::duration_cast<std::chrono::nanoseconds>(
-                  now.time_since_epoch()
-              ).count();;
-    }
 
 public:
 
@@ -27,13 +42,13 @@ public:
 
     void start()
     {
-        vStart = get_time_ms();
+        vStart = get_time_ns();
         stopped = false;
     }
 
     void stop()
     {
-        vStop = get_time_ms();
+        vStop = get_time_ns();
         stopped = true;
     }
 
@@ -45,7 +60,7 @@ public:
 
     long delta_ns()
     {
-        return stopped ? (vStop - vStart) : get_time_ms() - vStart;
+        return stopped ? (vStop - vStart) : get_time_ns() - vStart;
     }
 
     bool isStopped() { return stopped; }

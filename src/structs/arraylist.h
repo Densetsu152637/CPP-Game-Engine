@@ -11,16 +11,6 @@
 
 static constexpr size_t ARRAY_DEFAULT_INITIAL_CAPACITY = 16;
 
-size_t round_to_nearest_2n(size_t size)
-{
-    if (size == 0)
-    {
-        return ARRAY_DEFAULT_INITIAL_CAPACITY;
-    }
-
-    return std::bit_ceil(size);
-}
-
 template <typename T>
 struct Array
 {
@@ -87,7 +77,7 @@ public:
     ArrayList() : ArrayList(ARRAY_DEFAULT_INITIAL_CAPACITY) {}
 
     explicit ArrayList(const size_t initial_capacity)
-    { _resize(round_to_nearest_2n(initial_capacity)); }
+    { _resize(initial_capacity); }
 
     ArrayList(const ArrayList& arr);
     ArrayList(ArrayList&& arr) noexcept;
@@ -108,15 +98,17 @@ public:
     size_t capacity() const
     { return m_arr.cap; }
 
+    bool empty() const { return length() == 0; }
+
     void reserve(size_t space)
     {
-        if (space > m_arr.cap)
+        if (space > m_arr.cap - m_arr.size)
         {
-            _resize(round_to_nearest_2n(space));
+            this->_resize(m_arr.cap + space);
         }
     }
 
-    void restrict(size_t space)
+    void restrict(const size_t space)
     { _resize(space); }
 
     void clamp_size()
@@ -145,6 +137,7 @@ public:
 
     ArrayList<T>& append(const ArrayList<T>& arr)
     {
+        this->reserve(arr.length());
         this->append(arr.m_arr.ptr, arr.m_arr.size);
         return *this;
     }
@@ -198,24 +191,42 @@ public:
     const_iterator cend() const
     { return m_arr.cend(); }
 
-    template <typename U> void for_each(std::function<U (T&)>&& func)
+
+    template <typename Func>
+    void for_each(Func&& func)
     {
         for (size_t i = 0; i < m_arr.size; i++)
         {
-            T& t = m_arr[i];
-            func(t);
+            func(m_arr[i]);
         }
     }
 
-    template <typename U> ArrayList<U> map(std::function<U (T&)>&& func)
+    template <typename Func>
+    auto map(Func&& func)
     {
+        using U = std::decay_t<decltype(func(std::declval<T&>()))>;
+
         ArrayList<U> dest(m_arr.size);
+
         for (size_t i = 0; i < m_arr.size; i++)
         {
-            T& t = m_arr[i];
-            dest.append(func(t));
+            dest.append(func(m_arr[i]));
         }
+
         return dest;
+    }
+
+    template <typename R>
+    R reduce(std::function<R(const R&, const T&)> reducer, R initial) const
+    {
+        R acc = initial;
+
+        for (size_t i = 0; i < this->length(); ++i)
+        {
+            acc = reducer(acc, this->at(i));
+        }
+
+        return acc;
     }
 
 };
@@ -252,7 +263,9 @@ void ArrayList<T>::_resize_if_necessary()
         return;
     }
 
-    const size_t next_capacity = m_arr.cap == 0 ? ARRAY_DEFAULT_INITIAL_CAPACITY : m_arr.cap * 2;
+    const size_t next_capacity = m_arr.cap == 0 ?
+        ARRAY_DEFAULT_INITIAL_CAPACITY :
+        m_arr.cap >> 1;
     _resize(next_capacity);
 }
 
@@ -268,12 +281,10 @@ void ArrayList<T>::_assert_within_bounds(size_t& i) const
 template <typename T>
 void ArrayList<T>::_wrap_around_size(size_t& i) const
 {
-    if (m_arr.size == 0)
+    if (i < 0)
     {
-        i = 0;
-        return;
+        i = (m_arr.size - i);
     }
-
     i %= m_arr.size;
 }
 
@@ -369,22 +380,16 @@ ArrayList<T>& ArrayList<T>::operator=(ArrayList&& arr) noexcept
 template <typename T>
 T& ArrayList<T>::at(size_t index)
 {
-    if (index >= m_arr.size)
-    {
-        throw std::out_of_range("ArrayList index out of range");
-    }
-
+    _assert_within_bounds(index);
+    _wrap_around_size(index);
     return m_arr[index];
 }
 
 template <typename T>
 const T& ArrayList<T>::at(size_t index) const
 {
-    if (index >= m_arr.size)
-    {
-        throw std::out_of_range("ArrayList index out of range");
-    }
-
+    _assert_within_bounds(index);
+    _wrap_around_size(index);
     return m_arr[index];
 }
 

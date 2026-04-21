@@ -20,6 +20,7 @@ class SmartString {
 public:
 
     SmartString() : m_fI(0) {}
+    SmartString(size_t size) : m_fI(0) { m_str.reserve(size); }
     SmartString(const std::string& s) : m_str(string_search::to_list(s)), m_fI(m_str.length()) {}
     SmartString(const std::string&& s) : m_str(string_search::to_list(s)), m_fI(m_str.length()) {}
     SmartString(const ArrayList<char>& ref_arr) : m_str(ref_arr), m_fI(ref_arr.length()) {}
@@ -28,28 +29,37 @@ public:
     SmartString(ArrayList<char>&& move_arr, const int sI, const int fI) : m_str(std::move(move_arr)), m_sI(sI), m_fI(fI) {}
 
     bool operator==(const SmartString& other) const;
+    void operator+=(const SmartString& other);
+    void operator+=(const std::string& other);
+    SmartString operator+(const SmartString& other) const;
+    char operator[](size_t i);
 
     size_t length() const { return static_cast<size_t>(m_fI - m_sI); }
     bool is_empty() const { return length() == 0; }
     char at(size_t i) const { return m_str.at(_scaled_index(i)); }
 
     SmartString slice() { return *this; };
-    SmartString slice(const size_t start) { return SmartString(m_str, _scaled_index(start), m_fI); };
-    SmartString slice(const size_t start, const size_t end) { return SmartString(m_str, _scaled_index(start), _scaled_index(end)); };
+    SmartString slice(const size_t start) const { return SmartString(m_str, _scaled_index(start), m_fI); };
+    SmartString slice(const size_t start, const size_t end) const { return SmartString(m_str, _scaled_index(start), _scaled_index(end)); };
 
+    SmartString& append(char other);
+    SmartString& append(const char* other, size_t length);
+    SmartString& append(const ArrayList<char>& arr);
+    SmartString& append(const std::string& str);
+    SmartString& append(const SmartString& str);
     SmartString concat(const SmartString& other);
 
     // pattern searching / concatenation
-    ArrayList<SmartString> split_on(std::string pattern);
+    ArrayList<SmartString> split_on(std::string pattern) const;
     bool contains(const std::string& pattern);
     bool rcontains(const std::string& pattern);
-    bool starts_with(const std::string& prefix);
-    bool ends_with(const std::string& suffix);
-    size_t find(const std::string& pattern);
-    size_t find(const std::string& pattern, size_t start);
-    size_t rfind(const std::string& pattern);
-    size_t rfind(const std::string& pattern, size_t end);
-    int count(const std::string& pattern);
+    bool starts_with(const std::string& prefix) const;
+    bool ends_with(const std::string& suffix) const;
+    size_t find(const std::string& pattern) const;
+    size_t find(const std::string& pattern, size_t start) const;
+    size_t rfind(const std::string& pattern) const;
+    size_t rfind(const std::string& pattern, size_t end) const;
+    int count(const std::string& pattern) const;
 
     SmartString strip()
     { return lstrip().rstrip(); }
