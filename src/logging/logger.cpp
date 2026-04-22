@@ -44,8 +44,9 @@ ArrayList<SmartString> error_stack_parsing(const std::exception& e)
     {
         if (msg[i] == '\n')
         {
-            arr.emplace(end - start);
-            arr[-1].append(msg + start, end - start);
+            arr
+                .emplace(end - start)
+                .append(msg + start, end - start);
             start = end + 1;
         }
 
@@ -103,14 +104,14 @@ Logger& Logger::push(std::string&& str)
 
 Logger& Logger::push(std::string&& e, const std::initializer_list<TextColour> colours)
 {
-    history.emplace(
+    LoggedInformation& info = history.emplace(
         get_time_ns(),
         e
     );
 
     for (TextColour c : colours)
     {
-        history[-1].colours.append(c);
+        info.colours.append(c);
     }
 
     return *this;
