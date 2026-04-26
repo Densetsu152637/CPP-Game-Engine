@@ -127,8 +127,14 @@ public:
         return *this;
     }
 
-    ArrayList<T>& append(const T& t, const size_t i)
+    ArrayList<T>& append(const T& t, size_t i)
     {
+        // clamp i to end if need be
+        if (i > m_arr.size)
+        {
+            i = m_arr.size;
+        }
+
         this->_shuffle_up(i);
         m_arr[i] = t;
         ++m_arr.size;
@@ -137,7 +143,6 @@ public:
 
     ArrayList<T>& append(const ArrayList<T>& arr)
     {
-        this->reserve(arr.length());
         this->append(arr.m_arr.ptr, arr.m_arr.size);
         return *this;
     }
@@ -149,6 +154,12 @@ public:
     template<typename... Args>
     T& emplace(size_t i, Args&&... args)
     {
+        // clamp i to end if need be
+        if (i > m_arr.size)
+        {
+            i = m_arr.size;
+        }
+
         this->_shuffle_up(i);
 
         // Construct in-place

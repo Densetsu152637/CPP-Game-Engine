@@ -4,18 +4,121 @@
 
 #include "smartstring.h"
 
-#include <cctype>
+#include <memory>
 #include <stdexcept>
 
-size_t SmartString::_scaled_index(size_t t) const
+#include "string_search.h"
+
+size_t SmartString::_scaled_index(const size_t t) const
 {
-    size_t scaled = t + m_sI;
+    const size_t scaled = t + m_sI;
     if (scaled > m_fI)
     {
         throw std::out_of_range("SmartString index out of range");
     }
     return scaled;
-};
+}
+
+bool SmartString::_assert_modification()
+{
+    bool modified = false;
+
+    if (
+        m_shared->modifier != this ||  // if the smart string has been modified before
+        m_shared->str.length() != m_fI // if the smart string only contains a slice of the original
+    ) {
+        const auto shared_copy = std::make_shared<SharedString>(length());
+        for (size_t i = m_sI; i < m_fI; i++)
+        {
+            shared_copy->str.append(m_shared->str[i]);
+        }
+        m_shared = shared_copy;
+
+        // resetting values to default to allow for more optimal string transformation
+        m_sI = 0;
+        m_fI = m_shared->str.length();
+
+        modified = true;
+    }
+
+    m_shared->modifier = this;
+    m_shared->modified = true;
+
+    return modified;
+}
+
+SmartString::SmartString(const size_t size)
+{
+    // creates new array
+    m_shared = std::make_shared<SharedString>(size);
+}
+
+SmartString::SmartString(const std::string& s)
+{
+    // creates new array
+    m_shared = std::make_shared<SharedString>(s.length());
+    for (int i = 0; i < s.length(); i++)
+    {
+        m_shared->str.append(s.at(i));
+    }
+    m_sI = 0;
+    m_fI = s.length();
+}
+
+SmartString::SmartString(ArrayList<char>&& str)
+{
+
+}
+
+SmartString::SmartString(const SmartString& other) noexcept
+{
+    m_shared = other.m_shared;
+    m_sI = other.m_sI;
+    m_fI = other.m_fI;
+}
+
+SmartString::SmartString(SmartString&& other) noexcept
+{
+    m_shared = other.m_shared;
+    m_sI = other.m_sI;
+    m_fI = other.m_fI;
+
+    if (m_shared && m_shared->modifier == &other)
+    {
+        m_shared->modifier = this;
+    }
+
+    // Leave other in a valid, empty state
+    other.m_shared = nullptr;
+    other.m_sI = 0;
+    other.m_fI = 0;
+}
+
+SmartString& SmartString::operator=(const SmartString& other) noexcept
+{
+    m_shared = other.m_shared;
+    m_sI = other.m_sI;
+    m_fI = other.m_fI;
+}
+
+SmartString& SmartString::operator=(SmartString&& other) noexcept
+{
+    m_shared = other.m_shared;
+    m_sI = other.m_sI;
+    m_fI = other.m_fI;
+
+    if (m_shared && m_shared->modifier == &other)
+    {
+        m_shared->modifier = this;
+    }
+
+    // Leave other in a valid, empty state
+    other.m_shared = nullptr;
+    other.m_sI = 0;
+    other.m_fI = 0;
+
+    return *this;
+}
 
 bool SmartString::operator==(const SmartString& other) const
 {
@@ -27,95 +130,96 @@ bool SmartString::operator==(const SmartString& other) const
     return true;
 }
 
-void SmartString::operator+=(const SmartString& other)
-{
-    this->append(other);
-}
-
-void SmartString::operator+=(const std::string& other)
-{
-    this->append(other);
-}
-
 SmartString SmartString::operator+(const SmartString& other) const
 {
-    SmartString ret(this->length() + other.length());
-    ret += *this;
-    ret += other;
-    return ret;
+    return this->concat(other);
 }
 
-char SmartString::operator[](const size_t i)
+SmartString& SmartString::operator+=(const SmartString& other)
 {
-    return m_str[_scaled_index(i)];
+    return this->append(other);
 }
 
-SmartString& SmartString::append(const char other)
+char SmartString::operator[](const size_t i) const
 {
-    m_str.append(other);
+    return m_shared->str[_scaled_index(i)];
+}
+
+SmartString& SmartString::append(const char c)
+{
+    this->_assert_modification();
+
+    m_shared->str.append(c);
+    m_fI++;
+
     return *this;
 }
 
 SmartString& SmartString::append(const char* other, const size_t length)
 {
-    for (int i = 0; i < length; i++)
-    {
-        m_str.append(other[i]);
-    }
+    this->_assert_modification();
+
+    m_shared->str.append(other, length);
+    m_fI += length;
     return *this;
 }
 
-SmartString& SmartString::append(const ArrayList<char>& arr)
+SmartString& SmartString::append(const ArrayList<char>& str)
 {
-    m_str.append(arr);
+    this->_assert_modification();
+
+    m_shared->str.append(str);
+    m_fI += str.length();
     return *this;
 }
 
 SmartString& SmartString::append(const std::string& str)
 {
-    m_str.append(string_search::to_list(str));
-    return *this;
+    return this->append(str.c_str(), str.length());
 }
 
 SmartString& SmartString::append(const SmartString& str)
 {
-    m_str.append(str.m_str);
-    return *this;
+    return this->append(str.m_shared->str);
 }
 
-SmartString SmartString::concat(const SmartString& other)
+SmartString SmartString::concat(const SmartString& other) const
 {
     SmartString ret(length() + other.length());
-    return ret
+    ret
         .append(*this)
         .append(other);
+
+    return ret;
 }
 
-ArrayList<SmartString> SmartString::split_on(std::string pattern) const
+ArrayList<SmartString> SmartString::split_on(const std::string& pattern) const
 {
-    ArrayList<int> hits = string_search::z_search(m_str, pattern, m_sI, m_fI);
+    ArrayList<int> hits = string_search::z_search(m_shared->str.cbegin(), pattern, m_sI, m_fI);
     ArrayList<SmartString> splits(hits.length() + 1);
     int start = m_sI;
-    int patternLength = pattern.length();
     int nextAllowed = m_sI;
-    for (const int hit : hits) {
-        if (hit < nextAllowed) {
+
+    for (const int hit : hits)
+    {
+        if (hit < nextAllowed)
             continue;
-        }
-        splits.append(SmartString(m_str, start, hit));
-        start = hit + patternLength;
+
+        splits.emplace(m_shared, start, hit);
+        start = hit + pattern.length();
         nextAllowed = start;
     }
-    splits.append(SmartString(m_str, start, m_fI));
+
+    splits.emplace(m_shared, start, m_fI);
     return splits;
 }
 
-bool SmartString::contains(const std::string& pattern)
+bool SmartString::contains(const std::string& pattern) const
 {
     return find(pattern) != static_cast<size_t>(-1);
 }
 
-bool SmartString::rcontains(const std::string& pattern)
+bool SmartString::rcontains(const std::string& pattern) const
 {
     return rfind(pattern) != static_cast<size_t>(-1);
 }
@@ -123,7 +227,8 @@ bool SmartString::rcontains(const std::string& pattern)
 bool SmartString::starts_with(const std::string& prefix) const
 {
     if (length() < prefix.length()) return false;
-    for (int i = 0; i < prefix.length(); i++) {
+    for (int i = 0; i < prefix.length(); i++)
+    {
         if (at(i) != prefix.at(i))
             return false;
     }
@@ -133,80 +238,96 @@ bool SmartString::starts_with(const std::string& prefix) const
 bool SmartString::ends_with(const std::string& suffix) const
 {
     if (length() < suffix.length()) return false;
-    for (int i = 0; i < suffix.length(); i++) {
-        int tI = length() - i - 1;
-        int oI = suffix.length() - i - 1;
+    for (int i = 0; i < suffix.length(); i++)
+    {
+
+        const int tI = length() - i - 1;
+        const int oI = suffix.length() - i - 1;
+
         if (at(tI) != suffix.at(oI))
             return false;
     }
     return true;
 }
 
-size_t SmartString::find(const std::string& pattern) const
+int SmartString::find(const std::string& pattern) const
 {
     return find(pattern, 0);
 }
 
-size_t SmartString::find(const std::string& pattern, size_t start) const
+int SmartString::find(const std::string& pattern, const size_t start) const
 {
-    int hit = string_search::find_first(m_str, pattern, static_cast<int>(_scaled_index(start)), m_fI);
-    return hit == -1 ? static_cast<size_t>(-1) : static_cast<size_t>(hit - m_sI);
+    const int hit = string_search::find_first(
+        m_shared->str.cbegin(),
+        pattern,
+        _scaled_index(start), m_fI);
+
+    return hit == -1 ? -1 : hit - m_sI;
 }
 
-size_t SmartString::rfind(const std::string& pattern) const
+int SmartString::rfind(const std::string& pattern) const
 {
     return rfind(pattern, length());
 }
 
-size_t SmartString::rfind(const std::string& pattern, size_t end) const
+int SmartString::rfind(const std::string& pattern, const size_t end) const
 {
-    int hit = string_search::find_last(m_str, pattern, m_sI, static_cast<int>(_scaled_index(end)));
-    return hit == -1 ? static_cast<size_t>(-1) : static_cast<size_t>(hit - m_sI);
+    const int hit = string_search::find_last(
+        m_shared->str.cbegin(),
+        pattern,
+        m_sI, _scaled_index(end));
+
+    return hit == -1 ? -1 : hit - m_sI;
 }
 
-int SmartString::count(const std::string& pattern) const
+size_t SmartString::count(const std::string& pattern) const
 {
-    return string_search::z_search(m_str, pattern, m_sI, m_fI).length();
+    return string_search::z_search(
+        m_shared->str.cbegin(),
+        pattern,
+        m_sI, m_fI).length();
 }
 
-SmartString SmartString::lstrip()
+SmartString SmartString::lstrip() const
 {
     int start = m_sI;
-    while (start < m_fI && std::isspace(static_cast<unsigned char>(m_str.at(start)))) {
+    while (start < m_fI && ' ' != at(start))
+    {
         start++;
     }
-    return SmartString(m_str, start, m_fI);
+    return SmartString(m_shared, start, m_fI);
 }
 
-SmartString SmartString::rstrip()
+SmartString SmartString::rstrip() const
 {
     int finish = m_fI;
-    while (finish > m_sI && std::isspace(static_cast<unsigned char>(m_str.at(finish - 1)))) {
+    while (finish > m_sI && ' ' != at(finish))
+    {
         finish--;
     }
-    return SmartString(m_str, m_sI, finish);
+    return SmartString(m_shared, m_sI, finish);
 }
 
 SmartString SmartString::remove_prefix(const std::string& prefix)
 {
     return starts_with(prefix) ?
-        SmartString(m_str, m_sI + prefix.length(), m_fI) :
+        SmartString(m_shared, m_sI + prefix.length(), m_fI) :
         *this;
 }
 
 SmartString SmartString::remove_suffix(const std::string& suffix)
 {
     return ends_with(suffix) ?
-        SmartString(m_str, m_sI, m_fI - suffix.length()) :
+        SmartString(m_shared, m_sI, m_fI - suffix.length()) :
         *this;
 }
 
-SmartString SmartString::replace(char old_value, char new_value)
+SmartString SmartString::replace(const char old_value, const char new_value) const
 {
     ArrayList<char> replaced(length());
     for (int i = m_sI; i < m_fI; ++i)
     {
-        const char c = m_str.at(i);
+        const char c = m_shared->str.at(i);
         replaced.append(c == old_value ? new_value : c);
     }
 
@@ -220,7 +341,7 @@ SmartString SmartString::replace(const std::string& old_pattern, const std::stri
         return *this;
     }
 
-    ArrayList<int> raw_hits = string_search::z_search(m_str, old_pattern, m_sI, m_fI);
+    ArrayList<int> raw_hits = string_search::z_search(m_shared->str.cbegin(), old_pattern, m_sI, m_fI);
     ArrayList<int> hits(raw_hits.length());
     int next_allowed = m_sI;
     for (const int hit : raw_hits) {
@@ -242,20 +363,24 @@ SmartString SmartString::replace(const std::string& old_pattern, const std::stri
     }
 
     ArrayList<char> new_chars = string_search::to_list(new_pattern);
-    Array<char> src = m_str.ptr();
-    Array<char> dst = replaced_chars.ptr();
+    const Array<char>& src = m_shared->str.ptr();
+    Array<char>& dst = replaced_chars.ptr();
     const Array<char>& replacement = new_chars.ptr();
 
     int src_index = m_sI;
     int dst_index = 0;
-    for (const int hit : hits) {
-        int copy_length = hit - src_index;
-        if (copy_length > 0) {
+    for (const int hit : hits)
+    {
+        if (
+            const int copy_length = hit - src_index;
+            copy_length > 0
+        ) {
             array_cpy(dst, dst_index, src, src_index, copy_length);
             dst_index += copy_length;
         }
 
-        if (replacement.size > 0) {
+        if (replacement.size > 0)
+        {
             array_cpy(dst, dst_index, replacement, 0, static_cast<int>(replacement.size));
             dst_index += static_cast<int>(replacement.size);
         }
@@ -263,8 +388,10 @@ SmartString SmartString::replace(const std::string& old_pattern, const std::stri
         src_index = hit + old_length;
     }
 
-    int remaining_length = m_fI - src_index;
-    if (remaining_length > 0) {
+    if (
+        const int remaining_length = m_fI - src_index;
+        remaining_length > 0
+    ) {
         array_cpy(dst, dst_index, src, src_index, remaining_length);
     }
 
@@ -272,58 +399,67 @@ SmartString SmartString::replace(const std::string& old_pattern, const std::stri
 }
 
 
-SmartString SmartString::repeat(int count)
+SmartString SmartString::repeat(const int count)
 {
-    if (count <= 0 || is_empty()) {
-        return SmartString(std::string());
+    if (count <= 0 || is_empty())
+    {
+        return SmartString("");
     }
 
     ArrayList<char> repeated(length() * count);
     for (int i = 0; i < count; i++) {
         for (int j = m_sI; j < m_fI; ++j)
         {
-            repeated.append(m_str.at(j));
+            repeated.append(m_shared->str.at(j));
         }
     }
+
     return SmartString(std::move(repeated));
 }
 
 ArrayList<SmartString> SmartString::partition(const std::string& separator)
 {
-    size_t hit = find(separator);
-    if (hit == static_cast<size_t>(-1)) {
-        return ArrayList<SmartString>(3)
-            .append(*this)
-            .append(SmartString(std::string()))
-            .append(SmartString(std::string()));
+    const int hit = find(separator);
+    const ArrayList<SmartString> ret;
+
+    if (hit == -1)
+    {
+        ret.emplace(m_shared, m_sI, m_fI);
+        ret.emplace("");
+        ret.emplace("");
+    } else
+    {
+        const size_t absoluteHit = _scaled_index(hit);
+        ret.emplace(m_shared, m_sI, absoluteHit);
+        ret.emplace(m_shared, absoluteHit, absoluteHit + separator.length());
+        ret.emplace(m_shared, absoluteHit + separator.length(), m_fI);
     }
 
-    int absoluteHit = static_cast<int>(_scaled_index(hit));
-    return ArrayList<SmartString>(3)
-        .append(SmartString(m_str, m_sI, absoluteHit))
-        .append(SmartString(m_str, absoluteHit, absoluteHit + static_cast<int>(separator.length())))
-        .append(SmartString(m_str, absoluteHit + static_cast<int>(separator.length()), m_fI));
+    return ret;
 }
 
 ArrayList<SmartString> SmartString::rpartition(const std::string& separator)
 {
-    size_t hit = rfind(separator);
-    if (hit == static_cast<size_t>(-1)) {
-        return ArrayList<SmartString>(3)
-            .append(*this)
-            .append(SmartString(std::string()))
-            .append(SmartString(std::string()));
+    int hit = rfind(separator);
+    const ArrayList<SmartString> ret;
+
+    if (hit == -1) {
+        ret.emplace(m_shared, m_sI, m_fI);
+        ret.emplace("");
+        ret.emplace("");
+    } else
+    {
+        const size_t absoluteHit = _scaled_index(hit);
+        ret.emplace(m_shared, m_sI, absoluteHit);
+        ret.emplace(m_shared, absoluteHit, absoluteHit + separator.length());
+        ret.emplace(m_shared, absoluteHit + separator.length(), m_fI);
     }
 
-    int absoluteHit = static_cast<int>(_scaled_index(hit));
-    return ArrayList<SmartString>(3)
-        .append(SmartString(m_str, m_sI, absoluteHit))
-        .append(SmartString(m_str, absoluteHit, absoluteHit + static_cast<int>(separator.length())))
-        .append(SmartString(m_str, absoluteHit + static_cast<int>(separator.length()), m_fI));
+    return ret;
 }
 
-std::string SmartString::to_string()
+std::string SmartString::to_string() const
 {
-    return std::string(m_str.begin() + m_sI, m_str.begin() + m_fI);
+    return std::string(m_shared->str.cbegin() + m_sI, m_shared->str.cbegin() + m_fI);
 }
 

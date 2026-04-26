@@ -18,27 +18,31 @@ ArrayList<char> string_search::to_list(const std::string& s)
     return res;
 }
 
-int string_search::find_first(const ArrayList<char>& str, const std::string& pattern, int start, int finish)
+int string_search::find_first(const char* str, const std::string& pattern, const size_t start, const size_t finish)
 {
     if (pattern.empty()) {
         return start;
     }
 
-    int patternLength = pattern.length();
-    int limit = finish - patternLength;
+    const int patternLength = pattern.length();
+    const int limit = finish - patternLength;
+
     for (int i = start; i <= limit; i++) {
         int j = 0;
-        while (j < patternLength && str.at(i + j) == pattern.at(j)) {
+
+        while (j < patternLength && str[i + j] == pattern.at(j)) {
             j++;
         }
+
         if (j == patternLength) {
             return i;
         }
     }
+
     return -1;
 }
 
-int string_search::find_last(const ArrayList<char>& str, const std::string& pattern, int start, int finish)
+int string_search::find_last(const char* str, const std::string& pattern, const size_t start, const size_t finish)
 {
     if (pattern.empty()) {
         return finish;
@@ -48,7 +52,7 @@ int string_search::find_last(const ArrayList<char>& str, const std::string& patt
     int limit = finish - patternLength;
     for (int i = limit; i >= start; i--) {
         int j = 0;
-        while (j < patternLength && str.at(i + j) == pattern.at(j)) {
+        while (j < patternLength && str[i + j] == pattern.at(j)) {
             j++;
         }
         if (j == patternLength) {
@@ -58,34 +62,49 @@ int string_search::find_last(const ArrayList<char>& str, const std::string& patt
     return -1;
 }
 
-ArrayList<int> string_search::z_search(const ArrayList<char>& str, const std::string& pattern, int start, int finish)
+ArrayList<int> string_search::z_search(const char* str, const std::string& pattern, const size_t start, const size_t finish)
 {
-    ArrayList<int> matches;
     if (pattern.empty()) {
+        ArrayList<int> no_matches(finish - start);
         for (int i = start; i <= finish; ++i) {
-            matches.append(i);
+            no_matches.append(i);
         }
-        return matches;
+        return no_matches;
     }
 
-    const int patternLength = static_cast<int>(pattern.length());
-    const int limit = finish - patternLength;
-    for (int i = start; i <= limit; ++i) {
-        int j = 0;
-        while (j < patternLength && str.at(i + j) == pattern.at(j)) {
-            ++j;
-        }
-        if (j == patternLength) {
-            matches.append(i);
-        }
+    // combine the strings to form the z_str, which is:
+    // pattern + '\0' + search_str
+    const size_t length = finish - start;
+    const size_t pattern_length = pattern.length();
+    char combined[length + pattern_length + 1];
+
+    int i = 0;
+
+    for (; i < pattern_length; i++)
+    {
+        combined[i] = pattern.at(i);
+    }
+    combined[i++] = '\0';
+    for (; i < length + pattern_length; i++)
+    {
+        combined[i] = str[start + i];
+    }
+
+    // here i = combinedLength
+    ArrayList<int> z_arr = z_algo(reinterpret_cast<const char*>(&combined), length);
+    ArrayList<int> matches;
+
+    for (int j = pattern_length + 1; j < z_arr.length(); j++)
+    {
+        if (z_arr[j] == pattern_length)
+            matches.append(j - pattern_length + 1);
     }
 
     return matches;
 }
 
-ArrayList<int> string_search::z_algo(const ArrayList<char>& txt)
+ArrayList<int> string_search::z_algo(const char* txt, const size_t length)
 {
-    int length = static_cast<int>(txt.length());
     ArrayList<int> arr(length);
     for (int i = 0; i < length; ++i) {
         arr.append(0);
@@ -97,16 +116,20 @@ ArrayList<int> string_search::z_algo(const ArrayList<char>& txt)
 
     int left = 0;
     int right = 0;
-    for (int i = 1; i < length; i++) {
-        if (i <= right) {
+
+    for (int i = 1; i < length; i++)
+    {
+        //
+        if (i <= right)
             arr[i] = std::min(right - i + 1, arr[i - left]);
-        }
 
-        while (i + arr[i] < length && txt.at(arr[i]) == txt.at(i + arr[i])) {
+        //
+        while (i + arr[i] < length && txt[arr[i]] == txt[i + arr[i]])
             arr[i]++;
-        }
 
-        if (i + arr[i] - 1 > right) {
+        //
+        if (i + arr[i] - 1 > right)
+        {
             left = i;
             right = i + arr[i] - 1;
         }
