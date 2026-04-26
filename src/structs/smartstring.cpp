@@ -7,7 +7,7 @@
 #include <memory>
 #include <stdexcept>
 
-#include "string_search.h"
+#include "../util/string_search.h"
 
 size_t SmartString::_scaled_index(const size_t t) const
 {
@@ -67,7 +67,10 @@ SmartString::SmartString(const std::string& s)
 
 SmartString::SmartString(ArrayList<char>&& str)
 {
-
+    m_shared = std::make_shared<SharedString>();
+    m_shared->str = std::move(str);
+    m_sI = 0;
+    m_fI = m_shared->str.length();
 }
 
 SmartString::SmartString(const SmartString& other) noexcept
@@ -207,6 +210,37 @@ ArrayList<SmartString> SmartString::split_on(const std::string& pattern) const
 
         splits.emplace(m_shared, start, hit);
         start = hit + pattern.length();
+        nextAllowed = start;
+    }
+
+    splits.emplace(m_shared, start, m_fI);
+    return splits;
+}
+
+ArrayList<SmartString> SmartString::split_on(const char token) const
+{
+    // do linear search for token in string
+    ArrayList<int> hits;
+    for (int i = m_sI, i < m_fI, i++)
+    {
+        if (m_shared->str.at(i) == token)
+        {
+            hits.append(i);
+        }
+    }
+
+    //
+    ArrayList<SmartString> splits(hits.length() + 1);
+    int start = m_sI;
+    int nextAllowed = m_sI;
+
+    for (const int hit : hits)
+    {
+        if (hit < nextAllowed)
+            continue;
+
+        splits.emplace(m_shared, start, hit);
+        start = hit + 1;
         nextAllowed = start;
     }
 

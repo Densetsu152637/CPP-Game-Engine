@@ -10,7 +10,7 @@
 template <typename T>
 class Syncronized {
 
-    T m_var{};
+    T m_var {};
     std::mutex m_mutex;
 
 public:

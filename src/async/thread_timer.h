@@ -8,7 +8,6 @@
 // add global pool of threads to ensure threads are safely executed and managed
 
 #include "../functional/result.h"
-#include "../functional/functions.h"
 
 #include <thread>
 #include <future>
@@ -20,12 +19,12 @@ class ThreadTimer
 public:
 
     template <typename Duration>
-    static Result<T> run(Supplier<T> fn, Duration timeout);
+    static Result<T> run(std::function<T()> fn, Duration timeout);
 };
 
 template <typename T>
 template <typename Duration>
-Result<T> ThreadTimer<T>::run(Supplier<T> fn, Duration timeout)
+Result<T> ThreadTimer<T>::run(std::function<T()> fn, Duration timeout)
 {
     std::promise<T> promise;
     std::future<T> future = promise.get_future();

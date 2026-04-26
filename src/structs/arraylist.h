@@ -76,8 +76,13 @@ public:
 
     ArrayList() : ArrayList(ARRAY_DEFAULT_INITIAL_CAPACITY) {}
 
-    explicit ArrayList(const size_t initial_capacity)
-    { _resize(initial_capacity); }
+    explicit ArrayList(const size_t initial_capacity) : ArrayList(initial_capacity, false) {}
+
+    ArrayList(const size_t initial_capacity, const bool check_size)
+    {
+        _resize(initial_capacity);
+        this->m_arr.size = check_size ? initial_capacity : 0;
+    }
 
     ArrayList(const ArrayList& arr);
     ArrayList(ArrayList&& arr) noexcept;

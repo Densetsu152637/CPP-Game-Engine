@@ -22,13 +22,13 @@ public:
 
 private:
 
-    std::mutex mutex;
-    std::condition_variable cv;
+    std::mutex m_mutex;
+    std::condition_variable m_cv;
 
-    Result<T> result;
-    ArrayList<Listener> listeners;
-    Threadpool* executor = nullptr;
-    bool done = false;
+    Result<T> m_result;
+    ArrayList<Listener> m_listeners;
+    Threadpool* m_executor = nullptr;
+    bool m_done = false;
 
     void _attach(std::function<void(Result<T>&)> listener);
 
@@ -37,7 +37,7 @@ public:
     Promise() = default;
     Promise(Threadpool* exec)
     {
-        executor = exec;
+        m_executor = exec;
     }
     ~Promise() = default;
 
@@ -80,7 +80,7 @@ public:
     template <typename U>
     std::shared_ptr<Promise<U>> then(std::function<U(T)> mapper)
     {
-        return this->then(std::move(mapper), executor);
+        return this->then(std::move(mapper), m_executor);
     }
 
 };
@@ -92,23 +92,23 @@ void Promise<T>::_attach(std::function<void(Result<T>&)> listener)
     Result<T> snapshot;
 
     {
-        std::lock_guard<std::mutex> lock(mutex);
+        std::lock_guard<std::mutex> lock(m_mutex);
 
-        if (!done)
+        if (!m_done)
         {
-            listeners.push_back(std::move(listener));
+            m_listeners.push_back(std::move(listener));
             return;
         }
 
         execute_now = true;
-        snapshot = result;
+        snapshot = m_result;
     }
 
     if (execute_now)
     {
-        if (executor)
+        if (m_executor)
         {
-            executor->submit([listener, snapshot]() mutable {
+            m_executor->submit([listener, snapshot]() mutable {
                 listener(snapshot);
             });
         }
@@ -125,26 +125,26 @@ void Promise<T>::complete(Result<T> res)
     ArrayList<Listener> listeners_at_completion;
 
     {
-        std::lock_guard<std::mutex> lock(mutex);
+        std::lock_guard<std::mutex> lock(m_mutex);
 
-        if (done)
+        if (m_done)
             return;
 
-        done = true;
-        result = std::move(res);
+        m_done = true;
+        m_result = std::move(res);
 
-        listeners_at_completion = std::move(listeners);
-        listeners.clear();
+        listeners_at_completion = std::move(m_listeners);
+        m_listeners.clear();
     }
 
-    cv.notify_all();
+    m_cv.notify_all();
 
-    if (!listeners_at_completion.empty() && executor)
+    if (!listeners_at_completion.empty() && m_executor)
     {
         ArrayList<std::function<void()>> tasks;
         tasks.reserve(listeners_at_completion.size());
 
-        for (auto& l : listeners)
+        for (auto& l : m_listeners)
         {
             tasks.append([this, l]()
             {
@@ -152,31 +152,31 @@ void Promise<T>::complete(Result<T> res)
             });
         }
 
-        executor->submit(tasks);
+        m_executor->submit(tasks);
     }
     else
     {
-        for (auto& l : listeners)
-            l(result);
+        for (auto& l : m_listeners)
+            l(m_result);
     }
 }
 
 template <typename T>
 Result<T>& Promise<T>::await()
 {
-    std::unique_lock<std::mutex> lock(mutex);
+    std::unique_lock<std::mutex> lock(m_mutex);
 
-    cv.wait(lock, [&] {
-        return done;
+    m_cv.wait(lock, [&] {
+        return m_done;
     });
 
-    return result;
+    return m_result;
 }
 
 template <typename T>
 Promise<T> Promise<T>::on_error(std::function<T(std::exception_ptr)> handler)
 {
-    Promise<T> next(executor);
+    Promise<T> next(m_executor);
 
     attach([next, handler](const Result<T>& res) mutable {
 

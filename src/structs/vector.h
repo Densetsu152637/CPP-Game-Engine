@@ -976,6 +976,7 @@ union Vector8f {
 union Matrix4f
 {
     float arr[16];
+
     struct
     {
         float m00 = 0.0f;

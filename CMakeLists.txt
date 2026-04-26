@@ -14,7 +14,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(CPP_GAME_ENGINE_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(CPP_GAME_ENGINE_ENABLE_AVX2 "Enable AVX2 SIMD paths for supported vector operations" OFF)
 
-find_package(Vulkan REQUIRED)
+find_package(Vulkan QUIET)
 
 add_executable(CPPGameEngine
 
@@ -26,8 +26,8 @@ add_executable(CPPGameEngine
         src/functional/result.h
         src/structs/smartstring.cpp
         src/structs/smartstring.h
-        src/structs/string_search.cpp
-        src/structs/string_search.h
+        src/util/string_search.cpp
+        src/util/string_search.h
         src/util/stopwatch.h
         src/async/threadpool.cpp
         src/async/threadpool.h
@@ -51,12 +51,32 @@ add_executable(CPPGameEngine
         src/logging/text_colour.h
         src/logging/text_colour.cpp
         src/logging/logger.cpp
+        src/ecs/uniform.h
+        src/assets/uniform.cpp
+        src/interaction/keyboard.cpp
+        src/interaction/keyboard.h
+        src/interaction/mouse.cpp
+        src/interaction/mouse.h
+        src/interaction/window_event.cpp
+        src/interaction/window_event.h
+        src/core/engine.cpp
+        src/core/engine.h
+        src/ecs/entity.cpp
+        src/ecs/entity.h
+        src/ecs/ecs.cpp
+        src/ecs/ecs.h
+        src/core/interfaces.h
+        src/async/buffer.h
 
 )
 
-target_link_libraries(CPPGameEngine
-    PRIVATE Vulkan::Vulkan
-)
+if(Vulkan_FOUND)
+    message(STATUS "Vulkan found: building CPPGameEngine with Vulkan support")
+    target_link_libraries(CPPGameEngine PRIVATE Vulkan::Vulkan)
+    target_compile_definitions(CPPGameEngine PRIVATE CPP_GAME_ENGINE_USE_VULKAN=1)
+else()
+    message(STATUS "Vulkan not found: building CPPGameEngine as a plain C++ executable")
+endif()
 
 target_compile_features(CPPGameEngine PRIVATE cxx_std_20)
 target_include_directories(CPPGameEngine

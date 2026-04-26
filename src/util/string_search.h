@@ -6,7 +6,7 @@
 
 #include <string>
 
-#include "arraylist.h"
+#include "../structs/arraylist.h"
 
 namespace string_search
 {

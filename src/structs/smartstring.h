@@ -17,6 +17,7 @@ struct SharedString
     SmartString* modifier = nullptr;
     bool modified = false;
 
+    SharedString() {}
     explicit SharedString(const size_t cap) : str(cap) {}
     explicit SharedString(ArrayList<char>&& move)
     { str = std::move(move); }
@@ -68,6 +69,7 @@ public:
 
     // pattern searching / concatenation
     ArrayList<SmartString> split_on(const std::string& pattern) const;
+    ArrayList<SmartString> split_on(const char token) const;
     bool contains(const std::string& pattern) const;
     bool rcontains(const std::string& pattern) const;
     bool starts_with(const std::string& prefix) const;

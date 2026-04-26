@@ -2,11 +2,10 @@
 // Created by Nicholas on 18/04/26.
 //
 
-#include "string_search.h"
-
 #include <string>
 
-#include "arraylist.h"
+#include "string_search.h"
+#include "../structs/arraylist.h"
 
 ArrayList<char> string_search::to_list(const std::string& s)
 {
@@ -91,7 +90,7 @@ ArrayList<int> string_search::z_search(const char* str, const std::string& patte
     }
 
     // here i = combinedLength
-    ArrayList<int> z_arr = z_algo(reinterpret_cast<const char*>(&combined), length);
+    ArrayList<int> z_arr = z_algo(combined, length);
     ArrayList<int> matches;
 
     for (int j = pattern_length + 1; j < z_arr.length(); j++)
