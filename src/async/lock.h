@@ -146,4 +146,11 @@ public:
         func(m_var);
     }
 
+    T& ref() {
+        return m_var; // references
+    }
+
+    std::mutex& lock() {
+        return m_mutex; // references
+    }
 };

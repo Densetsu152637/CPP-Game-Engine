@@ -42,9 +42,9 @@ struct IDisplayManager
 {
 
     virtual ~IDisplayManager() = default;
-    virtual std::shared_ptr<Promise<void>> createDisplay() = 0;
+    virtual bool createDisplay() = 0;
     virtual void closeDisplay() = 0;
-    virtual Vector2f getScreenSize() = 0;
+    virtual Vector2i getScreenSize() = 0;
     virtual bool isClosed() = 0;
     virtual void show() = 0;
     virtual void hide() = 0;

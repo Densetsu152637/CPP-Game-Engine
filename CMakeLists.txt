@@ -23,7 +23,48 @@ set(GLFW_INSTALL OFF CACHE BOOL "Generate installation target" FORCE)
 add_subdirectory(glfw EXCLUDE_FROM_ALL)
 
 add_executable(CPPGameEngine
-    src/main.cpp
+        src/main.cpp
+        src/structs/vector.cpp
+        src/structs/vector.h
+        src/structs/arraylist.h
+        src/functional/result.h
+        src/structs/smartstring.cpp
+        src/structs/smartstring.h
+        src/util/string_search.cpp
+        src/util/string_search.h
+        src/util/stopwatch.h
+        src/async/threadpool.cpp
+        src/async/threadpool.h
+        src/async/promise.h
+        src/structs/queue.h
+        src/async/thread_timer.h
+        src/util/fader.h
+        src/util/toolbox.cpp
+        src/util/toolbox.h
+        src/logging/logger.cpp
+        src/logging/logger.h
+        src/logging/text_colour.h
+        src/logging/text_colour.cpp
+        src/logging/logger.cpp
+        src/ecs/uniform.h
+        src/interaction/keyboard.cpp
+        src/interaction/keyboard.h
+        src/interaction/mouse.cpp
+        src/interaction/mouse.h
+        src/interaction/window_event.h
+        src/core/engine.cpp
+        src/core/engine.h
+        src/ecs/entity.cpp
+        src/ecs/entity.h
+        src/ecs/ecs.cpp
+        src/ecs/ecs.h
+        src/core/interfaces.h
+        src/async/buffer.h
+        src/async/lock.h
+        src/runtime/glfw_main.h
+        src/runtime/glfw_main.cpp
+        src/core/display.cpp
+        src/core/display.h
 )
 
 if(Vulkan_FOUND)
