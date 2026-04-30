@@ -3,10 +3,12 @@
 //
 
 #pragma once
+#include "../structs/vector.h"
 #include "../structs/arraylist.h"
 
 enum CallbackTypes
 {
+    NULL_TYPE = -1,
     WINDOW_POSITION = 0,
     WINDOW_SIZE,
     WINDOW_CLOSE,
@@ -25,19 +27,25 @@ enum CallbackTypes
     MOUSE_SCROL_WHEEL,
     FILE_DROP,
     JOYSTICK_CONNECTION,
-    MONITOR_PLUG
+    MONITOR_PLUG,
 
 };
 
 struct GLFWCallback
 {
 
-    int key;
-    int scancode;
-    int action;
-    int mods;
-    CallbackTypes type;
+    CallbackTypes type = NULL_TYPE;
 
+    union
+    {
+
+        int togglable = -1;
+        Vector2i vector2_i;
+        Vector3i vector3_i;
+        Vector4i vector4_i;
+        Vector2f vector2_f;
+
+    };
 };
 
 struct WindowEventListener

@@ -14,9 +14,8 @@ bool KeyboardListener::valid_code(const size_t code) const
     return code < states.read().length();
 }
 
-void KeyboardListener::key_pressed()
+void KeyboardListener::key_pressed(const int code)
 {
-    int code = -1;
     states.write([code](ArrayList<KeyState>& s) {
         KeyState& k = s[code];
         k.pressed  = true;
@@ -25,9 +24,8 @@ void KeyboardListener::key_pressed()
     });
 }
 
-void KeyboardListener::key_released()
+void KeyboardListener::key_released(const int code)
 {
-    int code = -1;
     states.write([code](ArrayList<KeyState>& s) {
         KeyState& k = s[code];
         k.pressed  = false;
@@ -54,3 +52,24 @@ void KeyboardListener::poll()
     // Publish snapshot
     states.swap();
 }
+
+void KeyboardListener::processWindowEvent(const GLFWCallback& e)
+{
+    switch (e.type)
+    {
+        case CallbackTypes::KEYBOARD_INPUT:
+        {
+            // key, scancode, action, mods
+            const int key = e.vector4_i.a;
+            switch (int action = e.vector4_i.c)
+            {
+                case 0: key_pressed(key); break;
+                case 1: key_released(key); break;
+                default: break;
+            }
+            break;
+        }
+        default: ;
+    }
+
+};

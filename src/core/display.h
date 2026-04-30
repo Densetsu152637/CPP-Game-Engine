@@ -6,6 +6,7 @@
 #include "interfaces.h"
 #include "async/lock.h"
 #include "GLFW/glfw3.h"
+#include "logging/logger.h"
 
 struct ScreenSettings
 {
@@ -57,45 +58,29 @@ public:
 
 };
 
-#define glfw_callback(name, type) \
-    inline void name(GLFWwindow* window, int key, int scancode, int action, int mods) \
-    { \
-        auto* display = static_cast<GLFWDisplay*>(glfwGetWindowUserPointer(window)); \
-        GLFWCallback callback = { \
-            key, \
-            scancode, \
-            action, \
-            mods, \
-            type \
-        }; \
-        display->getWindowEventManager().processWindowEvent(callback); \
-    } \
-    \
-
-namespace GLFWCALLBACK
+namespace GLFW_CALLBACK
 {
+    inline Logger* globalLogger = nullptr;
+    void errorCallback(int error_code, const char* description);
 
-    void errorCallback();
-
-    glfw_callback(windowMoveCallback, WINDOW_POSITION)
-    glfw_callback(windowSizeCallback, WINDOW_SIZE)
-    glfw_callback(windowCloseCallback, WINDOW_CLOSE)
-    glfw_callback(windowRefreshCallback, WINDOW_REFRESH)
-    glfw_callback(windowFocusCallback, WINDOW_FOCUS)
-    glfw_callback(windowIconifyCallback, WINDOW_ICONIFY)
-    glfw_callback(windowMaximiseCallback, WINDOW_MAXIMIZE)
-    glfw_callback(windowContentScaleCallback, WINDOW_CONTENT_SCALE)
-    glfw_callback(frameBufferResizeCallback, FRAMEBUFFER_SIZE)
-    glfw_callback(keyboardInputCallback, KEYBOARD_INPUT)
-    glfw_callback(charInputCallback, CHAR_INPUT)
-    glfw_callback(moddedCharInputCallback, CHAR_WITH_MODS)
-    glfw_callback(mouseButtonPressCallback, MOUSE_BUTTON)
-    glfw_callback(mouseMovementCallback, MOUSE_MOVEMENT)
-    glfw_callback(cursorBorderCrossCallback, CURSOR_BORDER_CROSS)
-    glfw_callback(mouseScrollWheelCallback, MOUSE_SCROL_WHEEL)
-    glfw_callback(fileDropCallback, FILE_DROP)
-    glfw_callback(joystickConnectionCallback, JOYSTICK_CONNECTION)
-    glfw_callback(monitorPlugCallback, MONITOR_PLUG)
+    void windowMoveCallback(GLFWwindow* window, int xpos, int ypos);
+    void windowSizeCallback(GLFWwindow* window, int width, int height);
+    void windowCloseCallback(GLFWwindow* window);
+    void windowRefreshCallback(GLFWwindow* window);
+    void windowFocusCallback(GLFWwindow* window, int focused);
+    void windowIconifyCallback(GLFWwindow* window, int iconified);
+    void windowMaximiseCallback(GLFWwindow* window, int maximized);
+    void windowContentScaleCallback(GLFWwindow* window, float xscale, float yscale);
+    void frameBufferResizeCallback(GLFWwindow* window, int width, int height);
+    void keyboardInputCallback(GLFWwindow* window, int key, int scancode, int action, int mods);
+    void charInputCallback(GLFWwindow* window, unsigned int codepoint);
+    void moddedCharInputCallback(GLFWwindow* window, unsigned int codepoint, int mods);
+    void mouseButtonPressCallback(GLFWwindow* window, int button, int action, int mods);
+    void mouseMovementCallback(GLFWwindow* window, double xpos, double ypos);
+    void cursorBorderCrossCallback(GLFWwindow* window, int entered);
+    void mouseScrollWheelCallback(GLFWwindow* window, double xoffset, double yoffset);
+    void joystickConnectionCallback(int jid, int event);
+    void monitorPlugCallback(GLFWmonitor* monitor, int event);
 
 }
 

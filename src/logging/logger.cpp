@@ -72,7 +72,7 @@ Logger& Logger::error(const std::exception& e, const std::initializer_list<TextC
     auto stack_trace = error_stack_parsing(e);
     stack_trace.for_each([&](SmartString& trace)
     {
-        this->push("[WARNING] | " + trace.to_string(), colours);
+        this->push("[ERROR] | " + trace.to_string(), colours);
     });
     return *this;
 }
@@ -87,7 +87,7 @@ Logger& Logger::warning(const std::exception& e, const std::initializer_list<Tex
     auto stack_trace = error_stack_parsing(e);
     stack_trace.for_each([&](const SmartString& trace)
     {
-        this->push("[ERROR] | " + trace.to_string(), colours);
+        this->push("[WARNING] | " + trace.to_string(), colours);
     });
     return *this;
 }

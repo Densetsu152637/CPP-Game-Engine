@@ -13,17 +13,17 @@ struct KeyState
     bool held = false;
     bool released = false;
 
-    KeyState() {}
+    KeyState() = default;
     KeyState(const bool p, const bool h, const bool r) : pressed(p), held(h), released(r) {}
 
-    bool is_tapped() const { return pressed; }
-    bool is_pressed() const { return pressed || held; }
-    bool is_held() const { return held;}
-    bool is_released() const { return released; }
+    [[nodiscard]] bool is_tapped() const { return pressed; }
+    [[nodiscard]] bool is_pressed() const { return pressed || held; }
+    [[nodiscard]] bool is_held() const { return held;}
+    [[nodiscard]] bool is_released() const { return released; }
 };
 
 
-class KeyboardListener : public IPollable
+class KeyboardListener : public IPollable, public WindowEventListener
 {
 
     static inline uint32_t NUMBER_KEY_STATES = 512;
@@ -44,14 +44,18 @@ class KeyboardListener : public IPollable
 
 public:
 
-    KeyboardListener() {}
+    KeyboardListener() = default;
+    ~KeyboardListener() override = default;
 
     void poll() override;
+    void processWindowEvent(const GLFWCallback& e) override;
 
-    KeyState state_of(const size_t code) const;
-    bool valid_code(const size_t code) const;
-    void key_pressed();
-    void key_released();
+    KeyState state_of(size_t code) const;
+    bool valid_code(size_t code) const;
+    void key_pressed(int code);
+    void key_released(int code);
+
+
 
 };
 
