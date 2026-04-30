@@ -28,7 +28,10 @@ public:
     // Constructor WITHOUT copy behavior
     // =========================================
     explicit DoubleBuffer(Supplier factory)
-        : DoubleBuffer(factory, nullptr)
+    : DoubleBuffer(factory, [](const T& src, T& dst)
+        {
+            dst = src;
+        })
     {}
 
     // =========================================
@@ -79,20 +82,11 @@ public:
         std::swap(m_readBuffer, m_writeBuffer);
 
         // optional copy propagation
-        if (isCopying())
-        {
-            copier(m_readBuffer, m_writeBuffer);
-        }
-    }
-
-    // =========================================
-    // Check if copier is active
-    // =========================================
-    bool isCopying() const
-    {
-        return static_cast<bool>(copier);
+        copier(m_readBuffer, m_writeBuffer);
     }
 };
+
+
 
 template <typename T>
 class TripleBuffer
@@ -114,14 +108,18 @@ public:
     // Constructor WITHOUT copy behavior
     // =========================================
     explicit TripleBuffer(Factory factory)
-        : TripleBuffer(factory, nullptr)
+        : TripleBuffer(factory,
+        [](const T& src, T& dst)
+        {
+            dst = src;
+        })
     {}
 
     // =========================================
     // Constructor WITH copy behavior
     // =========================================
     TripleBuffer(Factory factory,
-                 std::function<T(const T&, T&)> copierFn)
+                 std::function<void(const T&, T&)> copierFn)
         : m_readCurrentBuffer(factory()),
           m_readLastBuffer(factory()),
           m_writeBuffer(factory()),
@@ -144,6 +142,12 @@ public:
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         return m_readLastBuffer;
+    }
+
+    std::tuple<T, T> readLast() const
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return std::make_tuple(m_readLastBuffer, m_readCurrentBuffer);
     }
 
     // =========================================
@@ -182,17 +186,7 @@ public:
         m_writeBuffer       = std::move(oldLast);
 
         // optional propagation
-        if (isCopying())
-        {
-            copier(m_readCurrentBuffer, m_writeBuffer);
-        }
+        copier(m_readCurrentBuffer, m_writeBuffer);
     }
 
-    // =========================================
-    // Copier check
-    // =========================================
-    bool isCopying() const
-    {
-        return static_cast<bool>(copier);
-    }
 };

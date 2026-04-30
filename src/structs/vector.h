@@ -855,32 +855,34 @@ namespace vector_detail
 // INT
 
 union Vector2i {
-    int arr[2];
+
     struct
     {
         int x = 0;
         int y = 0;
     };
+    int arr[2];
 
     CPP_GAME_ENGINE_ARRAY_METHODS(Vector2i, int, INT_MAX)
     CPP_GAME_ENGINE_SCALAR_FRIEND_METHODS(Vector2i, int, INT_MAX)
 };
 
 union Vector3i {
-    int arr[3];
+
     struct
     {
         int x = 0;
         int y = 0;
         int z = 0;
     };
+    int arr[3];
 
     CPP_GAME_ENGINE_ARRAY_METHODS(Vector3i, int, INT_MAX)
     CPP_GAME_ENGINE_SCALAR_FRIEND_METHODS(Vector3i, int, INT_MAX)
 };
 
 union Vector4i {
-    int arr[4];
+
     struct
     {
         int a = 0;
@@ -888,13 +890,13 @@ union Vector4i {
         int c = 0;
         int d = 0;
     };
+    int arr[4];
 
     CPP_GAME_ENGINE_ARRAY_METHODS(Vector4i, int, INT_MAX)
     CPP_GAME_ENGINE_SCALAR_FRIEND_METHODS(Vector4i, int, INT_MAX)
 };
 
 union Vector8i {
-    int arr[8];
     struct
     {
         int a = 0;
@@ -906,6 +908,7 @@ union Vector8i {
         int g = 0;
         int h = 0;
     };
+    int arr[8];
 
     CPP_GAME_ENGINE_ARRAY_METHODS(Vector8i, int, INT_MAX)
     CPP_GAME_ENGINE_SCALAR_FRIEND_METHODS(Vector8i, int, INT_MAX)
@@ -915,32 +918,34 @@ union Vector8i {
 // FLOAT
 
 union Vector2f {
-    float arr[2];
+
     struct
     {
         float x = 0.0f;
         float y = 0.0f;
     };
+    float arr[2];
 
     CPP_GAME_ENGINE_ARRAY_METHODS(Vector2f, float, FLT_MAX)
     CPP_GAME_ENGINE_SCALAR_FRIEND_METHODS(Vector2f, float, FLT_MAX)
 };
 
 union Vector3f {
-    float arr[3];
+
     struct
     {
         float x = 0.0f;
         float y = 0.0f;
         float z = 0.0f;
     };
+    float arr[3];
 
     CPP_GAME_ENGINE_ARRAY_METHODS(Vector3f, float, FLT_MAX)
     CPP_GAME_ENGINE_SCALAR_FRIEND_METHODS(Vector3f, float, FLT_MAX)
 };
 
 union Vector4f {
-    float arr[4];
+
     struct
     {
         float a = 0.0f;
@@ -948,13 +953,14 @@ union Vector4f {
         float c = 0.0f;
         float d = 0.0f;
     };
+    float arr[4];
 
     CPP_GAME_ENGINE_ARRAY_METHODS(Vector4f, float, FLT_MAX)
     CPP_GAME_ENGINE_SCALAR_FRIEND_METHODS(Vector4f, float, FLT_MAX)
 };
 
 union Vector8f {
-    float arr[8];
+
     struct
     {
         float a = 0.0f;
@@ -966,6 +972,7 @@ union Vector8f {
         float g = 0.0f;
         float h = 0.0f;
     };
+    float arr[8];
 
     CPP_GAME_ENGINE_ARRAY_METHODS(Vector8f, float, FLT_MAX)
     CPP_GAME_ENGINE_SCALAR_FRIEND_METHODS(Vector8f, float, FLT_MAX)
@@ -975,7 +982,6 @@ union Vector8f {
 
 union Matrix4f
 {
-    float arr[16];
 
     struct
     {
@@ -999,7 +1005,6 @@ union Matrix4f
         float m32 = 0.0f;
         float m33 = 0.0f;
     };
-
     struct
     {
         Vector4f v0;
@@ -1007,6 +1012,7 @@ union Matrix4f
         Vector4f v2;
         Vector4f v3;
     };
+    float arr[16];
 
     CPP_GAME_ENGINE_ARRAY_METHODS(Matrix4f, float, FLT_MAX)
     CPP_GAME_ENGINE_SCALAR_FRIEND_METHODS(Matrix4f, float, FLT_MAX)

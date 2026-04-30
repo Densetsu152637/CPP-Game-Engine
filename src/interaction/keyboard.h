@@ -46,12 +46,12 @@ public:
 
     KeyboardListener() {}
 
+    void poll() override;
+
     KeyState state_of(const size_t code) const;
     bool valid_code(const size_t code) const;
     void key_pressed();
     void key_released();
-
-    void poll() override;
 
 };
 

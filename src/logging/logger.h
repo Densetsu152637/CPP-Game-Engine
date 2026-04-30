@@ -30,7 +30,7 @@ class Logger {
 public:
 
     Logger() = default;
-    ~Logger() = default;
+    virtual ~Logger() = default;
 
     void logHistory();
 

@@ -11,7 +11,7 @@ KeyState KeyboardListener::state_of(const size_t code) const
 
 bool KeyboardListener::valid_code(const size_t code) const
 {
-    return code < NUMBER_KEY_STATES;
+    return code < states.read().length();
 }
 
 void KeyboardListener::key_pressed()

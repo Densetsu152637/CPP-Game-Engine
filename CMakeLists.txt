@@ -67,6 +67,7 @@ add_executable(CPPGameEngine
         src/ecs/ecs.h
         src/core/interfaces.h
         src/async/buffer.h
+        src/async/lock.h
 
 )
 
