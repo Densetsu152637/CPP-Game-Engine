@@ -11,7 +11,8 @@ void enginePeriodicFunction(
     Engine* e,
     void (*fnPtr)(Engine*),
     int (*intervalPtr)(Engine*),
-    const std::atomic<bool>* running)
+    const std::atomic<bool>* running
+)
 {
     if (!e || !fnPtr || !intervalPtr || !running) return;
 

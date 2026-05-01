@@ -97,15 +97,21 @@ public:
     Array<T>& ptr() { return m_arr; }
     const Array<T>& ptr() const { return m_arr; }
 
-    [[nodiscard]] size_t length() const
+    size_t length() const
     { return m_arr.size; }
 
-    [[nodiscard]] size_t capacity() const
+    size_t capacity() const
     { return m_arr.cap; }
 
-    [[nodiscard]] bool empty() const { return length() == 0; }
+    bool empty() const { return length() == 0; }
 
-    void reserve(size_t space)
+    void guarantee(const size_t space)
+    {
+        if (space > m_arr.cap)
+        { this->_resize(m_arr.size << 1); }
+    }
+
+    void reserve(const size_t space)
     {
         if (space > m_arr.cap - m_arr.size)
         { this->_resize(m_arr.cap + space); }
@@ -128,6 +134,7 @@ public:
 
     // adding methods
 
+    void appendGhost();
     ArrayList<T>& append(const T& t);
     ArrayList<T>& append(const T& t, size_t i);
     ArrayList<T>& append(const ArrayList<T>& arr);
@@ -146,6 +153,7 @@ public:
         this->_shuffle_up(i);
 
         // Construct in-place
+        (m_arr.ptr + i).~T();
         new (m_arr.ptr + i) T(std::forward<Args>(args)...);
 
         ++m_arr.size;
@@ -159,6 +167,7 @@ public:
         _resize_if_necessary();
 
         // Construct in-place
+        (m_arr.ptr + i).~T();
         new (m_arr.ptr + i) T(std::forward<Args>(args)...);
 
         ++m_arr.size;
@@ -167,7 +176,7 @@ public:
 
     // removing methods
 
-    bool remove(const T& target);
+    int remove(const T& target);
     T pop(size_t index);
     T pop();
 
@@ -191,8 +200,10 @@ public:
     const_iterator cend() const
     { return m_arr.cend(); }
 
+    bool contains(const T& target) const
+    { return -1 != this->find(target); }
 
-    int find(const T& target)
+    int find(const T& target) const
     {
         for (int i = 0; i < m_arr.size; i++)
         {
@@ -204,7 +215,6 @@ public:
         }
         return -1;
     }
-
 
     template <typename Func>
     void for_each(Func&& func)
@@ -233,7 +243,7 @@ public:
     template <typename R>
     R reduce(std::function<R(const R&, const T&)> reducer, R initial) const
     {
-        R acc = initial;
+        R acc = std::move(initial);
 
         for (size_t i = 0; i < this->length(); ++i)
         {
@@ -279,7 +289,7 @@ void ArrayList<T>::_resize_if_necessary()
 
     const size_t next_capacity = m_arr.cap == 0 ?
         ARRAY_DEFAULT_INITIAL_CAPACITY :
-        m_arr.cap >> 1;
+        m_arr.cap << 1;
     _resize(next_capacity);
 }
 
@@ -424,6 +434,13 @@ const T& ArrayList<T>::at(size_t index) const
 // appending methods
 
 template <typename T>
+void ArrayList<T>::appendGhost()
+{
+    _resize_if_necessary();
+    ++m_arr.size;
+}
+
+template <typename T>
 ArrayList<T>& ArrayList<T>::append(const T& t)
 {
     this->append(t, m_arr.size);
@@ -473,14 +490,13 @@ ArrayList<T> ArrayList<T>::concat(const ArrayList<T>& arr)
 }
 
 template <typename T>
-bool ArrayList<T>::remove(const T& target)
+int ArrayList<T>::remove(const T& target)
 {
     const int index = this->find(target);
-    const bool shouldRemove = index != -1;
-    if (shouldRemove)
+    if (index != -1)
         this->pop(index);
 
-    return shouldRemove;
+    return index;
 }
 
 template <typename T>

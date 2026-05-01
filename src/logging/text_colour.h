@@ -168,7 +168,7 @@ struct TextColour
     DARK_LAVENDER_BACKGROUND,
     GRAPE_BACKGROUND;
 
-    std::string from_txt_clr();
+    std::string from_txt_clr() const;
 };
 
 

@@ -15,18 +15,18 @@ inline long get_time_ns()
           ).count();;
 }
 
-inline std::string formatDateTime(long timestamp) {
+inline std::string formatDateTime(const long timestamp) {
     // 1. Convert long to time_t
-    time_t rawTime = (time_t)timestamp;
+    const auto rawTime = static_cast<time_t>(timestamp);
 
     // 2. Convert to local time structure
-    struct tm *timeInfo = localtime(&rawTime);
+    const tm *timeInfo = localtime(&rawTime);
 
     // 3. Format the string (e.g., YYYY-MM-DD HH:MM:SS)
-    char buffer[80]; // should be safe (hopefully)
+    char buffer[128]; // should be safe (hopefully)
     strftime(buffer, sizeof(buffer), "%Y-%m-%d %HH:%MM:%SS", timeInfo);
 
-    return std::string(buffer);
+    return std::string { buffer };
 }
 
 class StopWatch {
@@ -58,15 +58,15 @@ public:
         start();
     }
 
-    long delta_ns()
+    long delta_ns() const
     {
         return stopped ? (vStop - vStart) : get_time_ns() - vStart;
     }
 
-    bool isStopped() { return stopped; }
+    bool isStopped() const { return stopped; }
 
-    float delta_us() { return delta_ns() / 1000.0f; }
-    float delta_ms() { return delta_ns() / 1000000.0f; }
-    float delta_s() { return delta_ns() / 1000000000.0f; }
+    float delta_us() const { return static_cast<float>(delta_ns()) / 1000.0f; }
+    float delta_ms() const { return static_cast<float>(delta_ns()) / 1000000.0f; }
+    float delta_s() const { return static_cast<float>(delta_ns()) / 1000000000.0f; }
 
 };

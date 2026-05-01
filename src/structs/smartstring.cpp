@@ -138,9 +138,19 @@ SmartString SmartString::operator+(const SmartString& other) const
     return this->concat(other);
 }
 
+SmartString SmartString::operator+(const std::string& other) const
+{
+    return this->concat(SmartString(other));
+}
+
 SmartString& SmartString::operator+=(const SmartString& other)
 {
     return this->append(other);
+}
+
+SmartString& SmartString::operator+=(const std::string& other)
+{
+    return this->append(SmartString(other));
 }
 
 char SmartString::operator[](const size_t i) const

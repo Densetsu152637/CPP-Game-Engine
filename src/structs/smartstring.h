@@ -49,7 +49,9 @@ public:
 
     bool operator==(const SmartString& other) const;
     SmartString operator+(const SmartString& other) const;
+    SmartString operator+(const std::string& other) const;
     SmartString& operator+=(const SmartString& other);
+    SmartString& operator+=(const std::string& other);
     char operator[](size_t i) const;
 
     size_t length() const { return m_fI - m_sI; }

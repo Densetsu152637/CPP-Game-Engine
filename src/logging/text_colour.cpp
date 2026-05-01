@@ -96,7 +96,7 @@ TextColour::PURPLE_BACKGROUND          = TextColour { Colour::PURPLE       , tru
 TextColour::DARK_LAVENDER_BACKGROUND   = TextColour { Colour::DARK_LAVENDER, true },
 TextColour::GRAPE_BACKGROUND           = TextColour { Colour::GRAPE        , true };
 
-std::string TextColour::from_txt_clr()
+std::string TextColour::from_txt_clr() const
 {
     return std::format("\u001b[{};2;{};{};{}m",
             b ? "48" : "38",

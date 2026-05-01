@@ -54,7 +54,6 @@ add_executable(CPPGameEngine
         src/interaction/window_event.h
         src/core/engine.cpp
         src/core/engine.h
-        src/ecs/entity.cpp
         src/ecs/entity.h
         src/ecs/ecs.cpp
         src/ecs/ecs.h
@@ -65,6 +64,7 @@ add_executable(CPPGameEngine
         src/runtime/glfw_main.cpp
         src/core/display.cpp
         src/core/display.h
+        src/structs/sparse_set.h
 )
 
 if(Vulkan_FOUND)

@@ -33,7 +33,6 @@ void glfw_main(Engine* engine, IDisplayManager* display, Logger* logger)
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
     // Create window
-    // example: GLFWwindow* window = glfwCreateWindow(800, 600, "Vulkan Window", nullptr, nullptr);
 
     if (!display->createDisplay())
     {
@@ -45,26 +44,20 @@ void glfw_main(Engine* engine, IDisplayManager* display, Logger* logger)
     std::thread engineThread(runEngine, engine);
 
     // Main thread loop
-    while ( !display->isClosed() ) {
+    while ( !display->isClosed() )
+    {
         try
-        {
-            glfwPollEvents();
-        } catch (std::exception& e)
-        {
-            logger->error(e);
-        }
-
+        { glfwPollEvents(); }
+        catch (std::exception& e)
+        { logger->error(e); }
     }
 
     // await engine to terminate when the window should close
     engine->finishExecution();
     try
-    {
-        engineThread.join();
-    } catch (std::exception& e)
-    {
-        logger->error(e);
-    }
+    { engineThread.join(); }
+    catch (std::exception& e)
+    { logger->error(e); }
 
     display->closeDisplay();
 
