@@ -6,192 +6,26 @@
 
 #include <format>
 
-// callback functions
-
-void GLFW_CALLBACK::errorCallback(int error_code, const char* description)
+void initialiseMonitorEnvironment()
 {
-    if (!globalLogger) return;
+    // clears any old content
+    monitorEnvironment.monitors.clear();
 
-    const std::exception e ((std::format("GLFW Error {}: {}", error_code, description).data()));
-    globalLogger->error(e);
+    int monitorCount;
+    GLFWmonitor** monitors = glfwGetMonitors(&monitorCount);
+    for (int i = 0; i < monitorCount; i++)
+    {
+        GLFWmonitor* monitor = monitors[i];
+        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+        std::string name = glfwGetMonitorName(monitor);
+        monitorEnvironment.monitors.emplace(monitor, mode, name);
+    }
 }
 
-void GLFW_CALLBACK::windowMoveCallback(GLFWwindow* window, const int xpos, const int ypos)
+GLFWDisplay::GLFWDisplay(ScreenSettings&& settings, const std::string& title)
 {
-    auto* display = reinterpret_cast<GLFWDisplay*>(window);
-    GLFWCallback cb = {
-        WINDOW_POSITION
-    };
-    cb.vector2_i = {xpos, ypos};
-    display->getWindowEventManager().processWindowEvent(cb);
-
-}
-void GLFW_CALLBACK::windowSizeCallback(GLFWwindow* window, const int width, const int height)
-{
-    auto* display = reinterpret_cast<GLFWDisplay*>(window);
-    GLFWCallback cb = {
-        WINDOW_SIZE
-    };
-    cb.vector2_i = {width, height};
-    display->getWindowEventManager().processWindowEvent(cb);
-}
-
-void GLFW_CALLBACK::windowCloseCallback(GLFWwindow* window)
-{
-    auto* display = reinterpret_cast<GLFWDisplay*>(window);
-    constexpr GLFWCallback cb = {
-        WINDOW_CLOSE
-    };
-    display->getWindowEventManager().processWindowEvent(cb);
-}
-
-void GLFW_CALLBACK::windowRefreshCallback(GLFWwindow* window)
-{
-    auto* display = reinterpret_cast<GLFWDisplay*>(window);
-    constexpr GLFWCallback cb = {
-        WINDOW_REFRESH
-    };
-    display->getWindowEventManager().processWindowEvent(cb);
-}
-
-void GLFW_CALLBACK::windowFocusCallback(GLFWwindow* window, const int focused)
-{
-    auto* display = reinterpret_cast<GLFWDisplay*>(window);
-    GLFWCallback cb = {
-        WINDOW_FOCUS
-    };
-    cb.togglable = { focused };
-    display->getWindowEventManager().processWindowEvent(cb);
-}
-
-void GLFW_CALLBACK::windowIconifyCallback(GLFWwindow* window, const int iconified)
-{
-    auto* display = reinterpret_cast<GLFWDisplay*>(window);
-    GLFWCallback cb = {
-        WINDOW_ICONIFY
-    };
-    cb.togglable = { iconified };
-    display->getWindowEventManager().processWindowEvent(cb);
-}
-
-void GLFW_CALLBACK::windowMaximiseCallback(GLFWwindow* window, const int maximized)
-{
-    auto* display = reinterpret_cast<GLFWDisplay*>(window);
-    GLFWCallback cb = {
-        WINDOW_MAXIMIZE
-    };
-    cb.togglable = { maximized };
-    display->getWindowEventManager().processWindowEvent(cb);
-}
-
-void GLFW_CALLBACK::windowContentScaleCallback(GLFWwindow* window, const float xscale, const float yscale)
-{
-    auto* display = reinterpret_cast<GLFWDisplay*>(window);
-    GLFWCallback cb = {
-        WINDOW_CONTENT_SCALE
-    };
-    cb.vector2_f = { xscale, yscale };
-    display->getWindowEventManager().processWindowEvent(cb);
-}
-
-void GLFW_CALLBACK::frameBufferResizeCallback(GLFWwindow* window, const int width, const int height)
-{
-    auto* display = reinterpret_cast<GLFWDisplay*>(window);
-    GLFWCallback cb = {
-        FRAMEBUFFER_SIZE
-    };
-    cb.vector2_i = {width, height};
-    display->getWindowEventManager().processWindowEvent(cb);
-}
-
-void GLFW_CALLBACK::keyboardInputCallback(GLFWwindow* window, const int key, const int scancode, const int action, const int mods)
-{
-    auto* display = reinterpret_cast<GLFWDisplay*>(window);
-    GLFWCallback cb = {
-        KEYBOARD_INPUT
-    };
-    cb.vector4_i = { key, scancode, action, mods };
-    display->getWindowEventManager().processWindowEvent(cb);
-}
-
-void GLFW_CALLBACK::charInputCallback(GLFWwindow* window, const unsigned int codepoint)
-{
-    auto* display = reinterpret_cast<GLFWDisplay*>(window);
-    GLFWCallback cb = {
-        CHAR_INPUT
-    };
-    cb.togglable = { static_cast<int>(codepoint) };
-    display->getWindowEventManager().processWindowEvent(cb);
-}
-
-void GLFW_CALLBACK::moddedCharInputCallback(GLFWwindow* window, const unsigned int codepoint, const int mods)
-{
-    auto* display = reinterpret_cast<GLFWDisplay*>(window);
-    GLFWCallback cb = {
-        CHAR_WITH_MODS
-    };
-    cb.vector2_i = { static_cast<int>(codepoint), mods };
-    display->getWindowEventManager().processWindowEvent(cb);
-}
-
-void GLFW_CALLBACK::mouseButtonPressCallback(GLFWwindow* window, const int button, const int action, const int mods)
-{
-    auto* display = reinterpret_cast<GLFWDisplay*>(window);
-    GLFWCallback cb = {
-        MOUSE_BUTTON
-    };
-    cb.vector3_i = { button, action, mods };
-    display->getWindowEventManager().processWindowEvent(cb);
-}
-
-void GLFW_CALLBACK::mouseMovementCallback(GLFWwindow* window, const double xpos, const double ypos)
-{
-    auto* display = reinterpret_cast<GLFWDisplay*>(window);
-    GLFWCallback cb = {
-        MOUSE_MOVEMENT
-    };
-    cb.vector2_f = {static_cast<float>(xpos), static_cast<float>(ypos)};
-    display->getWindowEventManager().processWindowEvent(cb);
-}
-
-void GLFW_CALLBACK::cursorBorderCrossCallback(GLFWwindow* window, const int entered)
-{
-    auto* display = reinterpret_cast<GLFWDisplay*>(window);
-    GLFWCallback cb = {
-        CURSOR_BORDER_CROSS
-    };
-    cb.togglable = {entered};
-    display->getWindowEventManager().processWindowEvent(cb);
-}
-
-void GLFW_CALLBACK::mouseScrollWheelCallback(GLFWwindow* window, const double xoffset, const double yoffset)
-{
-    auto* display = reinterpret_cast<GLFWDisplay*>(window);
-    GLFWCallback cb = {
-        MOUSE_SCROL_WHEEL
-    };
-    cb.vector2_f = {static_cast<float>(xoffset), static_cast<float>(yoffset)};
-    display->getWindowEventManager().processWindowEvent(cb);
-}
-
-void GLFW_CALLBACK::joystickConnectionCallback(int jid, int event)
-{
-    //JOYSTICK_CONNECTION TODO
-}
-
-void GLFW_CALLBACK::monitorPlugCallback(GLFWmonitor* monitor, int event)
-{
-    //MONITOR_PLUG TODO
-}
-
-// display
-
-GLFWDisplay::GLFWDisplay(const Vector2i dims, ScreenSettings&& settings, const std::string&& title)
-{
-    settings.dims = dims;
     m_screenSettings = settings;
     m_title = title;
-
 }
 
 GLFWDisplay::~GLFWDisplay() = default;
@@ -204,13 +38,27 @@ bool GLFWDisplay::createDisplay()
 bool GLFWDisplay::createGLFWDisplay()
 {
     Vector2i dims;
+    const Monitor& target = monitorEnvironment.monitors[0];
+    GLFWmonitor* targetMonitor = target.monitor; // primary monitor
 
     {
         std::unique_lock lock(m_screenSettings.lock());
         dims = m_screenSettings.ref().dims;
     }
 
-    m_window = glfwCreateWindow(dims.x, dims.y, m_title.c_str(), nullptr, nullptr);
+    if (dims.x == 0 && dims.y == 0)
+    {
+        // get half of the displays if dims is invalid
+        const GLFWvidmode* mode = target.videoMode;
+        dims = { mode->width / 2, mode->height / 2 };
+    }
+
+    m_window = glfwCreateWindow(
+        dims.x, dims.y,
+        m_title.c_str(),
+        targetMonitor, nullptr
+    );
+
     if (!m_window) return m_window;
 
     _set_internal_callbacks();
@@ -221,6 +69,7 @@ bool GLFWDisplay::createGLFWDisplay()
 void GLFWDisplay::_set_internal_callbacks()
 {
     glfwSetWindowUserPointer(m_window, this);
+
     // callbacks
     glfwSetWindowPosCallback(m_window, GLFW_CALLBACK::windowMoveCallback);
     glfwSetWindowSizeCallback(m_window, GLFW_CALLBACK::windowSizeCallback);
@@ -239,7 +88,7 @@ void GLFWDisplay::_set_internal_callbacks()
     glfwSetCursorEnterCallback(m_window, GLFW_CALLBACK::cursorBorderCrossCallback);
     glfwSetScrollCallback(m_window, GLFW_CALLBACK::mouseScrollWheelCallback);
 
-    //
+    // stuff that is unfortunately global
     glfwSetJoystickCallback(GLFW_CALLBACK::joystickConnectionCallback);
     glfwSetMonitorCallback(GLFW_CALLBACK::monitorPlugCallback);
     glfwSetErrorCallback(GLFW_CALLBACK::errorCallback);
@@ -247,6 +96,12 @@ void GLFWDisplay::_set_internal_callbacks()
 
 void GLFWDisplay::closeDisplay()
 {
+
+    m_visible = false;
+    m_shouldClose = false;
+    m_focused = false;
+    m_iconified = false;
+
     glfwDestroyWindow(m_window);
 }
 
@@ -260,19 +115,27 @@ bool GLFWDisplay::isClosed()
     return glfwWindowShouldClose(m_window);
 }
 
+bool GLFWDisplay::isFocused()
+{
+    return m_focused;
+};
+
 void GLFWDisplay::show()
 {
-
+    glfwShowWindow(m_window);
 }
 
 void GLFWDisplay::hide()
 {
-
+    glfwHideWindow(m_window);
 }
 
 void GLFWDisplay::centerCursor()
 {
+    if (!m_visible || m_shouldClose || !m_focused || m_iconified) return;
 
+    const Vector2i dims = getScreenSize();
+    glfwSetCursorPos(m_window, dims.x / 2.0, dims.y / 2.0);
 }
 
 int GLFWDisplay::refreshRate()
@@ -283,4 +146,218 @@ int GLFWDisplay::refreshRate()
 WindowEventManager& GLFWDisplay::getWindowEventManager()
 {
     return m_windowEventManager;
+}
+
+// callback functions
+
+void GLFW_CALLBACK::setGlobalLogger(Logger* l)
+{
+    if (!l) return;
+    globalLogger = l;
+}
+
+void GLFW_CALLBACK::errorCallback(int error_code, const char* description)
+{
+    if (!globalLogger) return;
+
+    const std::exception e ((std::format("GLFW Error {}: {}", error_code, description).data()));
+    globalLogger->error(e);
+}
+
+void GLFW_CALLBACK::windowMoveCallback(GLFWwindow* window, const int xpos, const int ypos)
+{
+    auto* display = static_cast<GLFWDisplay*>(glfwGetWindowUserPointer(window));
+    GLFWCallback cb = {
+        WINDOW_POSITION
+    };
+    cb.vector2_i = {xpos, ypos};
+
+    if (display->isFocused())
+        display->getWindowEventManager().processWindowEvent(cb);
+}
+
+void GLFW_CALLBACK::windowSizeCallback(GLFWwindow* window, const int width, const int height)
+{
+    auto* display = static_cast<GLFWDisplay*>(glfwGetWindowUserPointer(window));
+    GLFWCallback cb = {
+        WINDOW_SIZE
+    };
+    cb.vector2_i = {width, height};
+
+    if (display->isFocused())
+        display->getWindowEventManager().processWindowEvent(cb);
+}
+
+void GLFW_CALLBACK::windowCloseCallback(GLFWwindow* window)
+{
+    auto* display = static_cast<GLFWDisplay*>(glfwGetWindowUserPointer(window));
+    constexpr GLFWCallback cb = {
+        WINDOW_CLOSE
+    };
+    display->getWindowEventManager().processWindowEvent(cb);
+}
+
+void GLFW_CALLBACK::windowRefreshCallback(GLFWwindow* window)
+{
+    auto* display = static_cast<GLFWDisplay*>(glfwGetWindowUserPointer(window));
+    constexpr GLFWCallback cb = {
+        WINDOW_REFRESH
+    };
+
+    if (display->isFocused())
+        display->getWindowEventManager().processWindowEvent(cb);
+}
+
+void GLFW_CALLBACK::windowFocusCallback(GLFWwindow* window, const int focused)
+{
+    auto* display = static_cast<GLFWDisplay*>(glfwGetWindowUserPointer(window));
+    GLFWCallback cb = {
+        WINDOW_FOCUS
+    };
+    cb.togglable = { focused };
+
+    if (display->isFocused())
+        display->getWindowEventManager().processWindowEvent(cb);
+}
+
+void GLFW_CALLBACK::windowIconifyCallback(GLFWwindow* window, const int iconified)
+{
+    auto* display = static_cast<GLFWDisplay*>(glfwGetWindowUserPointer(window));
+    GLFWCallback cb = {
+        WINDOW_ICONIFY
+    };
+    cb.togglable = { iconified };
+
+    if (display->isFocused())
+        display->getWindowEventManager().processWindowEvent(cb);
+}
+
+void GLFW_CALLBACK::windowMaximiseCallback(GLFWwindow* window, const int maximized)
+{
+    auto* display = static_cast<GLFWDisplay*>(glfwGetWindowUserPointer(window));
+    GLFWCallback cb = {
+        WINDOW_MAXIMIZE
+    };
+    cb.togglable = { maximized };
+
+    if (display->isFocused())
+        display->getWindowEventManager().processWindowEvent(cb);
+}
+
+void GLFW_CALLBACK::windowContentScaleCallback(GLFWwindow* window, const float xscale, const float yscale)
+{
+    auto* display = static_cast<GLFWDisplay*>(glfwGetWindowUserPointer(window));
+    GLFWCallback cb = {
+        WINDOW_CONTENT_SCALE
+    };
+    cb.vector2_f = { xscale, yscale };
+
+    if (display->isFocused())
+        display->getWindowEventManager().processWindowEvent(cb);
+}
+
+void GLFW_CALLBACK::frameBufferResizeCallback(GLFWwindow* window, const int width, const int height)
+{
+    auto* display = static_cast<GLFWDisplay*>(glfwGetWindowUserPointer(window));
+    GLFWCallback cb = {
+        FRAMEBUFFER_SIZE
+    };
+    cb.vector2_i = {width, height};
+
+    if (display->isFocused())
+        display->getWindowEventManager().processWindowEvent(cb);
+}
+
+void GLFW_CALLBACK::keyboardInputCallback(GLFWwindow* window, const int key, const int scancode, const int action, const int mods)
+{
+    auto* display = static_cast<GLFWDisplay*>(glfwGetWindowUserPointer(window));
+    GLFWCallback cb = {
+        KEYBOARD_INPUT
+    };
+    cb.vector4_i = { key, scancode, action, mods };
+
+    if (display->isFocused())
+        display->getWindowEventManager().processWindowEvent(cb);
+}
+
+void GLFW_CALLBACK::charInputCallback(GLFWwindow* window, const unsigned int codepoint)
+{
+    auto* display = static_cast<GLFWDisplay*>(glfwGetWindowUserPointer(window));
+    GLFWCallback cb = {
+        CHAR_INPUT
+    };
+    cb.togglable = { static_cast<int>(codepoint) };
+
+    if (display->isFocused())
+        display->getWindowEventManager().processWindowEvent(cb);
+}
+
+void GLFW_CALLBACK::moddedCharInputCallback(GLFWwindow* window, const unsigned int codepoint, const int mods)
+{
+    auto* display = static_cast<GLFWDisplay*>(glfwGetWindowUserPointer(window));
+    GLFWCallback cb = {
+        CHAR_WITH_MODS
+    };
+    cb.vector2_i = { static_cast<int>(codepoint), mods };
+
+    if (display->isFocused())
+        display->getWindowEventManager().processWindowEvent(cb);
+}
+
+void GLFW_CALLBACK::mouseButtonPressCallback(GLFWwindow* window, const int button, const int action, const int mods)
+{
+    auto* display = static_cast<GLFWDisplay*>(glfwGetWindowUserPointer(window));
+    GLFWCallback cb = {
+        MOUSE_BUTTON
+    };
+    cb.vector3_i = { button, action, mods };
+
+    if (display->isFocused())
+        display->getWindowEventManager().processWindowEvent(cb);
+}
+
+void GLFW_CALLBACK::mouseMovementCallback(GLFWwindow* window, const double xpos, const double ypos)
+{
+    auto* display = static_cast<GLFWDisplay*>(glfwGetWindowUserPointer(window));
+    GLFWCallback cb = {
+        MOUSE_MOVEMENT
+    };
+    cb.vector2_f = {static_cast<float>(xpos), static_cast<float>(ypos)};
+
+    if (display->isFocused())
+        display->getWindowEventManager().processWindowEvent(cb);
+}
+
+void GLFW_CALLBACK::cursorBorderCrossCallback(GLFWwindow* window, const int entered)
+{
+    auto* display = static_cast<GLFWDisplay*>(glfwGetWindowUserPointer(window));
+    GLFWCallback cb = {
+        CURSOR_BORDER_CROSS
+    };
+    cb.togglable = {entered};
+
+    if (display->isFocused())
+        display->getWindowEventManager().processWindowEvent(cb);
+}
+
+void GLFW_CALLBACK::mouseScrollWheelCallback(GLFWwindow* window, const double xoffset, const double yoffset)
+{
+    auto* display = static_cast<GLFWDisplay*>(glfwGetWindowUserPointer(window));
+    GLFWCallback cb = {
+        MOUSE_SCROL_WHEEL
+    };
+    cb.vector2_f = {static_cast<float>(xoffset), static_cast<float>(yoffset)};
+
+    if (display->isFocused())
+        display->getWindowEventManager().processWindowEvent(cb);
+}
+
+void GLFW_CALLBACK::joystickConnectionCallback(int jid, int event)
+{
+    //JOYSTICK_CONNECTION TODO
+}
+
+void GLFW_CALLBACK::monitorPlugCallback(GLFWmonitor* monitor, int event)
+{
+    //MONITOR_PLUG TODO
 }

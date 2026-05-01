@@ -12,12 +12,12 @@
 template <typename T>
 class DoubleBuffer
 {
-    T m_readBuffer;
-    T m_writeBuffer;
-
+    size_t m_readBuffer = 0;
+    size_t m_writeBuffer = 1;
+    mutable std::mutex m_mutex;
     std::function<void(const T&, T&)> copier; // optional
 
-    mutable std::mutex m_mutex;
+    volatile T buff[2];
 
 public:
 
@@ -39,19 +39,20 @@ public:
     // =========================================
     DoubleBuffer(Supplier factory,
                  std::function<void(const T&, T&)> copierFn)
-        : m_readBuffer(factory()),
-          m_writeBuffer(factory()),
-          copier(std::move(copierFn))
-    {}
+        : copier(std::move(copierFn))
+    {
+        buff = {
+            factory(),
+            factory()
+        };
+    }
 
     // =========================================
     // Read (volatile equivalent)
     // =========================================
-    T read() const
+    const T& read() const
     {
-        // mimic Java volatile read semantics
-        std::lock_guard<std::mutex> lock(m_mutex);
-        return m_readBuffer;
+        return buff[m_readBuffer];
     }
 
     // =========================================
@@ -60,16 +61,16 @@ public:
     void write(const Consumer& consumer)
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        consumer(m_writeBuffer);
+        consumer(buff[m_writeBuffer]);
     }
 
     // =========================================
     // Direct write
     // =========================================
-    void write(T newWrite)
+    void write(T&& newWrite)
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        m_writeBuffer = std::move(newWrite);
+        buff[m_writeBuffer] = newWrite;
     }
 
     // =========================================
@@ -91,13 +92,13 @@ public:
 template <typename T>
 class TripleBuffer
 {
-    T m_readCurrentBuffer;
-    T m_readLastBuffer;
-    T m_writeBuffer;
-
+    size_t m_readCurrentBuffer = 0;
+    size_t m_readLastBuffer = 1;
+    size_t m_writeBuffer = 2;
+    mutable std::mutex m_mutex;
     std::function<void(const T&, T&)> copier;
 
-    mutable std::mutex m_mutex;
+    volatile T buff[3];
 
 public:
 
@@ -120,28 +121,29 @@ public:
     // =========================================
     TripleBuffer(Factory factory,
                  std::function<void(const T&, T&)> copierFn)
-        : m_readCurrentBuffer(factory()),
-          m_readLastBuffer(factory()),
-          m_writeBuffer(factory()),
-          copier(std::move(copierFn))
-    {}
+        : copier(std::move(copierFn))
+    {
+        buff = {
+            factory(),
+            factory(),
+            factory()
+        };
+    }
 
     // =========================================
     // Read current frame
     // =========================================
-    T read() const
+    const T& read() const
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        return m_readCurrentBuffer;
+        return buff[m_readCurrentBuffer];
     }
 
     // =========================================
     // Read previous frame
     // =========================================
-    T prev() const
+    const T& prev() const
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        return m_readLastBuffer;
+        return buff[m_readLastBuffer];
     }
 
     std::tuple<T, T> readLast() const
@@ -156,16 +158,16 @@ public:
     void write(const Consumer& consumer)
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        consumer(m_writeBuffer);
+        consumer(buff[m_writeBuffer]);
     }
 
     // =========================================
     // Direct write
     // =========================================
-    void write(T newWrite)
+    void write(T&& newWrite)
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        m_writeBuffer = std::move(newWrite);
+        buff[m_writeBuffer] = newWrite;
     }
 
     // =========================================
@@ -179,14 +181,14 @@ public:
         // last <- current
         // current <- write
         // write <- old last
-        T oldLast = m_readLastBuffer;
+        const size_t oldLast = m_readLastBuffer;
 
         m_readLastBuffer    = m_readCurrentBuffer;
         m_readCurrentBuffer = m_writeBuffer;
-        m_writeBuffer       = std::move(oldLast);
+        m_writeBuffer       = oldLast;
 
         // optional propagation
-        copier(m_readCurrentBuffer, m_writeBuffer);
+        copier(buff[m_readCurrentBuffer], buff[m_writeBuffer]);
     }
 
 };

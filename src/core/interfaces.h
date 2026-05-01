@@ -29,15 +29,6 @@ struct IRenderElement
 };
 
 
-struct IResourceManager
-{
-
-    virtual ~IResourceManager() = default;
-    virtual void cleanUp() {};
-
-};
-
-
 struct IDisplayManager
 {
 
@@ -46,6 +37,7 @@ struct IDisplayManager
     virtual void closeDisplay() = 0;
     virtual Vector2i getScreenSize() = 0;
     virtual bool isClosed() = 0;
+    virtual bool isFocused() = 0;
     virtual void show() = 0;
     virtual void hide() = 0;
     virtual void centerCursor() = 0;

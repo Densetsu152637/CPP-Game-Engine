@@ -13,24 +13,20 @@
 class Engine
 {
 
-    ArrayList<IResourceManager*> m_resourceManagers;
     ArrayList<IPollable*> m_pollables;
     ArrayList<std::function<void()>> m_startupListeners;
     ArrayList<std::function<void()>> m_shutdownListeners;
 
-    IDisplayManager* display = nullptr;
+    IDisplayManager* m_display = nullptr;
     Logger* m_logger = nullptr;
     Waiter m_finisher;
     std::atomic<bool> m_running = false;
+    std::atomic<int> UPS = 60;
+    std::atomic<int> FPS = 60;
 
 public:
 
-    ~Engine()
-    {
-        m_resourceManagers.for_each([&](IResourceManager* r)
-            { if (r) r->cleanUp(); }
-        );
-    }
+    ~Engine() = default;
     Engine() = default;
     Engine(const Engine& e) = delete; // do not move this struct please :D
     Engine(Engine&&) = delete;
@@ -38,15 +34,27 @@ public:
     Engine& operator=(const Engine&) = delete;
     Engine& operator=(Engine&&) = delete;
 
+    void run();
+    void awaitTermination();
+    void finishExecutionOnCond(bool cond);
+    void finishExecution();
+    void logicAction();
+    void renderAction();
+
     Engine& setLogger(Logger* logger);
     Engine& setDisplay(IDisplayManager* display);
     Engine& addEventListener(WindowEventListener* l);
-    Engine& addResourceManager(IResourceManager* rm);
     Engine& addPollable(IPollable* p);
-    Engine& addStartupListener(std::function<void()>& fn);
-    Engine& addShutdownListener(std::function<void()>& fn);
+    Engine& addStartupListener(const std::function<void()>& fn);
+    Engine& addShutdownListener(const std::function<void()>& fn);
 
-    void run();
+    Engine& setUPS(int val);
+    Engine& setFPS(int val);
+    Engine& syncUPSFPS(int val);
+    int upsDur() const;
+    int fpsDur() const;
 
 };
+
+void enginePeriodicFunction(Engine* e, void (*fnPtr)(Engine*), int (*intervalPtr)(Engine*), const std::atomic<bool>* running);
 

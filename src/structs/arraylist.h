@@ -49,7 +49,7 @@ struct Array
 };
 
 template <typename T>
-void array_cpy(Array<T>& dst, int dst_start, const Array<T>& src, int src_start, int length)
+void array_cpy(Array<T>& dst, const int dst_start, const Array<T>& src, const int src_start, const int length)
 {
     for (int i = 0; i < length; ++i)
     {
@@ -66,7 +66,7 @@ class ArrayList {
 
     void _assert_within_bounds(size_t& i) const;
     void _wrap_around_size(size_t& i) const;
-    void _pop_and_shuffle_down(size_t i);
+    T _pop_and_shuffle_down(size_t i);
     void _shuffle_up(size_t i);
 
 public:
@@ -97,20 +97,18 @@ public:
     Array<T>& ptr() { return m_arr; }
     const Array<T>& ptr() const { return m_arr; }
 
-    size_t length() const
+    [[nodiscard]] size_t length() const
     { return m_arr.size; }
 
-    size_t capacity() const
+    [[nodiscard]] size_t capacity() const
     { return m_arr.cap; }
 
-    bool empty() const { return length() == 0; }
+    [[nodiscard]] bool empty() const { return length() == 0; }
 
     void reserve(size_t space)
     {
         if (space > m_arr.cap - m_arr.size)
-        {
-            this->_resize(m_arr.cap + space);
-        }
+        { this->_resize(m_arr.cap + space); }
     }
 
     void restrict(const size_t space)
@@ -119,6 +117,8 @@ public:
     void clamp_size()
     { this->restrict(m_arr.size); }
 
+    void clear();
+
     //
 
     T& operator[](const size_t index) { return this->at(index); };
@@ -126,34 +126,12 @@ public:
     T& at(size_t index);
     const T& at(size_t index) const;
 
-    ArrayList<T>& append(const T& t)
-    {
-        this->append(t, m_arr.size);
-        return *this;
-    }
+    // adding methods
 
-    ArrayList<T>& append(const T& t, size_t i)
-    {
-        // clamp i to end if need be
-        if (i > m_arr.size)
-        {
-            i = m_arr.size;
-        }
-
-        this->_shuffle_up(i);
-        m_arr[i] = t;
-        ++m_arr.size;
-        return *this;
-    }
-
-    ArrayList<T>& append(const ArrayList<T>& arr)
-    {
-        this->append(arr.m_arr.ptr, arr.m_arr.size);
-        return *this;
-    }
-
+    ArrayList<T>& append(const T& t);
+    ArrayList<T>& append(const T& t, size_t i);
+    ArrayList<T>& append(const ArrayList<T>& arr);
     ArrayList<T>& append(const T* ts, size_t elems);
-
     ArrayList<T> concat(const ArrayList<T>& arr);
 
     template<typename... Args>
@@ -187,7 +165,13 @@ public:
         return m_arr[i];
     }
 
-    //
+    // removing methods
+
+    bool remove(const T& target);
+    T pop(size_t index);
+    T pop();
+
+    // iterating methods
 
     iterator begin()
     { return m_arr.begin(); }
@@ -206,6 +190,20 @@ public:
 
     const_iterator cend() const
     { return m_arr.cend(); }
+
+
+    int find(const T& target)
+    {
+        for (int i = 0; i < m_arr.size; i++)
+        {
+            T& elem = m_arr.ptr[i];
+            if (elem == target)
+            {
+                return i;
+            }
+        }
+        return -1;
+    }
 
 
     template <typename Func>
@@ -321,12 +319,14 @@ void ArrayList<T>::_shuffle_up(size_t i)
 }
 
 template <typename T>
-void ArrayList<T>::_pop_and_shuffle_down(size_t i)
+T ArrayList<T>::_pop_and_shuffle_down(size_t i)
 {
     if (i >= m_arr.size)
     {
-        throw std::out_of_range("ArrayList erase index out of range");
+        throw std::out_of_range("ArrayList pop index out of range");
     }
+
+    T ret = m_arr[i];
 
     for (size_t j = i; j + 1 < m_arr.size; ++j)
     {
@@ -335,6 +335,7 @@ void ArrayList<T>::_pop_and_shuffle_down(size_t i)
 
     --m_arr.size;
     m_arr[m_arr.size] = T{};
+    return ret;
 }
 
 template <typename T>
@@ -356,6 +357,17 @@ ArrayList<T>::ArrayList(ArrayList&& arr) noexcept
     arr.m_arr.ptr = nullptr;
     arr.m_arr.size = 0;
     arr.m_arr.cap = 0;
+}
+
+template <typename T>
+void ArrayList<T>::clear()
+{
+    delete[] m_arr.ptr;
+    m_arr.ptr = nullptr;
+    m_arr.size = 0;
+    m_arr.cap = 0;
+
+    _resize(ARRAY_DEFAULT_INITIAL_CAPACITY);
 }
 
 template <typename T>
@@ -409,6 +421,37 @@ const T& ArrayList<T>::at(size_t index) const
     return m_arr[index];
 }
 
+// appending methods
+
+template <typename T>
+ArrayList<T>& ArrayList<T>::append(const T& t)
+{
+    this->append(t, m_arr.size);
+    return *this;
+}
+
+template <typename T>
+ArrayList<T>& ArrayList<T>::append(const T& t, size_t i)
+{
+    // clamp i to end if need be
+    if (i > m_arr.size)
+    {
+        i = m_arr.size;
+    }
+
+    this->_shuffle_up(i);
+    m_arr[i] = t;
+    ++m_arr.size;
+    return *this;
+}
+
+template <typename T>
+ArrayList<T>& ArrayList<T>::append(const ArrayList<T>& arr)
+{
+    this->append(arr.m_arr.ptr, arr.m_arr.size);
+    return *this;
+}
+
 template <typename T>
 ArrayList<T>& ArrayList<T>::append(const T* ts, size_t elems)
 {
@@ -427,6 +470,29 @@ ArrayList<T> ArrayList<T>::concat(const ArrayList<T>& arr)
     ret.append(*this);
     ret.append(arr);
     return ret;
+}
+
+template <typename T>
+bool ArrayList<T>::remove(const T& target)
+{
+    const int index = this->find(target);
+    const bool shouldRemove = index != -1;
+    if (shouldRemove)
+        this->pop(index);
+
+    return shouldRemove;
+}
+
+template <typename T>
+T ArrayList<T>::pop(const size_t index)
+{
+    return this->_pop_and_shuffle_down(index);
+}
+
+template <typename T>
+T ArrayList<T>::pop()
+{
+    return this->pop(length() - 1);
 }
 
 

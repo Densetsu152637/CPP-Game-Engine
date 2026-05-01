@@ -21,7 +21,34 @@ struct ScreenSettings
 
 };
 
+struct Monitor
+{
+
+    GLFWmonitor* monitor = nullptr;
+    const GLFWvidmode* videoMode = nullptr;
+    std::string name;
+
+    Monitor() = default;
+    Monitor(GLFWmonitor* m, const GLFWvidmode* vm, std::string title) :
+        monitor(m),
+        videoMode(vm),
+        name(std::move(title))
+    {};
+
+};
+
+struct MonitorEnvironment
+{
+    ArrayList<Monitor> monitors;
+};
+
+inline MonitorEnvironment monitorEnvironment;
+
+void initialiseMonitorEnvironment();
+
 class GLFWDisplay : public IDisplayManager {
+
+    constexpr static std::string DEFAULT_TITLE = "Hello World!";
 
     GLFWwindow* m_window = nullptr;
     WindowEventManager m_windowEventManager;
@@ -38,8 +65,8 @@ class GLFWDisplay : public IDisplayManager {
 
 public:
 
-    GLFWDisplay(const Vector2i dims) : GLFWDisplay(dims, {}, "Hello World!") {}
-    GLFWDisplay(Vector2i dims, ScreenSettings&& settings, const std::string&& title);
+    GLFWDisplay() : GLFWDisplay({}, DEFAULT_TITLE) {}
+    GLFWDisplay(ScreenSettings&& settings, const std::string& title);
     ~GLFWDisplay() override;
     GLFWDisplay(const GLFWDisplay&) = delete;
     GLFWDisplay& operator=(const GLFWDisplay&) = delete;
@@ -50,6 +77,7 @@ public:
     void closeDisplay() override;
     Vector2i getScreenSize() override;
     bool isClosed() override;
+    bool isFocused() override;
     void show() override;
     void hide() override;
     void centerCursor() override;
@@ -60,7 +88,8 @@ public:
 
 namespace GLFW_CALLBACK
 {
-    inline Logger* globalLogger = nullptr;
+    inline Logger* globalLogger;
+    void setGlobalLogger(Logger* l);
     void errorCallback(int error_code, const char* description);
 
     void windowMoveCallback(GLFWwindow* window, int xpos, int ypos);

@@ -64,6 +64,16 @@ class WindowEventManager
 
 public:
 
+    void addListener(WindowEventListener* listener)
+    {
+        listeners.append(listener);
+    }
+
+    void removeListener(WindowEventListener* listener)
+    {
+        listeners.remove(listener);
+    }
+
     void processWindowEvent(const GLFWCallback& e)
     {
         for (WindowEventListener* listener : listeners)

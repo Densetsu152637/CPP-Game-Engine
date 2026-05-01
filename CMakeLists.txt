@@ -6,7 +6,7 @@ project(CPPGameEngine
     LANGUAGES CXX
 )
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -76,7 +76,11 @@ else()
 endif()
 
 target_link_libraries(CPPGameEngine PRIVATE glfw)
-target_compile_features(CPPGameEngine PRIVATE cxx_std_20)
+set_target_properties(CPPGameEngine PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+    CXX_EXTENSIONS OFF
+)
 target_include_directories(CPPGameEngine
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
