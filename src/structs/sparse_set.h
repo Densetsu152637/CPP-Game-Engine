@@ -35,6 +35,66 @@ struct Page
     bool initialised = false;
 
     Page() : size(DEFAULT_PAGE_SZ) {}
+    Page(const Page& p)
+    {
+        unpaginate();
+        size = p.size;
+
+        if (!p.initialised) return;
+
+        repaginate();
+        elems = p.elems;
+
+        for (size_t i = 0; i < p.size; i++)
+        {
+            ptr[i] = p.ptr[i];
+        }
+    }
+
+    Page(Page&& p) noexcept
+    {
+        delete[] ptr;
+        initialised = p.initialised;
+        size = p.size;
+        elems = p.elems;
+        ptr = p.ptr;
+
+        p.ptr = nullptr;
+        p.initialised = false;
+        p.elems = 0;
+    }
+
+    Page& operator=(const Page& p)
+    {
+        unpaginate();
+        size = p.size;
+
+        if (!p.initialised) return *this;
+
+        repaginate();
+        elems = p.elems;
+
+        for (size_t i = 0; i < p.size; i++)
+        {
+            ptr[i] = p.ptr[i];
+        }
+        return *this;
+    }
+
+    Page& operator=(Page&& p) noexcept
+    {
+        delete[] ptr;
+        initialised = p.initialised;
+        size = p.size;
+        elems = p.elems;
+        ptr = p.ptr;
+
+        p.ptr = nullptr;
+        p.initialised = false;
+        p.elems = 0;
+        return *this;
+    }
+
     ~Page() { unpaginate(); }
 
     void repaginate()
@@ -90,7 +150,7 @@ class SparseSet
 public:
 
     SparseSet() = default;
-    SparseSet(const size_t pgsz) : pageSize(pgsz) {}
+    explicit SparseSet(const size_t pgsz) : pageSize(pgsz) {}
 
     size_t length() const
     { return values.length(); }

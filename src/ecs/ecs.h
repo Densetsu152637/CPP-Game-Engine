@@ -5,9 +5,7 @@
 #pragma once
 
 #include <any>
-#include <atomic>
 #include <mutex>
-#include <stdexcept>
 #include <typeindex>
 #include <typeinfo>
 #include <unordered_map>
@@ -15,8 +13,6 @@
 
 #include "entity.h"
 #include "structs/sparse_set.h"
-
-class Entity;
 
 class ECS {
 

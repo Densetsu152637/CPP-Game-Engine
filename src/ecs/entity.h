@@ -3,14 +3,11 @@
 //
 
 #pragma once
-
-#include <utility>
-
-#include "ecs.h"
+#include "structs/arraylist.h"
 
 struct Entity
 {
-    ArrayList<std::type_index> flags;
+    ArrayList<std::type_index> flags{4};
     bool init = false;
 
     Entity() = default;
