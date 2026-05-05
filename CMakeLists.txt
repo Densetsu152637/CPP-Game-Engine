@@ -65,6 +65,7 @@ add_executable(CPPGameEngine
         src/core/display.cpp
         src/core/display.h
         src/structs/sparse_set.h
+        src/structs/page_set.h
 )
 
 if(Vulkan_FOUND)

@@ -21,6 +21,29 @@ struct Array
     T& operator[](const size_t index) { return ptr[index]; };
     const T& operator[](const size_t index) const { return ptr[index]; };
 
+    void resize(size_t new_size)
+    {
+        if (new_size < size)
+        {
+            new_size = size;
+        }
+
+        if (new_size == 0)
+        {
+            new_size = ARRAY_DEFAULT_INITIAL_CAPACITY;
+        }
+
+        T* new_arr = new T[new_size];
+        for (size_t i = 0; i < size; ++i)
+        {
+            new_arr[i] = std::move(ptr[i]);
+        }
+
+        delete[] ptr;
+        ptr = new_arr;
+        cap = new_size;
+    }
+
     using iterator = T*;
     using const_iterator = const T*;
 
@@ -43,9 +66,7 @@ struct Array
     { return ptr + size; }
 
     bool full() const
-    {
-        return size >= cap;
-    }
+    { return size >= cap; }
 };
 
 template <typename T>
@@ -61,7 +82,8 @@ template <typename T>
 class ArrayList {
 
     Array<T> m_arr;
-    void _resize(size_t new_size);
+    void _resize(size_t new_size)
+    { m_arr.resize(new_size); }
     void _resize_if_necessary();
 
     void _assert_within_bounds(size_t& i) const;
@@ -92,6 +114,9 @@ public:
     ~ArrayList()
     {
         delete[] m_arr.ptr;
+        m_arr.ptr = nullptr;
+        m_arr.size = 0;
+        m_arr.cap = 0;
     }
 
     Array<T>& ptr() { return m_arr; }
@@ -108,7 +133,9 @@ public:
     void guarantee(const size_t space)
     {
         if (space > m_arr.cap)
-        { this->_resize(m_arr.size << 1); }
+        {
+            this->_resize(space);
+        }
     }
 
     void reserve(const size_t space)
@@ -118,7 +145,7 @@ public:
     }
 
     void restrict(const size_t space)
-    { _resize(space); }
+    { this->_resize(space); }
 
     void clamp_size()
     { this->restrict(m_arr.size); }
@@ -256,36 +283,10 @@ public:
 };
 
 template <typename T>
-void ArrayList<T>::_resize(size_t new_size)
-{
-    if (new_size < m_arr.size)
-    {
-        new_size = m_arr.size;
-    }
-
-    if (new_size == 0)
-    {
-        new_size = ARRAY_DEFAULT_INITIAL_CAPACITY;
-    }
-
-    T* new_arr = new T[new_size];
-    for (size_t i = 0; i < m_arr.size; ++i)
-    {
-        new_arr[i] = std::move(m_arr.ptr[i]);
-    }
-
-    delete[] m_arr.ptr;
-    m_arr.ptr = new_arr;
-    m_arr.cap = new_size;
-}
-
-template <typename T>
 void ArrayList<T>::_resize_if_necessary()
 {
     if (!m_arr.full())
-    {
-        return;
-    }
+    { return; }
 
     const size_t next_capacity = m_arr.cap == 0 ?
         ARRAY_DEFAULT_INITIAL_CAPACITY :
@@ -364,6 +365,9 @@ template <typename T>
 ArrayList<T>::ArrayList(ArrayList&& arr) noexcept
 {
     m_arr = arr.m_arr;
+    m_arr.size = arr.m_arr.size;
+    m_arr.cap = arr.m_arr.cap;
+
     arr.m_arr.ptr = nullptr;
     arr.m_arr.size = 0;
     arr.m_arr.cap = 0;
