@@ -98,12 +98,21 @@ void Engine::awaitTermination()
     m_finisher.await();
 }
 
-void Engine::logicAction()
+void Engine::logicAction() const
 {
+    if (m_simulator)
+        m_simulator->simulate();
 }
 
-void Engine::renderAction()
+void Engine::renderAction() const
 {
+    // do something here I guess
+}
+
+Engine& Engine::setSimulator(ECSSimulator* sim)
+{
+    if (sim) m_simulator = sim;
+    return *this;
 }
 
 Engine& Engine::setLogger(Logger* logger)

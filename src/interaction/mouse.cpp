@@ -39,7 +39,7 @@ Vector2f MouseListener::mouseMovement() const
 bool MouseListener::isCentreRelative()
 {
     return m_centreTracking.map(
-        [](const CentreTracking& tracking)
+        [](CentreTracking& tracking)
         { return tracking.relative; }
     );
 }
@@ -64,15 +64,15 @@ void MouseListener::setCentreFromWindowDims(const Vector2f& dims)
     setCenter({ dims.x / 2.0f, dims.y / 2.0f} );
 }
 
-void MouseListener::updateMousePos(const Vector2f newPos)
+void MouseListener::updateMousePos(Vector2f newPos)
 {
     if (!isCentreRelative()) {
-        m_mousePos.write(newPos);
+        m_mousePos.write(std::move(newPos));
         return;
     }
 
     const Vector2f center = m_centreTracking.map(
-        [](const CentreTracking& t)
+        [](CentreTracking& t)
         { return t.center; }
     );
     const Vector2f dPos = newPos - center;

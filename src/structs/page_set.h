@@ -173,7 +173,8 @@ public:
 
     void set( size_t index, T elem);
     void set(size_t index, T&& elem);
-    T& emplace(size_t index, T&& elem);
+    template <typename... Args>
+    T& emplace(size_t index, Args&&... args);
     void erase(size_t index);
     void clear();
 };
@@ -268,9 +269,10 @@ void PaginatedSet<T>::set(const size_t index, T&& elem)
 }
 
 template <typename T>
-T& PaginatedSet<T>::emplace(const size_t index, T&& elem)
+template <typename... Args>
+T& PaginatedSet<T>::emplace(const size_t index, Args&&... args)
 {
-    this->set(index, std::move(elem));
+    this->set(index, T(std::forward<Args>(args)...));
     return at(index);
 }
 

@@ -5,16 +5,19 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
+#include <functional>
+#include <memory>
+#include <mutex>
 #include <thread>
+#include <string>
 
-#include "promise.h"
+#include "../functional/result.h"
 #include "../structs/arraylist.h"
-#include "../structs/smartstring.h"
 #include "../structs/queue.h"
-#include "../functional/functions.h"
-#include "lock/notifier.h"
 
-class Threadpool;
+template <typename T>
+class Promise;
 
 size_t get_num_processors();
 
@@ -34,8 +37,8 @@ class Threadpool {
 
 public:
 
-    Threadpool() : Threadpool(get_num_processors()) {}
-    Threadpool(const size_t threads, std::string&& name);
+    Threadpool() : Threadpool(get_num_processors(), "Anonymous Threadpool") {}
+    Threadpool(size_t threads, std::string&& name);
 
     Threadpool(Threadpool const&) = delete;
     Threadpool& operator=(Threadpool const&) = delete;
@@ -43,6 +46,9 @@ public:
 
     ~Threadpool()
     { shutdown(); }
+
+    size_t size() const
+    { return m_pool.length(); }
 
     void shutdown();
 
@@ -84,19 +90,16 @@ public:
     {
         auto promise = std::make_shared<Promise<ArrayList<T>>>(this);
 
-        if (fns.length() == 0)
+        if (fns.empty())
         {
             promise->complete(Result<ArrayList<T>>::success(ArrayList<T>()));
             return promise;
         }
 
         auto fns_copy = std::make_shared<ArrayList<std::function<T()>>>(fns);
-
-        auto results = std::make_shared<ArrayList<T>>();
-        results->resize(fns.length());
-
+        auto results = std::make_shared<ArrayList<T>>(fns.length(), true);
         auto remaining = std::make_shared<std::atomic<size_t>>(fns.length());
-        auto failed = std::make_shared<std::atomic<bool>>(false);
+        const auto failed = std::make_shared<std::atomic<bool>>(false);
 
         for (size_t i = 0; i < fns.length(); ++i)
         {
@@ -154,13 +157,13 @@ public:
         const size_t num_threads = m_pool.length();
         const size_t num_tasks = std::min(num_threads, n);
 
-        auto results = std::make_shared<ArrayList<U>>(n);
+        auto results = std::make_shared<ArrayList<U>>(n, true);
 
-        auto remaining = std::make_shared<std::atomic<size_t>>(n);
-        auto failed = std::make_shared<std::atomic<bool>>(false);
+        const auto remaining = std::make_shared<std::atomic<size_t>>(n);
+        const auto failed = std::make_shared<std::atomic<bool>>(false);
 
-        auto remaining_queue = std::make_shared<Queue<int>>(n);
-        auto queue_lock = std::make_shared<std::mutex>();
+        const auto remaining_queue = std::make_shared<Queue<int>>(n);
+        const auto queue_lock = std::make_shared<std::mutex>();
 
         for (int i = 0; i < static_cast<int>(n); ++i)
             remaining_queue->append(i);
@@ -178,7 +181,7 @@ public:
 
                         {
                             std::lock_guard<std::mutex> lock(*queue_lock);
-                            if (remaining_queue->length() == 0) return;
+                            if (remaining_queue->empty()) return;
                             index = remaining_queue->pop();
                         }
 
@@ -217,3 +220,5 @@ public:
     }
 
 };
+
+#include "promise.h"

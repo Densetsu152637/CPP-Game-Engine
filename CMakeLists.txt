@@ -27,6 +27,7 @@ add_executable(CPPGameEngine
         src/structs/vector.cpp
         src/structs/vector.h
         src/structs/arraylist.h
+        src/structs/sorted_array.h
         src/functional/result.h
         src/structs/smartstring.cpp
         src/structs/smartstring.h
@@ -68,6 +69,7 @@ add_executable(CPPGameEngine
         src/core/display.h
         src/structs/sparse_set.h
         src/structs/page_set.h
+        src/ecs/simulator.h
 )
 
 if(Vulkan_FOUND)

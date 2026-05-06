@@ -55,7 +55,7 @@ Matrix4f Matrix4f::rotate(const float rad, const Vector3i& axis) const
     float z = axis.z;
 
     float len = std::sqrt(x*x + y*y + z*z);
-    if (len != 0f) {
+    if (len != 0.0f) {
         x /= len;
         y /= len;
         z /= len;

@@ -10,9 +10,9 @@
 #include <mutex>
 
 #include "../functional/result.h"
-#include "../async/threadpool.h"
 #include "../structs/arraylist.h"
-#include "lock/waiter.h"
+
+class Threadpool;
 
 template <typename T>
 class Promise
@@ -48,7 +48,7 @@ public:
     void complete(Result<T> res);
     Result<T>& await();
 
-    Promise<T> on_error(std::function<T(std::exception_ptr)> handler);
+    std::shared_ptr<Promise<T>> on_error(std::function<T(std::exception_ptr)> handler);
 
     template <typename U>
     std::shared_ptr<Promise<U>> then(Threadpool* exec, std::function<U(T)> mapper)
@@ -81,7 +81,7 @@ public:
     template <typename U>
     std::shared_ptr<Promise<U>> then(std::function<U(T)> mapper)
     {
-        return this->then(std::move(mapper), m_executor);
+        return this->then(m_executor, std::move(mapper));
     }
 
 };
@@ -124,6 +124,7 @@ template <typename T>
 void Promise<T>::complete(Result<T> res)
 {
     ArrayList<Listener> listeners_at_completion;
+    Result<T> snapshot;
 
     {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -133,6 +134,7 @@ void Promise<T>::complete(Result<T> res)
 
         m_done = true;
         m_result = std::move(res);
+        snapshot = m_result;
 
         listeners_at_completion = std::move(m_listeners);
         m_listeners.clear();
@@ -145,11 +147,11 @@ void Promise<T>::complete(Result<T> res)
         ArrayList<std::function<void()>> tasks;
         tasks.reserve(listeners_at_completion.size());
 
-        for (auto& l : m_listeners)
+        for (auto& l : listeners_at_completion)
         {
-            tasks.append([this, l]()
+            tasks.append([l, snapshot]()
             {
-                l(this->result);
+                l(snapshot);
             });
         }
 
@@ -157,7 +159,7 @@ void Promise<T>::complete(Result<T> res)
     }
     else
     {
-        for (auto& l : m_listeners)
+        for (auto& l : listeners_at_completion)
             l(m_result);
     }
 }
@@ -175,30 +177,29 @@ Result<T>& Promise<T>::await()
 }
 
 template <typename T>
-Promise<T> Promise<T>::on_error(std::function<T(std::exception_ptr)> handler)
+std::shared_ptr<Promise<T>> Promise<T>::on_error(std::function<T(std::exception_ptr)> handler)
 {
-    Promise<T> next(m_executor);
+    auto next = std::make_shared<Promise<T>>(m_executor);
 
-    attach([next, handler](const Result<T>& res) mutable {
+    this->_attach([next, handler](const Result<T>& res) mutable {
 
         if (res.is_failure())
         {
             try
             {
                 T value = handler(res.exception());
-                next.complete(Result<T>::success(std::move(value)));
+                next->complete(Result<T>::success(std::move(value)));
             }
             catch (...)
             {
-                next.complete(Result<T>::failure(std::current_exception()));
+                next->complete(Result<T>::failure(std::current_exception()));
             }
         }
         else
         {
-            next.complete(res);
+            next->complete(res);
         }
     });
 
     return next;
 }
-

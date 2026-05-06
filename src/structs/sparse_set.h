@@ -76,7 +76,7 @@ public:
         if (contains(key))
         {
             const size_t denseIndex = m_sparse[key];
-            m_dense[denseIndex] = T { std::forward<Args>(args)... };
+            m_dense[denseIndex] = T(std::forward<Args>(args)...);
             return m_dense[denseIndex];
         }
 
@@ -85,7 +85,7 @@ public:
         m_denseKeys.appendGhost();
 
         m_sparse.set(key, denseIndex);
-        m_dense[denseIndex] = T{ std::forward<Args>(args)... };
+        m_dense[denseIndex] = T(std::forward<Args>(args)...);
         m_denseKeys[denseIndex] = key;
         return m_dense[denseIndex];
     }

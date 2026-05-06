@@ -17,7 +17,7 @@ class DoubleBuffer
     mutable std::mutex m_mutex;
     std::function<void(const T&, T&)> copier; // optional
 
-    volatile T buff[2];
+    T buff[2];
 
 public:
 
@@ -79,11 +79,10 @@ public:
     void swap()
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-
         std::swap(m_readBuffer, m_writeBuffer);
 
         // optional copy propagation
-        copier(m_readBuffer, m_writeBuffer);
+        copier(buff[m_readBuffer], buff[m_writeBuffer]);
     }
 };
 
@@ -98,7 +97,7 @@ class TripleBuffer
     mutable std::mutex m_mutex;
     std::function<void(const T&, T&)> copier;
 
-    volatile T buff[3];
+    T buff[3];
 
 public:
 
@@ -149,7 +148,7 @@ public:
     std::tuple<T, T> readLast() const
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        return std::make_tuple(m_readLastBuffer, m_readCurrentBuffer);
+        return std::make_tuple(buff[m_readCurrentBuffer], buff[m_readLastBuffer]);
     }
 
     // =========================================

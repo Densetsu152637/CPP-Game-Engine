@@ -75,22 +75,23 @@ ArrayList<int> string_search::z_search(const char* str, const std::string& patte
     // pattern + '\0' + search_str
     const size_t length = finish - start;
     const size_t pattern_length = pattern.length();
-    char combined[length + pattern_length + 1];
+    std::string combined;
+    combined.reserve(length + pattern_length + 1);
 
     int i = 0;
 
     for (; i < pattern_length; i++)
     {
-        combined[i] = pattern.at(i);
+        combined.push_back(pattern.at(i));
     }
-    combined[i++] = '\0';
+    combined.push_back('\0');
     for (; i < length + pattern_length; i++)
     {
-        combined[i] = str[start + i];
+        combined.push_back(str[start + (i - pattern_length)]);
     }
 
     // here i = combinedLength
-    ArrayList<int> z_arr = z_algo(combined, length);
+    ArrayList<int> z_arr = z_algo(combined.data(), combined.size());
     ArrayList<int> matches;
 
     for (int j = pattern_length + 1; j < z_arr.length(); j++)

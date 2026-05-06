@@ -231,7 +231,7 @@ ArrayList<SmartString> SmartString::split_on(const char token) const
 {
     // do linear search for token in string
     ArrayList<int> hits;
-    for (int i = m_sI, i < m_fI, i++)
+    for (int i = m_sI; i < m_fI; ++i)
     {
         if (m_shared->str.at(i) == token)
         {
@@ -464,7 +464,7 @@ SmartString SmartString::repeat(const int count)
 ArrayList<SmartString> SmartString::partition(const std::string& separator)
 {
     const int hit = find(separator);
-    const ArrayList<SmartString> ret;
+    ArrayList<SmartString> ret;
 
     if (hit == -1)
     {
@@ -485,7 +485,7 @@ ArrayList<SmartString> SmartString::partition(const std::string& separator)
 ArrayList<SmartString> SmartString::rpartition(const std::string& separator)
 {
     int hit = rfind(separator);
-    const ArrayList<SmartString> ret;
+    ArrayList<SmartString> ret;
 
     if (hit == -1) {
         ret.emplace(m_shared, m_sI, m_fI);

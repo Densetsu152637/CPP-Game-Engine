@@ -134,6 +134,12 @@ public:
     template <typename... Components>
     View<Components...> query()
     { return view<Components...>(); }
+
+    template <typename Func>
+    void eachEntity(Func&& func);
+
+    template <typename Func>
+    void eachEntity(Func&& func) const;
 };
 
 template <typename T>
@@ -226,6 +232,29 @@ View<Components...> ECS::view()
     return View<Components...>(*this);
 }
 
-#include "view.h"
+template <typename Func>
+void ECS::eachEntity(Func&& func)
+{
+    for (size_t i = 0; i < m_entities.length(); ++i)
+    {
+        if (m_entities[i].alive)
+        {
+            func(make_handle(i));
+        }
+    }
+}
 
+template <typename Func>
+void ECS::eachEntity(Func&& func) const
+{
+    for (size_t i = 0; i < m_entities.length(); ++i)
+    {
+        if (m_entities[i].alive)
+        {
+            func(make_handle(i));
+        }
+    }
+}
+
+#include "view.h"
 

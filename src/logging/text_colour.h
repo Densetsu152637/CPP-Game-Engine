@@ -16,6 +16,7 @@ union ARGB
         uint8_t a, r, g, b;
     };
 
+    ARGB() : hex(0X00000000) {}
     ARGB(const int vh) : hex(vh) {}
 
 };

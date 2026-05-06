@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <new>
 #include <stdexcept>
 #include <utility>
 
@@ -179,8 +180,12 @@ public:
 
         this->_shuffle_up(i);
 
+        if (i < m_arr.size)
+        {
+            m_arr[i].~T();
+        }
+
         // Construct in-place
-        (m_arr.ptr + i).~T();
         new (m_arr.ptr + i) T(std::forward<Args>(args)...);
 
         ++m_arr.size;
@@ -194,7 +199,6 @@ public:
         _resize_if_necessary();
 
         // Construct in-place
-        (m_arr.ptr + i).~T();
         new (m_arr.ptr + i) T(std::forward<Args>(args)...);
 
         ++m_arr.size;
@@ -265,6 +269,17 @@ public:
         }
 
         return dest;
+    }
+
+    template <typename Compare>
+    void sort(Compare&& compare)
+    {
+        std::stable_sort(begin(), end(), std::forward<Compare>(compare));
+    }
+
+    void sort()
+    {
+        std::stable_sort(begin(), end());
     }
 
     template <typename R>
@@ -514,5 +529,3 @@ T ArrayList<T>::pop()
 {
     return this->pop(length() - 1);
 }
-
-
