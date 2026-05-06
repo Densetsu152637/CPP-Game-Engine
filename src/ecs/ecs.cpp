@@ -6,52 +6,67 @@
 
 #include <ranges>
 
-#include "entity.h"
+Entity ECS::make_handle(const size_t index) const
+{ return Entity{ index, m_entities.at(index).version }; }
 
-size_t ECS::_next_entity_id()
+bool ECS::is_alive_index(const size_t index) const
+{ return index < m_entities.length() && m_entities[index].alive; }
+
+bool ECS::is_valid_handle(const Entity& entity) const
 {
-    // prevents memory fragmentation and having to iterate through pages to modify entries
-    std::lock_guard<std::mutex> lock(creationLock);
-    const size_t ret = m_nextEntityId++;
-    if (m_nextEntityId < m_entities.length())
+    return entity.valid() &&
+       entity.index < m_entities.length() &&
+       m_entities[entity.index].alive &&
+       m_entities[entity.index].version == entity.version;
+}
+
+Entity ECS::createEntity()
+{
+    size_t index = 0;
+
+    if (!m_freeList.empty())
     {
-        // loops while the index is not -1 to find the next vacant spot that was previously deleted
-        while (m_entities[m_nextEntityId++].valid()) {}
+        index = m_freeList.pop();
+    } else
+    {
+        index = m_entities.length();
+        m_entities.append(EntityRecord {} );
     }
-    return ret;
+
+    auto& [version, alive] = m_entities[index];
+    alive = true;
+
+    return Entity { index, version };
 }
 
-size_t ECS::createEntity()
+void ECS::destroyEntity(const Entity& entity)
 {
-    const std::size_t id = _next_entity_id();
-    m_entities.emplace(true);
-    return id;
+    if (!is_valid_handle(entity))
+        return;
+
+    auto& [version, alive] = m_entities[entity.index];
+    alive = false;
+    ++version;
+    m_freeList.append(entity.index);
+
+    for (auto& pool : m_componentPools | std::views::values)
+    {
+        pool->erase(entity.index);
+    }
 }
 
-void ECS::destroyEntity(const size_t id)
+bool ECS::hasEntity(const Entity& entity) const
 {
-    std::lock_guard<std::mutex> lock(creationLock);
-    (m_entities[id]).~Entity();
-    m_nextEntityId = std::min(m_nextEntityId, id);
-}
-
-bool ECS::hasEntity(const size_t id) const
-{
-    return m_entities.at(id).valid();
-}
-
-Entity& ECS::getEntity(const size_t id)
-{
-    return m_entities.at(id);
+    return is_valid_handle(entity);
 }
 
 void ECS::clear()
 {
-    std::lock_guard<std::mutex> lock(creationLock);
-    m_nextEntityId = 0;
+    m_freeList.clear();
     m_entities.clear();
-    for (auto& bucket : m_components | std::views::values)
+
+    for (auto& pool : m_componentPools | std::views::values)
     {
-        bucket.clear();
+        pool->clear();
     }
 }

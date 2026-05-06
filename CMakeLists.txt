@@ -47,6 +47,7 @@ add_executable(CPPGameEngine
         src/logging/text_colour.cpp
         src/logging/logger.cpp
         src/ecs/uniform.h
+        src/ecs/component_pool.h
         src/interaction/keyboard.cpp
         src/interaction/keyboard.h
         src/interaction/mouse.cpp
@@ -57,6 +58,7 @@ add_executable(CPPGameEngine
         src/ecs/entity.h
         src/ecs/ecs.cpp
         src/ecs/ecs.h
+        src/ecs/view.h
         src/core/interfaces.h
         src/async/buffer.h
         src/async/lock.h

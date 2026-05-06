@@ -3,20 +3,21 @@
 //
 
 #pragma once
-#include "structs/arraylist.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <limits>
 
 struct Entity
 {
-    ArrayList<std::type_index> flags{4};
-    bool init = false;
+    static constexpr size_t N_POS = std::numeric_limits<size_t>::max();
+
+    size_t index = N_POS;
+    uint32_t version = 0;
 
     Entity() = default;
-    Entity(const bool flag) : init(flag) {};
-    ~Entity()
-    { init = false; };
+    Entity(const size_t idx, const uint32_t ver) : index(idx), version(ver) {}
 
-    template <typename T>
-    bool has() const { return flags.contains(typeid(T)); };
-    bool valid() const { return init; };
+    explicit operator bool() const { return valid(); }
+    bool valid() const { return index != N_POS; }
 };
-
