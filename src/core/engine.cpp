@@ -174,10 +174,20 @@ Engine& Engine::syncUPSFPS(const int val)
 
 int Engine::upsDur() const
 {
-    return 1000000000 / UPS.load();
+    return 1000000000 / UPS.load(std::memory_order_acquire);
 }
 
 int Engine::fpsDur() const
 {
-    return 1000000000 / FPS.load();
+    return 1000000000 / FPS.load(std::memory_order_acquire);
 }
+
+float Engine::upsMs() const
+{
+    return 1000.0f / static_cast<float>(UPS.load(std::memory_order_acquire));
+};
+float Engine::fpsMs() const
+{
+    return 1000.0f / static_cast<float>(FPS.load(std::memory_order_acquire));
+};
+

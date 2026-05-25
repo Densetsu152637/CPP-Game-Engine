@@ -8,6 +8,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <utility>
 
 #include "../functional/result.h"
 #include "../structs/arraylist.h"
@@ -15,63 +16,65 @@
 class Threadpool;
 
 template <typename T>
-class Promise
+struct PromiseSharedState
 {
-public:
-
     using Listener = std::function<void(const Result<T>&)>;
 
-private:
+    std::mutex mutex;
+    std::condition_variable cv;
 
-    std::mutex m_mutex;
-    std::condition_variable m_cv;
+    Result<T> result;
+    ArrayList<Listener> listeners;
+    Threadpool* executor = nullptr;
+    bool done = false;
+};
 
-    Result<T> m_result;
-    ArrayList<Listener> m_listeners;
-    Threadpool* m_executor = nullptr;
-    bool m_done = false;
+template <typename T>
+class Promise
+{
+    using Listener = std::function<void(const Result<T>&)>;
 
-    void _attach(std::function<void(Result<T>&)> listener);
+    std::shared_ptr<PromiseSharedState<T>> m_state = std::make_shared<PromiseSharedState<T>>();
+
+    void _attach(Listener listener);
 
 public:
 
     Promise() = default;
-    Promise(Threadpool* exec)
-    {
-        m_executor = exec;
-    }
+
+    explicit Promise(Threadpool* exec)
+    { m_state->executor = exec; }
     ~Promise() = default;
 
-    void operator=(const Promise& p) = delete;
-    void operator=(Promise&& p) = delete;
-
-    void complete(Result<T> res);
+    void complete(Result<T>&& res);
     Result<T>& await();
+    void assert();
 
-    std::shared_ptr<Promise<T>> on_error(std::function<T(std::exception_ptr)> handler);
+    Promise<T> on_error(std::function<T(std::exception_ptr)> handler);
 
     template <typename U>
-    std::shared_ptr<Promise<U>> then(Threadpool* exec, std::function<U(T)> mapper)
+    Promise<U> then(Threadpool* exec, std::function<U(T)> mapper)
     {
-        std::shared_ptr<Promise<U>> next = std::make_shared<Promise<U>>(exec);
+        Promise<U> next = Promise<U>(exec);
 
-        this->_attach([=](const Result<T>& res) mutable {
+        this->_attach([next, mapper](const Result<T>& res) mutable
+        {
 
             if (res.is_success())
             {
                 try
                 {
                     U value = mapper(res.get());
-                    next->complete(Result<U>::success(std::move(value)));
+                    next.complete(Result<U>::success(std::move(value)));
                 }
                 catch (...)
                 {
-                    next->complete(Result<U>::failure(std::current_exception()));
+                    next.complete(Result<U>::failure(std::current_exception()));
                 }
             }
             else
             {
-                next->complete(Result<U>::failure(res.exception()));
+                next.complete(Result<U>::failure(res.exception()));
             }
         });
 
@@ -79,125 +82,99 @@ public:
     }
 
     template <typename U>
-    std::shared_ptr<Promise<U>> then(std::function<U(T)> mapper)
+    Promise<U> then(std::function<U(T)> mapper)
     {
-        return this->then(m_executor, std::move(mapper));
+        return this->then(m_state->executor, std::move(mapper));
     }
 
 };
 
 template <typename T>
-void Promise<T>::_attach(std::function<void(Result<T>&)> listener)
+void Promise<T>::_attach(Listener listener)
 {
-    bool execute_now = false;
-    Result<T> snapshot;
+    bool executeNow = false;
 
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::lock_guard<std::mutex> lock(m_state->mutex);
 
-        if (!m_done)
+        if (!m_state->done)
         {
-            m_listeners.push_back(std::move(listener));
+            m_state->listeners.append(std::move(listener));
             return;
         }
 
-        execute_now = true;
-        snapshot = m_result;
+        executeNow = true;
     }
 
-    if (execute_now)
-    {
-        if (m_executor)
-        {
-            m_executor->submit([listener, snapshot]() mutable {
-                listener(snapshot);
-            });
-        }
-        else
-        {
-            listener(snapshot);
-        }
-    }
+    if (executeNow)
+        listener(m_state->result);
 }
 
 template <typename T>
-void Promise<T>::complete(Result<T> res)
+void Promise<T>::complete(Result<T>&& res)
 {
     ArrayList<Listener> listeners_at_completion;
-    Result<T> snapshot;
 
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::lock_guard<std::mutex> lock(m_state->mutex);
 
-        if (m_done)
+        if (m_state->done)
             return;
 
-        m_done = true;
-        m_result = std::move(res);
-        snapshot = m_result;
+        m_state->done = true;
+        m_state->result = std::move(res);
 
-        listeners_at_completion = std::move(m_listeners);
-        m_listeners.clear();
+        listeners_at_completion = std::move(m_state->listeners);
     }
 
-    m_cv.notify_all();
+    m_state->cv.notify_all();
 
-    if (!listeners_at_completion.empty() && m_executor)
+    for (auto& listener : listeners_at_completion)
     {
-        ArrayList<std::function<void()>> tasks;
-        tasks.reserve(listeners_at_completion.size());
-
-        for (auto& l : listeners_at_completion)
-        {
-            tasks.append([l, snapshot]()
-            {
-                l(snapshot);
-            });
-        }
-
-        m_executor->submit(tasks);
-    }
-    else
-    {
-        for (auto& l : listeners_at_completion)
-            l(m_result);
+        listener(m_state->result);
     }
 }
 
 template <typename T>
 Result<T>& Promise<T>::await()
 {
-    std::unique_lock<std::mutex> lock(m_mutex);
+    std::unique_lock<std::mutex> lock(m_state->mutex);
 
-    m_cv.wait(lock, [&] {
-        return m_done;
+    m_state->cv.wait(lock, [&] {
+        return m_state->done;
     });
 
-    return m_result;
+    return m_state->result;
 }
 
 template <typename T>
-std::shared_ptr<Promise<T>> Promise<T>::on_error(std::function<T(std::exception_ptr)> handler)
-{
-    auto next = std::make_shared<Promise<T>>(m_executor);
+void Promise<T>::assert()
+{ await().get(); } // throws error if failed
 
-    this->_attach([next, handler](const Result<T>& res) mutable {
+
+template <typename T>
+Promise<T> Promise<T>::on_error(std::function<T(std::exception_ptr)> handler)
+{
+    auto next = Promise<T>(m_state->executor);
+
+    this->_attach([next, handler](const Result<T>& res) mutable
+    {
 
         if (res.is_failure())
         {
             try
             {
                 T value = handler(res.exception());
-                next->complete(Result<T>::success(std::move(value)));
+                next.complete(Result<T>::success(std::move(value)));
             }
             catch (...)
             {
-                next->complete(Result<T>::failure(std::current_exception()));
+                next.complete(Result<T>::failure(std::current_exception()));
             }
         }
         else
         {
-            next->complete(res);
+            next.complete(Result<T>::success(res.get()));
         }
     });
 

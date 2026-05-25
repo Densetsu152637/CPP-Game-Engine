@@ -21,3 +21,9 @@ struct Entity
     explicit operator bool() const { return valid(); }
     bool valid() const { return index != N_POS; }
 };
+
+struct EntityRecord
+{
+    uint32_t version = 1;
+    bool alive = false;
+};

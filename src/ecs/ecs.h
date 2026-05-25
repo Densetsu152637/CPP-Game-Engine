@@ -23,12 +23,6 @@ class ECS
     template <typename...>
     friend class View;
 
-    struct EntityRecord
-    {
-        uint32_t version = 1;
-        bool alive = false;
-    };
-
     std::unordered_map<
         std::type_index,
         std::unique_ptr<IComponentPool>
@@ -37,7 +31,8 @@ class ECS
     ArrayList<EntityRecord> m_entities;
     ArrayList<size_t> m_freeList;
 
-    Entity make_handle(size_t index) const;
+    static Entity make_handle(const EntityRecord& record, const size_t& index);
+    Entity make_handle(const size_t& index);
     bool is_alive_index(size_t index) const;
     bool is_valid_handle(const Entity& entity) const;
 
@@ -77,20 +72,6 @@ class ECS
         return *static_cast<ComponentPool<T>*>(it->second.get());
     }
 
-    template <typename T>
-    T* try_get_by_index(size_t entityIndex)
-    {
-        ComponentPool<T>* pool = storage_if_exists<T>();
-        return nullptr == pool ? nullptr : pool->try_get(entityIndex);
-    }
-
-    template <typename T>
-    const T* try_get_by_index(size_t entityIndex) const
-    {
-        const ComponentPool<T>* pool = storage_if_exists<T>();
-        return nullptr == pool ? nullptr : pool->try_get(entityIndex);
-    }
-
 public:
 
     ECS() = default;
@@ -103,30 +84,40 @@ public:
     void destroyEntity(const Entity& entity);
     bool hasEntity(const Entity& entity) const;
     void clear();
+    void swapBuffers();
 
     template <typename T>
     bool hasComponent(const Entity& entity) const;
 
     template <typename T>
-    T* try_get(const Entity& entity);
+    Pair<T>* try_get_index(const size_t& index);
 
     template <typename T>
-    const T* try_get(const Entity& entity) const;
+    const Pair<T>* try_get_index(const size_t& index) const;
 
     template <typename T>
-    T& getComponent(const Entity& entity);
+    Pair<T>* try_get(const Entity& entity);
 
     template <typename T>
-    const T& getComponent(const Entity& entity) const;
+    const Pair<T>* try_get(const Entity& entity) const;
+
+    template <typename T>
+    T* try_read(const Entity& entity);
+
+    template <typename T>
+    const T* try_read(const Entity& entity) const;
+
+    template <typename T>
+    T* try_write(const Entity& entity);
 
     template <typename T, typename... Args>
-    T& emplaceComponent(const Entity& entity, Args&&... args);
+    Pair<T>& emplaceComponent(const Entity& entity, Args&&... args);
 
     template <typename T, typename U>
-    T& setComponent(const Entity& entity, U&& newComponent);
+    Pair<T>& setComponent(const Entity& entity, U&& newComponent);
 
     template <typename T>
-    void removeComponent(const Entity& entity);
+    bool removeComponent(const Entity& entity);
 
     template <typename... Components>
     View<Components...> view();
@@ -137,10 +128,9 @@ public:
 
     template <typename Func>
     void eachEntity(Func&& func);
-
-    template <typename Func>
-    void eachEntity(Func&& func) const;
 };
+
+#include "view.h"
 
 template <typename T>
 bool ECS::hasComponent(const Entity& entity) const
@@ -153,46 +143,80 @@ bool ECS::hasComponent(const Entity& entity) const
 }
 
 template <typename T>
-T* ECS::try_get(const Entity& entity)
+Pair<T>* ECS::try_get_index(const size_t& index)
+{
+    ComponentPool<T>* pool = storage_if_exists<T>();
+    if (nullptr == pool) return nullptr;
+    return pool->try_get(index);
+}
+
+template <typename T>
+const Pair<T>* ECS::try_get_index(const size_t& index) const
+{
+    const ComponentPool<T>* pool = storage_if_exists<T>();
+    if (nullptr == pool) return nullptr;
+    return pool->try_get(index);
+}
+
+template <typename T>
+Pair<T>* ECS::try_get(const Entity& entity)
 {
     if (!is_valid_handle(entity))
         return nullptr;
 
-    return try_get_by_index<T>(entity.index);
+    return this->try_get_index<T>(entity.index);
 }
 
 template <typename T>
-const T* ECS::try_get(const Entity& entity) const
+const Pair<T>* ECS::try_get(const Entity& entity) const
 {
     if (!is_valid_handle(entity))
         return nullptr;
 
-    return try_get_by_index<T>(entity.index);
+    return this->try_get_index<T>(entity.index);
 }
 
 template <typename T>
-T& ECS::getComponent(const Entity& entity)
+T* ECS::try_read(const Entity& entity)
 {
-    T* component = try_get<T>(entity);
-    if (nullptr == component)
-        throw std::out_of_range("Component not found for entity");
+    if (!is_valid_handle(entity))
+        return nullptr;
 
+    ComponentPool<T>* pool = storage_if_exists<T>();
+    if (nullptr == pool)
+        return nullptr;
 
-    return *component;
+    return pool->try_read(entity.index);
 }
 
 template <typename T>
-const T& ECS::getComponent(const Entity& entity) const
+const T* ECS::try_read(const Entity& entity) const
 {
-    const T* component = try_get<T>(entity);
-    if (nullptr == component)
-        throw std::out_of_range("Component not found for entity");
+    if (!is_valid_handle(entity))
+        return nullptr;
 
-    return *component;
+    const ComponentPool<T>* pool = storage_if_exists<T>();
+    if (nullptr == pool)
+        return nullptr;
+
+    return pool->try_read(entity.index);
+}
+
+template <typename T>
+T* ECS::try_write(const Entity& entity)
+{
+    if (!is_valid_handle(entity))
+        return nullptr;
+
+    ComponentPool<T>* pool = storage_if_exists<T>();
+    if (nullptr == pool)
+        return nullptr;
+
+    return pool->try_write(entity.index);
 }
 
 template <typename T, typename... Args>
-T& ECS::emplaceComponent(const Entity& entity, Args&&... args)
+Pair<T>& ECS::emplaceComponent(const Entity& entity, Args&&... args)
 {
     if (!is_valid_handle(entity))
         throw std::out_of_range("Entity is not valid");
@@ -201,60 +225,38 @@ T& ECS::emplaceComponent(const Entity& entity, Args&&... args)
 }
 
 template <typename T, typename U>
-T& ECS::setComponent(const Entity& entity, U&& newComponent)
+Pair<T>& ECS::setComponent(const Entity& entity, U&& newComponent)
 {
     if (!is_valid_handle(entity))
         throw std::out_of_range("Entity is not valid");
 
-    ComponentPool<T>& pool = storage<T>();
-    if (T* component = pool.try_get(entity.index))
-    {
-        *component = std::forward<U>(newComponent);
-        return *component;
-    }
-
-    return pool.emplace(entity.index, std::forward<U>(newComponent));
+    return storage<T>().emplace(entity.index, std::forward<U>(newComponent));
 }
 
 template <typename T>
-void ECS::removeComponent(const Entity& entity)
+bool ECS::removeComponent(const Entity& entity)
 {
     if (!is_valid_handle(entity))
-        return;
+        return false;
 
-    if (ComponentPool<T>* pool = storage_if_exists<T>())
-        pool->erase(entity.index);
+    ComponentPool<T>* pool = storage_if_exists<T>();
+    if (nullptr == pool || !pool->contains(entity.index))
+        return false;
+
+    pool->erase(entity.index);
+    return true;
 }
 
 template <typename... Components>
 View<Components...> ECS::view()
-{
-    return View<Components...>(*this);
-}
+{ return View<Components...>(*this); }
 
 template <typename Func>
 void ECS::eachEntity(Func&& func)
 {
-    for (size_t i = 0; i < m_entities.length(); ++i)
+    auto view = this->view<>();
+    view.each([&func](const Entity& entity)
     {
-        if (m_entities[i].alive)
-        {
-            func(make_handle(i));
-        }
-    }
+        func(entity);
+    });
 }
-
-template <typename Func>
-void ECS::eachEntity(Func&& func) const
-{
-    for (size_t i = 0; i < m_entities.length(); ++i)
-    {
-        if (m_entities[i].alive)
-        {
-            func(make_handle(i));
-        }
-    }
-}
-
-#include "view.h"
-

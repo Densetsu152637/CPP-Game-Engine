@@ -7,40 +7,38 @@
 #include <algorithm>
 #include <array>
 #include <iterator>
-#include <type_traits>
+#include <functional>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 
-#include "../ecs/ecs.h"
+#include "component_pool.h"
+#include "../async/threadpool.h"
 
 template <typename... Components>
 class View
 {
-    static_assert(sizeof...(Components) > 0, "A view needs at least one component type.");
-
     ECS* m_ecs = nullptr;
-    std::tuple<ComponentPool<Components>*...> m_pools{};
+    std::tuple<ComponentPool<Components>*...> m_pools {};
     size_t m_primaryIndex = Entity::N_POS;
-    bool m_resolved = false;
+    bool m_cacheResolved = false;
 
-    template <typename T>
-    size_t storage_size() const
+    template <typename>
+    static constexpr bool always_false_v = false;
+
+    template <size_t... Is>
+    std::array<size_t, sizeof...(Components)> storage_sizes(std::index_sequence<Is...>) const
     {
-        const auto* pool = std::get<ComponentPool<T>*>(m_pools);
-        return nullptr == pool ? 0 : pool->size();
+        return {
+            (nullptr == std::get<Is>(m_pools) ? 0 : std::get<Is>(m_pools)->size())...
+        };
     }
 
-    // Chooses the smallest available storage among the requested components.
-    // This becomes the primary dense iteration source for `each()`.
     size_t select_primary_storage() const
     {
-        const std::array<size_t, sizeof...(Components)> sizes{ storage_size<Components>()... };
-        if (
-            std::any_of(
-                sizes.begin(), sizes.end(),
-                [](const size_t size) {return 0 == size; }
-            )
-        ) { return Entity::N_POS; }
+        const auto sizes = storage_sizes(std::make_index_sequence<sizeof...(Components)>{});
+        if (std::any_of(sizes.begin(), sizes.end(), [](const size_t size) { return 0 == size; }))
+            return Entity::N_POS;
 
         const auto smallest = std::min_element(sizes.begin(), sizes.end());
         return static_cast<size_t>(std::distance(sizes.begin(), smallest));
@@ -48,47 +46,134 @@ class View
 
     void resolve_cache()
     {
-        m_pools = std::tuple{ m_ecs->storage_if_exists<Components>()... };
-        m_primaryIndex = select_primary_storage();
-        m_resolved = (m_primaryIndex != Entity::N_POS);
+        if constexpr (0 == sizeof...(Components))
+        {
+            m_primaryIndex = 0;
+        }
+        else
+        {
+            m_pools = std::tuple<ComponentPool<Components>*...>{ m_ecs->storage_if_exists<Components>()... };
+            m_primaryIndex = select_primary_storage();
+        }
+
+        m_cacheResolved = true;
     }
 
-    // Resolves cached pool pointers and the primary index the first time the view is used.
     bool ensure_cache()
     {
         if (nullptr == m_ecs)
             return false;
 
-        if (!m_resolved)
+        if (!m_cacheResolved)
             resolve_cache();
 
-        return m_resolved;
+        if constexpr (0 == sizeof...(Components))
+            return true;
+
+        return m_primaryIndex != Entity::N_POS;
     }
 
-    template <size_t I = 0>
-    // Returns the current size of the selected primary pool.
+    size_t alive_entity_count() const
+    {
+        size_t alive = 0;
+        for (const auto& record : m_ecs->m_entities)
+        {
+            if (record.alive)
+                ++alive;
+        }
+        return alive;
+    }
+
+    template <typename Func>
+    void invoke_entity_only_callback(const Entity& entity, Func& func)
+    {
+        if constexpr (std::is_invocable_v<Func&, Entity>)
+        {
+            func(entity);
+        }
+        else if constexpr (std::is_invocable_v<Func&>)
+        {
+            func();
+        }
+        else
+        {
+            static_assert(
+                always_false_v<Func>,
+                "Entity-only view callback must accept `(Entity)` or `()`."
+            );
+        }
+    }
+
+    template <typename Func>
+    void iterate_all_entities(Func& func)
+    {
+        for (size_t i = 0; i < m_ecs->m_entities.length(); ++i)
+        {
+            const EntityRecord& record = m_ecs->m_entities[i];
+            if (!record.alive)
+                continue;
+
+            invoke_entity_only_callback(m_ecs->make_handle(record, i), func);
+        }
+    }
+
     size_t primary_size_runtime() const
     {
-        if constexpr (I < sizeof...(Components))
-        {
-            if (m_primaryIndex == I)
+        if constexpr (0 == sizeof...(Components))
+            return alive_entity_count();
+
+        size_t currentIndex = 0;
+        size_t primarySize = 0;
+        bool hit = false;
+
+        std::apply(
+            [&](auto*... pools)
             {
-                using Primary = std::tuple_element_t<I, std::tuple<Components...>>;
-                auto* primary = std::get<ComponentPool<Primary>*>(m_pools);
-                return nullptr == primary ? 0 : primary->size();
-            }
+                auto select = [&](auto* pool)
+                {
+                    if (hit || currentIndex != m_primaryIndex)
+                    {
+                        ++currentIndex;
+                        return;
+                    }
 
-            return primary_size_runtime<I + 1>();
-        }
+                    hit = true;
+                    primarySize = nullptr == pool ? 0 : pool->size();
+                    ++currentIndex;
+                };
 
-        return 0;
+                (select(pools), ...);
+            },
+            m_pools
+        );
+
+        return primarySize;
     }
 
-    // Dispatches over the cached pool tuple and runs the dense iteration path for the
-    // selected primary pool.
-    template <typename Func, size_t... Is>
-    void each_with_primary_impl(Func& func, std::index_sequence<Is...>)
+    template <typename PoolT, typename Func>
+    void iterate_primary_pool_range(PoolT* primary, const size_t beginDense, const size_t endDense, Func& func)
     {
+        if (nullptr == primary)
+            return;
+
+        const size_t boundedEnd = std::min(endDense, primary->size());
+        for (size_t denseIndex = beginDense; denseIndex < boundedEnd; ++denseIndex)
+        {
+            const size_t entityIndex = primary->entity_at(denseIndex);
+            if (!m_ecs->is_alive_index(entityIndex))
+                continue;
+
+            this->visit_entity(entityIndex, func, std::make_index_sequence<sizeof...(Components)>{});
+        }
+    }
+
+    template <typename Func, size_t... Is>
+    void each_with_primary_range_impl(
+        const size_t beginDense,
+        const size_t endDense,
+        Func& func,
+        std::index_sequence<Is...>
+    ) {
         bool handled = false;
         size_t currentIndex = 0;
 
@@ -101,32 +186,24 @@ class View
             }
 
             handled = true;
-            iterate_primary_pool(primary, func);
+            iterate_primary_pool_range(primary, beginDense, endDense, func);
             ++currentIndex;
         };
 
         (dispatch(std::get<Is>(m_pools)), ...);
     }
 
-    // Iterates the primary pool densely and checks the other requested components for each entity.
-    template <typename PoolT, typename Func>
-    void iterate_primary_pool(PoolT* primary, Func& func)
+    template <typename Func>
+    void each_range(const size_t beginDense, const size_t endDense, Func& func)
     {
-        if (nullptr == primary)
-            return;
-
-        for (size_t denseIndex = 0; denseIndex < primary->size(); ++denseIndex)
-        {
-            const size_t entityIndex = primary->entity_at(denseIndex);
-            if (!m_ecs->is_alive_index(entityIndex))
-                continue;
-
-            this->visit_entity(entityIndex, func, std::make_index_sequence<sizeof...(Components)>{});
-        }
+        each_with_primary_range_impl(
+            beginDense,
+            endDense,
+            func,
+            std::make_index_sequence<sizeof...(Components)>{}
+        );
     }
 
-    // Gathers component references for one entity and invokes the callback only if every
-    // requested component exists.
     template <typename Func, size_t... Is>
     void visit_entity(const size_t entityIndex, Func& func, std::index_sequence<Is...>)
     {
@@ -134,37 +211,64 @@ class View
         if (!(((std::get<Is>(components) != nullptr) && ...)))
             return;
 
-        if constexpr (std::is_invocable_v<Func&, Entity, Components&...>)
+        if constexpr (std::is_invocable_v<Func&, Entity, Pair<Components>&...>)
         {
             func(m_ecs->make_handle(entityIndex), *std::get<Is>(components)...);
-        } else
+        }
+        else if constexpr (std::is_invocable_v<Func&, Pair<Components>&...>)
         {
             func(*std::get<Is>(components)...);
+        }
+        else
+        {
+            static_assert(
+                always_false_v<Func>,
+                "View::each callback must accept `(Entity, Pair<Components>&...)` or `(Pair<Components>&...)`."
+            );
         }
     }
 
 public:
-    // Creates a view bound to one ECS registry.
     explicit View(ECS& ecs) : m_ecs(&ecs) {}
 
-    // Returns true when the view cannot produce any matching entities.
     bool empty()
     {
         if (!ensure_cache())
             return true;
 
-        return m_primaryIndex == Entity::N_POS || primary_size_runtime() == 0;
+        if constexpr (0 == sizeof...(Components))
+            return 0 == alive_entity_count();
+
+        return 0 == primary_size_runtime();
     }
 
-    // Resets cached primary selection so the next call re-evaluates the storages.
     void refresh()
     {
-        m_resolved = false;
-        resolve_cache();
+        m_cacheResolved = false;
+        ensure_cache();
     }
 
-    // Iterates all entities that contain every requested component.
-    // The callback may receive either `(Entity, Components&...)` or just `(Components&...)`.
+    size_t size()
+    {
+        if (!ensure_cache())
+            return 0;
+
+        if constexpr (0 == sizeof...(Components))
+            return alive_entity_count();
+
+        return primary_size_runtime();
+    }
+
+    ArrayList<Entity> allEntities()
+    {
+        ArrayList<Entity> entities;
+        this->each([&entities](const Entity& entity, Pair<Components>&...)
+        {
+            entities.append(entity);
+        });
+        return entities;
+    }
+
     template <typename Func>
     void each(Func&& func)
     {
@@ -172,6 +276,61 @@ public:
             return;
 
         auto&& callable = func;
-        each_with_primary_impl(callable, std::make_index_sequence<sizeof...(Components)>{});
+        if constexpr (0 == sizeof...(Components))
+        {
+            iterate_all_entities(callable);
+        }
+        else
+        {
+            each_range(0, primary_size_runtime(), callable);
+        }
+    }
+
+    template <typename Func>
+    void each_mt(Func&& func, Threadpool& pool, const size_t minChunk = 0)
+    {
+        if (!ensure_cache())
+            return;
+
+        ArrayList<Entity> entities = allEntities();
+        if (entities.empty())
+            return;
+
+        using Callable = std::decay_t<Func>;
+        Callable callableSeed(std::forward<Func>(func));
+
+        auto promise = pool.map<Entity, bool>(
+            std::function<bool(const Entity&)>(
+                [this, callable = std::move(callableSeed)](const Entity& entity) mutable
+                {
+                    if constexpr (0 == sizeof...(Components))
+                    {
+                        invoke_entity_only_callback(entity, callable);
+                    }
+                    else
+                    {
+                        this->visit_entity(
+                            entity.index,
+                            callable,
+                            std::make_index_sequence<sizeof...(Components)>{}
+                        );
+                    }
+
+                    return true;
+                }
+            ),
+            &entities,
+            minChunk
+        );
+
+        auto& result = promise.await();
+        if (result.is_failure())
+            std::rethrow_exception(result.exception());
+    }
+
+    template <typename Func>
+    void each(Func&& func, Threadpool& pool)
+    {
+        each_mt(std::forward<Func>(func), pool);
     }
 };

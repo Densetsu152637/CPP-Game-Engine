@@ -14,6 +14,7 @@
 template <typename T>
 class SparseSet
 {
+
     PaginatedSet<size_t> m_sparse;
     ArrayList<size_t> m_denseKeys;
     ArrayList<T> m_dense;
@@ -28,7 +29,12 @@ public:
     { return m_dense.empty(); }
 
     bool contains(const size_t key) const
-    { return m_sparse.contains(key); }
+    {
+        if (!m_sparse.contains(key)) return false;
+        const size_t hit = m_sparse[key];
+        if (hit >= m_denseKeys.length()) return false;
+        return key == m_denseKeys[hit];
+    }
 
     T* try_get_dense(const size_t key)
     {
@@ -39,6 +45,14 @@ public:
     }
 
     T* try_get(const size_t key)
+    {
+        if (!contains(key))
+        { return nullptr; }
+
+        return &m_dense[m_sparse[key]];
+    }
+
+    const T* try_get(const size_t key) const
     {
         if (!contains(key))
         { return nullptr; }

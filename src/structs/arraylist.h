@@ -6,85 +6,19 @@
 
 #include <algorithm>
 #include <functional>
-#include <new>
 #include <stdexcept>
 #include <utility>
 
-static constexpr size_t ARRAY_DEFAULT_INITIAL_CAPACITY = 16;
-
-template <typename T>
-struct Array
-{
-    T* ptr = nullptr;
-    size_t size = 0;
-    size_t cap = 0;
-
-    T& operator[](const size_t index) { return ptr[index]; };
-    const T& operator[](const size_t index) const { return ptr[index]; };
-
-    void resize(size_t new_size)
-    {
-        if (new_size < size)
-        {
-            new_size = size;
-        }
-
-        if (new_size == 0)
-        {
-            new_size = ARRAY_DEFAULT_INITIAL_CAPACITY;
-        }
-
-        T* new_arr = new T[new_size];
-        for (size_t i = 0; i < size; ++i)
-        {
-            new_arr[i] = std::move(ptr[i]);
-        }
-
-        delete[] ptr;
-        ptr = new_arr;
-        cap = new_size;
-    }
-
-    using iterator = T*;
-    using const_iterator = const T*;
-
-    iterator begin()
-    { return ptr; }
-
-    iterator end()
-    { return ptr + size; }
-
-    const_iterator begin() const
-    { return ptr; }
-
-    const_iterator end() const
-    { return ptr + size; }
-
-    const_iterator cbegin() const
-    { return ptr; }
-
-    const_iterator cend() const
-    { return ptr + size; }
-
-    bool full() const
-    { return size >= cap; }
-};
-
-template <typename T>
-void array_cpy(Array<T>& dst, const int dst_start, const Array<T>& src, const int src_start, const int length)
-{
-    for (int i = 0; i < length; ++i)
-    {
-        dst[dst_start + i] = src[src_start + i];
-    }
-}
+#include "array.h"
 
 template <typename T>
 class ArrayList {
 
     Array<T> m_arr;
+
     void _resize(size_t new_size)
     { m_arr.resize(new_size); }
+
     void _resize_if_necessary();
 
     void _assert_within_bounds(size_t& i) const;
@@ -97,27 +31,20 @@ public:
     using iterator = T*;
     using const_iterator = const T*;
 
-    ArrayList() : ArrayList(ARRAY_DEFAULT_INITIAL_CAPACITY) {}
-
+    ArrayList() = default;
     explicit ArrayList(const size_t initial_capacity) : ArrayList(initial_capacity, false) {}
 
     ArrayList(const size_t initial_capacity, const bool check_size)
     {
         _resize(initial_capacity);
-        this->m_arr.size = check_size ? initial_capacity : 0;
-    }
-
-    ArrayList(const ArrayList& arr);
-    ArrayList(ArrayList&& arr) noexcept;
-    ArrayList& operator=(const ArrayList& arr);
-    ArrayList& operator=(ArrayList&& arr) noexcept;
-
-    ~ArrayList()
-    {
-        delete[] m_arr.ptr;
-        m_arr.ptr = nullptr;
-        m_arr.size = 0;
-        m_arr.cap = 0;
+        if (check_size) // initializes all elements
+        {
+            for (size_t i = 0; i < m_arr.cap; i++)
+            {
+                m_arr.ptr[i].~T();
+                m_arr.ptr[i] = T{};
+            }
+        }
     }
 
     Array<T>& ptr() { return m_arr; }
@@ -129,27 +56,19 @@ public:
     size_t capacity() const
     { return m_arr.cap; }
 
-    bool empty() const { return length() == 0; }
+    bool empty() const { return m_arr.empty(); }
 
     void guarantee(const size_t space)
-    {
-        if (space > m_arr.cap)
-        {
-            this->_resize(space);
-        }
-    }
+    { m_arr.guarantee(space); }
 
     void reserve(const size_t space)
-    {
-        if (space > m_arr.cap - m_arr.size)
-        { this->_resize(m_arr.cap + space); }
-    }
+    { m_arr.reserve(space); }
 
     void restrict(const size_t space)
-    { this->_resize(space); }
+    { m_arr.restrict(space); }
 
     void clamp_size()
-    { this->restrict(m_arr.size); }
+    { m_arr.clamp_size(); }
 
     void clear();
 
@@ -164,7 +83,7 @@ public:
 
     void appendGhost();
     ArrayList<T>& append(const T& t);
-    ArrayList<T>& append(const T& t, size_t i);
+    ArrayList<T>& append(size_t i, const T& t);
     ArrayList<T>& append(const ArrayList<T>& arr);
     ArrayList<T>& append(const T* ts, size_t elems);
     ArrayList<T> concat(const ArrayList<T>& arr);
@@ -172,21 +91,16 @@ public:
     template<typename... Args>
     T& emplace(size_t i, Args&&... args)
     {
-        // clamp i to end if need be
-        if (i > m_arr.size)
-        {
-            i = m_arr.size;
-        }
+        _assert_within_bounds(i);
+        _resize_if_necessary();
 
         this->_shuffle_up(i);
 
         if (i < m_arr.size)
-        {
             m_arr[i].~T();
-        }
 
         // Construct in-place
-        new (m_arr.ptr + i) T(std::forward<Args>(args)...);
+        m_arr[i] = T{std::forward<Args>(args)...};
 
         ++m_arr.size;
         return m_arr[i];
@@ -199,7 +113,7 @@ public:
         _resize_if_necessary();
 
         // Construct in-place
-        new (m_arr.ptr + i) T(std::forward<Args>(args)...);
+        m_arr[i] = T{std::forward<Args>(args)...};
 
         ++m_arr.size;
         return m_arr[i];
@@ -240,10 +154,18 @@ public:
         {
             T& elem = m_arr.ptr[i];
             if (elem == target)
-            {
                 return i;
-            }
+
         }
+        return -1;
+    }
+
+    int find(std::function<bool(const T&)> fn) const
+    {
+        for (int i = 0; i < m_arr.size; i++)
+            if (fn(m_arr.ptr[i]))
+                return i;
+
         return -1;
     }
 
@@ -251,24 +173,31 @@ public:
     void for_each(Func&& func)
     {
         for (size_t i = 0; i < m_arr.size; i++)
-        {
             func(m_arr[i]);
-        }
     }
 
     template <typename Func>
-    auto map(Func&& func)
+    auto map(Func&& func) const
     {
         using U = std::decay_t<decltype(func(std::declval<T&>()))>;
 
         ArrayList<U> dest(m_arr.size);
 
         for (size_t i = 0; i < m_arr.size; i++)
-        {
-            dest.append(func(m_arr[i]));
-        }
+            dest.append(std::move(func(m_arr[i])));
 
         return dest;
+    }
+
+    template <typename R>
+    R reduce(std::function<R(const R&, const T&)> reducer, R initial) const
+    {
+        R acc = std::move(initial);
+
+        for (size_t i = 0; i < this->length(); ++i)
+            acc = reducer(acc, this->at(i));
+
+        return acc;
     }
 
     template <typename Compare>
@@ -280,19 +209,6 @@ public:
     void sort()
     {
         std::stable_sort(begin(), end());
-    }
-
-    template <typename R>
-    R reduce(std::function<R(const R&, const T&)> reducer, R initial) const
-    {
-        R acc = std::move(initial);
-
-        for (size_t i = 0; i < this->length(); ++i)
-        {
-            acc = reducer(acc, this->at(i));
-        }
-
-        return acc;
     }
 
 };
@@ -389,17 +305,6 @@ ArrayList<T>::ArrayList(ArrayList&& arr) noexcept
 }
 
 template <typename T>
-void ArrayList<T>::clear()
-{
-    delete[] m_arr.ptr;
-    m_arr.ptr = nullptr;
-    m_arr.size = 0;
-    m_arr.cap = 0;
-
-    _resize(ARRAY_DEFAULT_INITIAL_CAPACITY);
-}
-
-template <typename T>
 ArrayList<T>& ArrayList<T>::operator=(const ArrayList& arr)
 {
     if (this == &arr)
@@ -435,6 +340,17 @@ ArrayList<T>& ArrayList<T>::operator=(ArrayList&& arr) noexcept
 }
 
 template <typename T>
+void ArrayList<T>::clear()
+{
+    delete[] m_arr.ptr;
+    m_arr.ptr = nullptr;
+    m_arr.size = 0;
+    m_arr.cap = 0;
+
+    _resize(ARRAY_DEFAULT_INITIAL_CAPACITY);
+}
+
+template <typename T>
 T& ArrayList<T>::at(size_t index)
 {
     _assert_within_bounds(index);
@@ -456,18 +372,18 @@ template <typename T>
 void ArrayList<T>::appendGhost()
 {
     _resize_if_necessary();
-    ++m_arr.size;
+    m_arr.ptr[m_arr.size++] = T{};
 }
 
 template <typename T>
 ArrayList<T>& ArrayList<T>::append(const T& t)
 {
-    this->append(t, m_arr.size);
+    this->append(m_arr.size, t);
     return *this;
 }
 
 template <typename T>
-ArrayList<T>& ArrayList<T>::append(const T& t, size_t i)
+ArrayList<T>& ArrayList<T>::append(size_t i, const T& t)
 {
     // clamp i to end if need be
     if (i > m_arr.size)

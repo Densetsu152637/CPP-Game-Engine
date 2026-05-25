@@ -9,8 +9,7 @@
 #include "../async/lock.h"
 #include "../structs/arraylist.h"
 #include "../logging/logger.h"
-#include "ecs/simulator.h"
-
+#include "ecs/ecs_sim.h"
 
 class Engine
 {
@@ -57,6 +56,8 @@ public:
     Engine& syncUPSFPS(int val);
     int upsDur() const;
     int fpsDur() const;
+    float upsMs() const;
+    float fpsMs() const;
 
 };
 

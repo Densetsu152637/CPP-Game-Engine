@@ -69,7 +69,17 @@ add_executable(CPPGameEngine
         src/core/display.h
         src/structs/sparse_set.h
         src/structs/page_set.h
-        src/ecs/simulator.h
+        src/ecs/ecs_sim.cpp
+        src/ecs/ecs_sim.h
+        src/structs/templates.h
+        src/ecs/ecs_sim_detail.h
+        src/components/alias.h
+        src/components/systems.cpp
+        src/components/systems.h
+        src/structs/packed_flags.cpp
+        src/structs/packed_flags.h
+        src/structs/array.h
+        src/functional/result.cpp
 )
 
 if(Vulkan_FOUND)

@@ -4,13 +4,17 @@
 
 #pragma once
 
+#include <algorithm>
 #include <atomic>
+#include <cstddef>
 #include <condition_variable>
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <thread>
 #include <string>
+#include <thread>
+#include <type_traits>
+#include <utility>
 
 #include "../functional/result.h"
 #include "../structs/arraylist.h"
@@ -55,164 +59,109 @@ public:
     // submit templated functions:
 
     template <typename F>
-    auto submit(F&& fn) -> std::shared_ptr<Promise<std::invoke_result_t<F>>>
+    auto submit(F&& fn) -> Promise<std::invoke_result_t<F>>
+    {
+        using T = std::invoke_result_t<F>;
+
+        auto promise = Promise<T>(this);
+
         {
-            using T = std::invoke_result_t<F>;
-
-            auto promise = std::make_shared<Promise<T>>(this);
-
-            {
-                std::function<void()> task(
-                    [promise, fn = std::forward<F>(fn)]() mutable
+            std::function<void()> task(
+                [promise, fn = std::forward<F>(fn)]() mutable
+                {
+                    try
                     {
-                        try
+                        if constexpr (std::is_void_v<T>)
+                        {
+                            fn();
+                            promise.complete(Result<void>::success());
+                        }
+                        else
                         {
                             T result = fn();
-                            promise->complete(Result<T>::success(std::move(result)));
+                            promise.complete(Result<T>::success(std::move(result)));
                         }
-                        catch (...)
-                        {
-                            promise->complete(Result<T>::failure(std::current_exception()));
-                        }
-                    });
-
-                std::lock_guard<std::mutex> lock(m_mutex);
-                m_queue.append(std::move(task));
-            }
-
-            m_cv.notify_one();
-
-            return promise;
-        }
-
-    template <typename T>
-    std::shared_ptr<Promise<ArrayList<T>>> submit(const ArrayList<std::function<T()>>& fns)
-    {
-        auto promise = std::make_shared<Promise<ArrayList<T>>>(this);
-
-        if (fns.empty())
-        {
-            promise->complete(Result<ArrayList<T>>::success(ArrayList<T>()));
-            return promise;
-        }
-
-        auto fns_copy = std::make_shared<ArrayList<std::function<T()>>>(fns);
-        auto results = std::make_shared<ArrayList<T>>(fns.length(), true);
-        auto remaining = std::make_shared<std::atomic<size_t>>(fns.length());
-        const auto failed = std::make_shared<std::atomic<bool>>(false);
-
-        for (size_t i = 0; i < fns.length(); ++i)
-        {
-            {
-                std::function<void()> task([=]()
+                    }
+                    catch (...)
                     {
-                        if (failed->load(std::memory_order_acquire)) return;
+                        promise.complete(Result<T>::failure(std::current_exception()));
+                    }
+                }
+            );
 
-                        try
-                        {
-                            (*results)[i] = (*fns_copy)[i]();
-                        }
-                        catch (...)
-                        {
-                            if (!failed->exchange(true))
-                            {
-                                promise->complete(
-                                    Result<ArrayList<T>>::failure(std::current_exception())
-                                );
-                            }
-                            return;
-                        }
-
-                        if (remaining->fetch_sub(1) == 1 && !failed->load())
-                        {
-                            promise->complete(
-                                Result<ArrayList<T>>::success(std::move(*results))
-                            );
-                        }
-                    });
-
-                std::lock_guard<std::mutex> lock(m_mutex);
-                m_queue.append(std::move(task));
-            }
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_queue.append(std::move(task));
         }
 
-        m_cv.notify_all();
+        m_cv.notify_one();
         return promise;
     }
 
     template <typename T, typename U>
-    std::shared_ptr<Promise<ArrayList<U>>> map(
+    Promise<ArrayList<U>> map(
         std::function<U(const T&)> fn,
-        const ArrayList<T>* data)
+        const ArrayList<T>* data,
+        size_t min_batch_size = 0)
     {
-        auto promise = std::make_shared<Promise<ArrayList<U>>>(this);
-        size_t n = data->length();
+        auto promise = Promise<ArrayList<U>>(this);
+        const size_t n = data->length();
 
         if (n == 0)
         {
-            promise->complete(Result<ArrayList<U>>::success({}));
+            promise.complete(Result<ArrayList<U>>::success(ArrayList<U>{}));
             return promise;
         }
 
-        const size_t num_threads = m_pool.length();
-        const size_t num_tasks = std::min(num_threads, n);
+        const size_t num_threads = std::max<size_t>(1, m_pool.length());
+        const size_t default_batch_size = std::max<size_t>(1, n / num_threads);
+        const size_t batch_size = std::max<size_t>(
+            1,
+            min_batch_size == 0 ? default_batch_size : min_batch_size
+        );
+        const size_t num_batches = (n + batch_size - 1) / batch_size;
 
         auto results = std::make_shared<ArrayList<U>>(n, true);
-
-        const auto remaining = std::make_shared<std::atomic<size_t>>(n);
+        const auto remaining_batches = std::make_shared<std::atomic<size_t>>(num_batches);
         const auto failed = std::make_shared<std::atomic<bool>>(false);
 
-        const auto remaining_queue = std::make_shared<Queue<int>>(n);
-        const auto queue_lock = std::make_shared<std::mutex>();
-
-        for (int i = 0; i < static_cast<int>(n); ++i)
-            remaining_queue->append(i);
-
-        for (size_t t = 0; t < num_tasks; ++t)
+        for (size_t batch = 0; batch < num_batches; ++batch)
         {
+            const size_t begin = batch * batch_size;
+            const size_t end = std::min(n, begin + batch_size);
+
+            std::function<void()> task([promise, results, remaining_batches, failed, fn, data, begin, end]()
             {
-                std::function<void()> task([=]()
+                if (failed->load(std::memory_order_acquire))
+                    return;
+
+                try
                 {
-                    while (true)
+                    for (size_t i = begin; i < end; ++i)
                     {
-                        if (failed->load(std::memory_order_acquire)) return;
-
-                        int index;
-
-                        {
-                            std::lock_guard<std::mutex> lock(*queue_lock);
-                            if (remaining_queue->empty()) return;
-                            index = remaining_queue->pop();
-                        }
-
-                        try
-                        {
-                            (*results)[index] = fn((*data)[index]);
-                        }
-                        catch (...)
-                        {
-                            if (!failed->exchange(true))
-                            {
-                                promise->complete(
-                                    Result<ArrayList<U>>::failure(std::current_exception())
-                                );
-                            }
-                            return;
-                        }
-
-                        if (remaining->fetch_sub(1) == 1 && !failed->load())
-                        {
-                            promise->complete(
-                                Result<ArrayList<U>>::success(std::move(*results))
-                            );
-                            return;
-                        }
+                        (*results)[i] = fn((*data)[i]);
                     }
-                });
+                }
+                catch (...)
+                {
+                    if (!failed->exchange(true))
+                    {
+                        promise.complete(
+                            Result<ArrayList<U>>::failure(std::current_exception())
+                        );
+                    }
+                    return;
+                }
 
-                std::lock_guard<std::mutex> lock(m_mutex);
-                m_queue.append(std::move(task));
-            }
+                if (remaining_batches->fetch_sub(1) == 1 && !failed->load(std::memory_order_acquire))
+                {
+                    promise.complete(
+                        Result<ArrayList<U>>::success(std::move(*results))
+                    );
+                }
+            });
+
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_queue.append(std::move(task));
         }
 
         m_cv.notify_all();

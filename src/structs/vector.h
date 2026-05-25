@@ -854,75 +854,85 @@ namespace vector_detail
 
 // INT
 
-union Vector2i {
+struct Vector2i {
 
-    struct
+    union
     {
-        int x;
-        int y;
+        struct
+        {
+            int x = 0;
+            int y = 0;
+        };
+        int arr[2];
     };
-    int arr[2];
 
-    constexpr Vector2i() : x(0), y(0) {}
-    constexpr Vector2i(int x, int y) : x(x), y(y) {}
+    constexpr Vector2i() = default;
+    constexpr Vector2i(int vx, int vy) : x(vx), y(vy) {}
 
     CPP_GAME_ENGINE_ARRAY_METHODS(Vector2i, int, INT_MAX)
     CPP_GAME_ENGINE_SCALAR_FRIEND_METHODS(Vector2i, int, INT_MAX)
 };
 
-union Vector3i {
+struct Vector3i {
 
-    struct
+    union
     {
-        int x;
-        int y;
-        int z;
+        struct
+        {
+            int x = 0;
+            int y = 0;
+            int z = 0;
+        };
+        int arr[3];
     };
-    int arr[3];
 
-    constexpr Vector3i() : x(0), y(0), z(0) {}
-    constexpr Vector3i(int x, int y, int z) : x(x), y(y), z(z) {}
+    constexpr Vector3i() = default;
+    constexpr Vector3i(int vx, int vy, int vz) : x(vx), y(vy), z(vz) {}
 
     CPP_GAME_ENGINE_ARRAY_METHODS(Vector3i, int, INT_MAX)
     CPP_GAME_ENGINE_SCALAR_FRIEND_METHODS(Vector3i, int, INT_MAX)
 };
 
-union Vector4i {
+struct Vector4i {
 
-    struct
+    union
     {
-        int a;
-        int b;
-        int c;
-        int d;
+        struct
+        {
+            int a = 0;
+            int b = 0;
+            int c = 0;
+            int d = 0;
+        };
+        int arr[4];
     };
-    int arr[4];
 
-    constexpr Vector4i() : a(0), b(0), c(0), d(0) {}
-    constexpr Vector4i(int a, int b, int c, int d) : a(a), b(b), c(c), d(d) {}
+    constexpr Vector4i() = default;
+    constexpr Vector4i(int va, int vb, int vc, int vd) : a(va), b(vb), c(vc), d(vd) {}
 
     CPP_GAME_ENGINE_ARRAY_METHODS(Vector4i, int, INT_MAX)
     CPP_GAME_ENGINE_SCALAR_FRIEND_METHODS(Vector4i, int, INT_MAX)
 };
 
-union Vector8i {
-    struct
-    {
-        int a;
-        int b;
-        int c;
-        int d;
-        int e;
-        int f;
-        int g;
-        int h;
-    };
-    int arr[8];
+struct Vector8i {
 
-    constexpr Vector8i()
-        : a(0), b(0), c(0), d(0), e(0), f(0), g(0), h(0) {}
-    constexpr Vector8i(int a, int b, int c, int d, int e, int f, int g, int h)
-        : a{a}, b{b}, c{c}, d{d}, e{e}, f{f}, g{g}, h{h} {}
+    union
+    {
+        struct
+        {
+            int a = 0;
+            int b = 0;
+            int c = 0;
+            int d = 0;
+            int e = 0;
+            int f = 0;
+            int g = 0;
+            int h = 0;
+        };
+        int arr[8];
+    };
+
+    constexpr Vector8i() = default;
 
     CPP_GAME_ENGINE_ARRAY_METHODS(Vector8i, int, INT_MAX)
     CPP_GAME_ENGINE_SCALAR_FRIEND_METHODS(Vector8i, int, INT_MAX)
@@ -931,76 +941,85 @@ union Vector8i {
 
 // FLOAT
 
-union Vector2f {
+struct Vector2f {
 
-    struct
+    union
     {
-        float x;
-        float y;
+        struct
+        {
+            float x = 0.0f;
+            float y = 0.0f;
+        };
+        float arr[2];
     };
-    float arr[2];
 
-    constexpr Vector2f() : x(0.0f), y(0.0f) {}
-    constexpr Vector2f(float x, float y) : x(x), y(y) {}
+    constexpr Vector2f() = default;
+    constexpr Vector2f(float vx, float vy) : x(vx), y(vy) {}
 
     CPP_GAME_ENGINE_ARRAY_METHODS(Vector2f, float, FLT_MAX)
     CPP_GAME_ENGINE_SCALAR_FRIEND_METHODS(Vector2f, float, FLT_MAX)
 };
 
-union Vector3f {
+struct Vector3f {
 
-    struct
+    union
     {
-        float x;
-        float y;
-        float z;
+        struct
+        {
+            float x = 0.0f;
+            float y = 0.0f;
+            float z = 0.0f;
+        };
+        float arr[3];
     };
-    float arr[3];
 
-    constexpr Vector3f() : x(0.0f), y(0.0f), z(0.0f) {}
-    constexpr Vector3f(float x, float y, float z) : x(x), y(y), z(z) {}
+    constexpr Vector3f() = default;
+    constexpr Vector3f(float vx, float vy, float vz) : x(vx), y(vy), z(vz) {}
 
     CPP_GAME_ENGINE_ARRAY_METHODS(Vector3f, float, FLT_MAX)
     CPP_GAME_ENGINE_SCALAR_FRIEND_METHODS(Vector3f, float, FLT_MAX)
 };
 
-union Vector4f {
+struct Vector4f {
 
-    struct
+    union
     {
-        float a;
-        float b;
-        float c;
-        float d;
+        struct
+        {
+            float a = 0.0f;
+            float b = 0.0f;
+            float c = 0.0f;
+            float d = 0.0f;
+        };
+        float arr[4];
     };
-    float arr[4];
 
-    constexpr Vector4f() : a(0.0f), b(0.0f), c(0.0f), d(0.0f) {}
-    constexpr Vector4f(float a, float b, float c, float d) : a(a), b(b), c(c), d(d) {}
+    constexpr Vector4f() = default;
+    constexpr Vector4f(float va, float vb, float vc, float vd) : a(va), b(vb), c(vc), d(vd) {}
 
     CPP_GAME_ENGINE_ARRAY_METHODS(Vector4f, float, FLT_MAX)
     CPP_GAME_ENGINE_SCALAR_FRIEND_METHODS(Vector4f, float, FLT_MAX)
 };
 
-union Vector8f {
+struct Vector8f {
 
-    struct
+    union
     {
-        float a;
-        float b;
-        float c;
-        float d;
-        float e;
-        float f;
-        float g;
-        float h;
+        struct
+        {
+            float a = 0.0f;
+            float b = 0.0f;
+            float c = 0.0f;
+            float d = 0.0f;
+            float e = 0.0f;
+            float f = 0.0f;
+            float g = 0.0f;
+            float h = 0.0f;
+        };
+        float arr[8];
     };
-    float arr[8];
 
-    constexpr Vector8f()
-        : a(0.0f), b(0.0f), c(0.0f), d(0.0f), e(0.0f), f(0.0f), g(0.0f), h(0.0f) {}
-    constexpr Vector8f(float a, float b, float c, float d, float e, float f, float g, float h)
-        : a{a}, b{b}, c{c}, d{d}, e{e}, f{f}, g{g}, h{h} {}
+    constexpr Vector8f() = default;
 
     CPP_GAME_ENGINE_ARRAY_METHODS(Vector8f, float, FLT_MAX)
     CPP_GAME_ENGINE_SCALAR_FRIEND_METHODS(Vector8f, float, FLT_MAX)
@@ -1008,45 +1027,43 @@ union Vector8f {
 
 // MATRIX
 
-union Matrix4f
+struct Matrix4f
 {
-
-    struct
+    union
     {
-        float m00;
-        float m01;
-        float m02;
-        float m03;
+        struct
+        {
+            float m00 = 0.0f;
+            float m01 = 0.0f;
+            float m02 = 0.0f;
+            float m03 = 0.0f;
 
-        float m10;
-        float m11;
-        float m12;
-        float m13;
+            float m10 = 0.0f;
+            float m11 = 0.0f;
+            float m12 = 0.0f;
+            float m13 = 0.0f;
 
-        float m20;
-        float m21;
-        float m22;
-        float m23;
+            float m20 = 0.0f;
+            float m21 = 0.0f;
+            float m22 = 0.0f;
+            float m23 = 0.0f;
 
-        float m30;
-        float m31;
-        float m32;
-        float m33;
+            float m30 = 0.0f;
+            float m31 = 0.0f;
+            float m32 = 0.0f;
+            float m33 = 0.0f;
+        };
+        struct
+        {
+            Vector4f v0;
+            Vector4f v1;
+            Vector4f v2;
+            Vector4f v3;
+        };
+        float arr[16];
     };
-    struct
-    {
-        Vector4f v0;
-        Vector4f v1;
-        Vector4f v2;
-        Vector4f v3;
-    };
-    float arr[16];
 
-    constexpr Matrix4f()
-        : m00(0.0f), m01(0.0f), m02(0.0f), m03(0.0f),
-          m10(0.0f), m11(0.0f), m12(0.0f), m13(0.0f),
-          m20(0.0f), m21(0.0f), m22(0.0f), m23(0.0f),
-          m30(0.0f), m31(0.0f), m32(0.0f), m33(0.0f) {}
+    constexpr Matrix4f() = default;
 
     CPP_GAME_ENGINE_ARRAY_METHODS(Matrix4f, float, FLT_MAX)
     CPP_GAME_ENGINE_SCALAR_FRIEND_METHODS(Matrix4f, float, FLT_MAX)

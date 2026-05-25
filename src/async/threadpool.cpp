@@ -28,8 +28,7 @@ void Threadpool::thread_global_entrance_point(Threadpool* pool)
             if (pool->m_stopping && pool->m_queue.empty())
                 return;
 
-            task = std::move(pool->m_queue.peek());
-            pool->m_queue.pop();
+            task = pool->m_queue.pop();
         }
 
         try
@@ -69,7 +68,6 @@ void Threadpool::shutdown()
             t.join();
     }
 }
-
 
 
 

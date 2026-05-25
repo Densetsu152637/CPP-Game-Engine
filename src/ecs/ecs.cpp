@@ -6,8 +6,11 @@
 
 #include <ranges>
 
-Entity ECS::make_handle(const size_t index) const
-{ return Entity{ index, m_entities.at(index).version }; }
+Entity ECS::make_handle(const EntityRecord& record, const size_t& index)
+{ return Entity{ index, record.version }; }
+
+Entity ECS::make_handle(const size_t& index)
+{ return make_handle(m_entities[index], index); }
 
 bool ECS::is_alive_index(const size_t index) const
 { return index < m_entities.length() && m_entities[index].alive; }
@@ -49,7 +52,7 @@ void ECS::destroyEntity(const Entity& entity)
     ++version;
     m_freeList.append(entity.index);
 
-    for (auto& pool : m_componentPools | std::views::values)
+    for (const auto& pool : m_componentPools | std::views::values)
     {
         pool->erase(entity.index);
     }
@@ -68,5 +71,13 @@ void ECS::clear()
     for (auto& pool : m_componentPools | std::views::values)
     {
         pool->clear();
+    }
+}
+
+void ECS::swapBuffers()
+{
+    for (auto& pool : m_componentPools | std::views::values)
+    {
+        pool->swapBuffers();
     }
 }
