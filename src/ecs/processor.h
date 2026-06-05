@@ -13,6 +13,32 @@
 
 namespace ecs_processor_detail
 {
+    inline void throw_if_wall_conflicts(
+        const std::string& jobName,
+        const std::string& wallName,
+        const ecs_sim::SimulationJob& job,
+        const ArrayList<std::string>& wallJobs,
+        const std::unordered_map<std::string, ecs_sim::SimulationJob>& simJobs
+    ) {
+        for (const std::string& existingJobName : wallJobs)
+        {
+            if (existingJobName == jobName)
+                continue;
+
+            const auto existingJob = simJobs.find(existingJobName);
+            if (existingJob == simJobs.end())
+                continue;
+
+            if (ecs_sim::conflicts_with(existingJob->second.access, job.access))
+            {
+                throw std::runtime_error(
+                    "ECSProcessor job \"" + jobName + "\" conflicts with job \"" +
+                    existingJobName + "\" already queued into wall \"" + wallName + "\""
+                );
+            }
+        }
+    }
+
     template <typename Arg>
     void guarantee_sim_pool(ECS& ecs)
     {
@@ -116,6 +142,14 @@ ECSProcessor& ECSProcessor::queue_into_sim(const std::string& name, std::string 
 
     ecs_processor_detail::guarantee_sim_pools<Args...>(m_ecs);
     const SimulationJob job = ecs_sim::make_sim_job<Args...>(std::forward<Callable>(callable));
+
+    ecs_processor_detail::throw_if_wall_conflicts(
+        name,
+        wall,
+        job,
+        m_wall_jobs.at(wall),
+        m_sim_jobs
+    );
 
     _remove_job_from_walls(name);
     m_sim_jobs[name] = job;

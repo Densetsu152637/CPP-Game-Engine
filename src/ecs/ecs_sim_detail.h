@@ -164,12 +164,6 @@ namespace ecs_sim
             || contains_any(lhs.reads, rhs.writes);
     }
 
-    inline void append_access(AccessSpec& dst, const AccessSpec& src)
-    {
-        dst.reads.append(src.reads);
-        dst.writes.append(src.writes);
-    }
-
     template <typename T>
     void append_access(AccessSpec& spec)
     {
@@ -199,14 +193,6 @@ namespace ecs_sim
     {
         AccessSpec spec;
         (append_access<Args>(spec), ...);
-        return spec;
-    }
-
-    template <typename... Components>
-    AccessSpec build_render_access_spec()
-    {
-        AccessSpec spec;
-        (spec.reads.append(typeid(std::remove_cvref_t<Components>).hash_code()), ...);
         return spec;
     }
 
@@ -381,7 +367,6 @@ namespace ecs_sim
         );
 
         RenderJob job;
-        job.access = build_render_access_spec<Components...>();
         job.run = [
             callable = DecayedCallable(std::forward<Callable>(callable))
         ](ECS& ecs) mutable
@@ -406,77 +391,25 @@ namespace ecs_sim
         }
     }
 
-    inline bool try_append_to_existing_batch(
-        ArrayList<ArrayList<Job*>>& batches,
-        ArrayList<AccessSpec>& batchAccess,
-        Job& job
-    ) {
-        for (size_t i = 0; i < batches.length(); ++i)
-        {
-            if (conflicts_with(batchAccess[i], job.access))
-                continue;
+    inline void execute_wall(Threadpool& pool, ECS& ecs, ArrayList<Job>& jobs)
+    {
+        if (jobs.empty())
+            return;
 
-            batches[i].append(&job);
-            append_access(batchAccess[i], job.access);
-            return true;
-        }
+        ArrayList<Promise<bool>> promises;
+        promises.reserve(jobs.length());
 
-        return false;
-    }
-
-    inline void append_new_batch(
-        ArrayList<ArrayList<Job*>>& batches,
-        ArrayList<AccessSpec>& batchAccess,
-        Job& job
-    ) {
-        batches.append(ArrayList<Job*>());
-        batches[batches.length() - 1].append(&job);
-        batchAccess.append(job.access);
-    }
-
-    inline void build_execution_batches(
-        ArrayList<Job>& jobs,
-        ArrayList<ArrayList<Job*>>& batches,
-        ArrayList<AccessSpec>& batchAccess
-    ) {
         for (Job& job : jobs)
         {
-            if (try_append_to_existing_batch(batches, batchAccess, job))
-                continue;
-
-            append_new_batch(batches, batchAccess, job);
-        }
-    }
-
-    inline void execute_batch(Threadpool& pool, ECS& ecs, const ArrayList<Job*>& batch)
-    {
-        ArrayList<Promise<bool>> promises;
-        promises.reserve(batch.length());
-
-        for (Job* job : batch)
-        {
-            promises.append(pool.submit([&ecs, job]()
+            promises.append(pool.submit([&ecs, &job]()
             {
-                job->run(ecs);
+                job.run(ecs);
                 return true;
             }));
         }
 
         await_promises(promises);
         ecs.swapSimBuffers();
-    }
-
-    inline void execute_wall(Threadpool& pool, ECS& ecs, ArrayList<Job>& jobs)
-    {
-        if (jobs.empty())
-            return;
-
-        ArrayList<ArrayList<Job*>> batches;
-        ArrayList<AccessSpec> batchAccess;
-        build_execution_batches(jobs, batches, batchAccess);
-
-        for (const auto& batch : batches)
-            execute_batch(pool, ecs, batch);
     }
 
     inline void execute_readonly_wall(Threadpool& pool, ECS& ecs, ArrayList<Job>& jobs)
@@ -497,5 +430,6 @@ namespace ecs_sim
         }
 
         await_promises(promises);
+        ecs.swapRenderBuffers();
     }
 }

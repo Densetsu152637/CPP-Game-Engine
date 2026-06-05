@@ -103,5 +103,4 @@ void ECSProcessor::render()
         render_jobs.append(job);
     }
     ecs_sim::execute_readonly_wall(m_pool, m_ecs, render_jobs);
-    m_ecs.swapRenderBuffers();
 }
