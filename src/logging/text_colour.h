@@ -7,17 +7,24 @@
 #include <cstdint>
 #include <string>
 
-union ARGB
+struct ARGB
 {
-
-    uint32_t hex = 0X00000000;
-    struct
+    union
     {
-        uint8_t a, r, g, b;
+        uint32_t hex = 0X00000000;
+        struct
+        {
+            uint8_t a;
+            uint8_t r;
+            uint8_t g;
+            uint8_t b;
+        };
     };
 
-    ARGB() : hex(0X00000000) {}
-    ARGB(const int vh) : hex(vh) {}
+    constexpr ARGB() = default;
+    constexpr ARGB(const uint32_t vh)
+        : hex(vh)
+    {}
 
 };
 

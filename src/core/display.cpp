@@ -352,12 +352,12 @@ void GLFW_CALLBACK::mouseScrollWheelCallback(GLFWwindow* window, const double xo
         display->getWindowEventManager().processWindowEvent(cb);
 }
 
-void GLFW_CALLBACK::joystickConnectionCallback(int jid, int event)
+void GLFW_CALLBACK::joystickConnectionCallback(int, int)
 {
     //JOYSTICK_CONNECTION TODO
 }
 
-void GLFW_CALLBACK::monitorPlugCallback(GLFWmonitor* monitor, int event)
+void GLFW_CALLBACK::monitorPlugCallback(GLFWmonitor*, int)
 {
     //MONITOR_PLUG TODO
 }

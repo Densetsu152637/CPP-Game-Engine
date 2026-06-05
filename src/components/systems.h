@@ -4,7 +4,14 @@
 
 #pragma once
 
-#include "../ecs/ecs_sim.h"
+#include "../ecs/ecs.h"
 #include "../core/engine.h"
 
-void movementSystem(Engine& engine, ECSSimulator& sim);
+// simulation
+void movementSystem(Engine& engine, ECSProcessor& sim);
+
+
+
+
+// rendering
+void entityRenderer(Engine& engine, ECSProcessor& sim);

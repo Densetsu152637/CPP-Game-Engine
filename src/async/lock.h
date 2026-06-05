@@ -5,8 +5,10 @@
 #pragma once
 
 #include <condition_variable>
+#include <type_traits>
 #include <mutex>
 #include <functional>
+#include <utility>
 
 class Notifier
 {
@@ -133,17 +135,18 @@ public:
         return m_var; // copies
     }
 
-    template <typename U>
-    U map(std::function<U (T&)> func)
+    template <typename Func>
+    auto map(Func&& func) -> std::invoke_result_t<Func, T&>
     {
         std::unique_lock lock(m_mutex);
-        return func(m_var);
+        return std::forward<Func>(func)(m_var);
     }
 
-    void use(std::function<void (T&)> func)
+    template <typename Func>
+    void use(Func&& func)
     {
         std::unique_lock lock(m_mutex);
-        func(m_var);
+        std::forward<Func>(func)(m_var);
     }
 
     T& ref() {

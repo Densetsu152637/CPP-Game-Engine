@@ -48,7 +48,7 @@ void initialiseMonitorEnvironment();
 
 class GLFWDisplay : public IDisplayManager {
 
-    constexpr static std::string DEFAULT_TITLE = "Hello World!";
+    constexpr static const char* DEFAULT_TITLE = "Hello World!";
 
     GLFWwindow* m_window = nullptr;
     WindowEventManager m_windowEventManager;

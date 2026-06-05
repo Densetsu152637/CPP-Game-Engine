@@ -39,13 +39,9 @@ public:
     // =========================================
     DoubleBuffer(Supplier factory,
                  std::function<void(const T&, T&)> copierFn)
-        : copier(std::move(copierFn))
-    {
-        buff = {
-            factory(),
-            factory()
-        };
-    }
+        : copier(std::move(copierFn)),
+          buff{factory(), factory()}
+    {}
 
     // =========================================
     // Read (volatile equivalent)
@@ -120,14 +116,9 @@ public:
     // =========================================
     TripleBuffer(Factory factory,
                  std::function<void(const T&, T&)> copierFn)
-        : copier(std::move(copierFn))
-    {
-        buff = {
-            factory(),
-            factory(),
-            factory()
-        };
-    }
+        : copier(std::move(copierFn)),
+          buff{factory(), factory(), factory()}
+    {}
 
     // =========================================
     // Read current frame

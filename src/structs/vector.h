@@ -8,6 +8,11 @@
 #include <climits>
 #include <cstddef>
 
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable: 4201) // nameless struct/union (used for direct component access)
+#endif
+
 #if defined(__SSE2__) || defined(__SSE4_1__) || defined(__AVX__) || defined(__AVX2__) || defined(_M_X64) || defined(_M_IX86_FP)
 #include <immintrin.h>
 #endif
@@ -18,7 +23,7 @@
 #define CPP_GAME_ENGINE_HAS_AVX2 0
 #endif
 
-#if defined(__AVX__) || CPP_GAME_ENGINE_HAS_AVX2
+#if defined(__AVX__) || defined(__AVX2__)
 #define CPP_GAME_ENGINE_HAS_AVX 1
 #else
 #define CPP_GAME_ENGINE_HAS_AVX 0
@@ -860,10 +865,10 @@ struct Vector2i {
     {
         struct
         {
-            int x = 0;
-            int y = 0;
+            int x;
+            int y;
         };
-        int arr[2];
+        int arr[2]{};
     };
 
     constexpr Vector2i() = default;
@@ -879,11 +884,11 @@ struct Vector3i {
     {
         struct
         {
-            int x = 0;
-            int y = 0;
-            int z = 0;
+            int x;
+            int y;
+            int z;
         };
-        int arr[3];
+        int arr[3]{};
     };
 
     constexpr Vector3i() = default;
@@ -899,12 +904,12 @@ struct Vector4i {
     {
         struct
         {
-            int a = 0;
-            int b = 0;
-            int c = 0;
-            int d = 0;
+            int a;
+            int b;
+            int c;
+            int d;
         };
-        int arr[4];
+        int arr[4]{};
     };
 
     constexpr Vector4i() = default;
@@ -920,16 +925,16 @@ struct Vector8i {
     {
         struct
         {
-            int a = 0;
-            int b = 0;
-            int c = 0;
-            int d = 0;
-            int e = 0;
-            int f = 0;
-            int g = 0;
-            int h = 0;
+            int a;
+            int b;
+            int c;
+            int d;
+            int e;
+            int f;
+            int g;
+            int h;
         };
-        int arr[8];
+        int arr[8]{};
     };
 
     constexpr Vector8i() = default;
@@ -947,10 +952,10 @@ struct Vector2f {
     {
         struct
         {
-            float x = 0.0f;
-            float y = 0.0f;
+            float x;
+            float y;
         };
-        float arr[2];
+        float arr[2]{};
     };
 
     constexpr Vector2f() = default;
@@ -966,11 +971,11 @@ struct Vector3f {
     {
         struct
         {
-            float x = 0.0f;
-            float y = 0.0f;
-            float z = 0.0f;
+            float x;
+            float y;
+            float z;
         };
-        float arr[3];
+        float arr[3]{};
     };
 
     constexpr Vector3f() = default;
@@ -986,12 +991,12 @@ struct Vector4f {
     {
         struct
         {
-            float a = 0.0f;
-            float b = 0.0f;
-            float c = 0.0f;
-            float d = 0.0f;
+            float a;
+            float b;
+            float c;
+            float d;
         };
-        float arr[4];
+        float arr[4]{};
     };
 
     constexpr Vector4f() = default;
@@ -1007,16 +1012,16 @@ struct Vector8f {
     {
         struct
         {
-            float a = 0.0f;
-            float b = 0.0f;
-            float c = 0.0f;
-            float d = 0.0f;
-            float e = 0.0f;
-            float f = 0.0f;
-            float g = 0.0f;
-            float h = 0.0f;
+            float a;
+            float b;
+            float c;
+            float d;
+            float e;
+            float f;
+            float g;
+            float h;
         };
-        float arr[8];
+        float arr[8]{};
     };
 
     constexpr Vector8f() = default;
@@ -1033,25 +1038,25 @@ struct Matrix4f
     {
         struct
         {
-            float m00 = 0.0f;
-            float m01 = 0.0f;
-            float m02 = 0.0f;
-            float m03 = 0.0f;
+            float m00;
+            float m01;
+            float m02;
+            float m03;
 
-            float m10 = 0.0f;
-            float m11 = 0.0f;
-            float m12 = 0.0f;
-            float m13 = 0.0f;
+            float m10;
+            float m11;
+            float m12;
+            float m13;
 
-            float m20 = 0.0f;
-            float m21 = 0.0f;
-            float m22 = 0.0f;
-            float m23 = 0.0f;
+            float m20;
+            float m21;
+            float m22;
+            float m23;
 
-            float m30 = 0.0f;
-            float m31 = 0.0f;
-            float m32 = 0.0f;
-            float m33 = 0.0f;
+            float m30;
+            float m31;
+            float m32;
+            float m33;
         };
         struct
         {
@@ -1060,7 +1065,7 @@ struct Matrix4f
             Vector4f v2;
             Vector4f v3;
         };
-        float arr[16];
+        float arr[16]{};
     };
 
     constexpr Matrix4f() = default;
@@ -1084,3 +1089,7 @@ struct Matrix4f
 #undef CPP_GAME_ENGINE_HAS_SSE41
 #undef CPP_GAME_ENGINE_HAS_SSE
 #undef CPP_GAME_ENGINE_HAS_SSE2
+
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif

@@ -20,21 +20,21 @@ ArrayList<char> string_search::to_list(const std::string& s)
 int string_search::find_first(const char* str, const std::string& pattern, const size_t start, const size_t finish)
 {
     if (pattern.empty()) {
-        return start;
+        return static_cast<int>(start);
     }
 
-    const int patternLength = pattern.length();
-    const int limit = finish - patternLength;
+    const size_t patternLength = pattern.length();
+    const size_t limit = finish - patternLength;
 
-    for (int i = start; i <= limit; i++) {
-        int j = 0;
+    for (size_t i = start; i <= limit; i++) {
+        size_t j = 0;
 
         while (j < patternLength && str[i + j] == pattern.at(j)) {
             j++;
         }
 
         if (j == patternLength) {
-            return i;
+            return static_cast<int>(i);
         }
     }
 
@@ -44,28 +44,29 @@ int string_search::find_first(const char* str, const std::string& pattern, const
 int string_search::find_last(const char* str, const std::string& pattern, const size_t start, const size_t finish)
 {
     if (pattern.empty()) {
-        return finish;
+        return static_cast<int>(finish);
     }
 
-    int patternLength = pattern.length();
-    int limit = finish - patternLength;
-    for (int i = limit; i >= start; i--) {
-        int j = 0;
+    const size_t patternLength = pattern.length();
+    const size_t limit = finish - patternLength;
+
+    for (size_t i = limit; i >= start; i--) {
+        size_t j = 0;
         while (j < patternLength && str[i + j] == pattern.at(j)) {
             j++;
         }
         if (j == patternLength) {
-            return i;
+            return static_cast<int>(i);
         }
     }
     return -1;
 }
 
-ArrayList<int> string_search::z_search(const char* str, const std::string& pattern, const size_t start, const size_t finish)
+ArrayList<size_t> string_search::z_search(const char* str, const std::string& pattern, const size_t start, const size_t finish)
 {
     if (pattern.empty()) {
-        ArrayList<int> no_matches(finish - start);
-        for (int i = start; i <= finish; ++i) {
+        ArrayList<size_t> no_matches(finish - start);
+        for (size_t i = start; i <= finish; ++i) {
             no_matches.append(i);
         }
         return no_matches;
@@ -91,10 +92,10 @@ ArrayList<int> string_search::z_search(const char* str, const std::string& patte
     }
 
     // here i = combinedLength
-    ArrayList<int> z_arr = z_algo(combined.data(), combined.size());
-    ArrayList<int> matches;
+    ArrayList<size_t> z_arr = z_algo(combined.data(), combined.size());
+    ArrayList<size_t> matches;
 
-    for (int j = pattern_length + 1; j < z_arr.length(); j++)
+    for (size_t j = pattern_length + 1; j < z_arr.length(); j++)
     {
         if (z_arr[j] == pattern_length)
             matches.append(j - pattern_length + 1);
@@ -103,10 +104,10 @@ ArrayList<int> string_search::z_search(const char* str, const std::string& patte
     return matches;
 }
 
-ArrayList<int> string_search::z_algo(const char* txt, const size_t length)
+ArrayList<size_t> string_search::z_algo(const char* txt, const size_t length)
 {
-    ArrayList<int> arr(length);
-    for (int i = 0; i < length; ++i) {
+    ArrayList<size_t> arr(length);
+    for (size_t i = 0; i < length; ++i) {
         arr.append(0);
     }
 
@@ -114,10 +115,10 @@ ArrayList<int> string_search::z_algo(const char* txt, const size_t length)
         return arr;
     }
 
-    int left = 0;
-    int right = 0;
+    size_t left = 0;
+    size_t right = 0;
 
-    for (int i = 1; i < length; i++)
+    for (size_t i = 1; i < length; i++)
     {
         //
         if (i <= right)

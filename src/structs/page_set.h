@@ -17,6 +17,7 @@ template <typename T>
 struct Page
 {
     T* ptr = nullptr;
+    bool* valid = nullptr;
     size_t size = DEFAULT_PAGE_SZ;
     size_t elems = 0;
 
@@ -33,16 +34,19 @@ struct Page
         for (size_t i = 0; i < p.size; ++i)
         {
             ptr[i] = p.ptr[i];
+            valid[i] = p.valid[i];
         }
     }
 
     Page(Page&& p) noexcept
     {
         ptr = p.ptr;
+        valid = p.valid;
         size = p.size;
         elems = p.elems;
 
         p.ptr = nullptr;
+        p.valid = nullptr;
         p.size = DEFAULT_PAGE_SZ;
         p.elems = 0;
     }
@@ -66,6 +70,7 @@ struct Page
         for (size_t i = 0; i < p.size; ++i)
         {
             ptr[i] = p.ptr[i];
+            valid[i] = p.valid[i];
         }
         return *this;
     }
@@ -79,10 +84,12 @@ struct Page
 
         unpaginate();
         ptr = p.ptr;
+        valid = p.valid;
         size = p.size;
         elems = p.elems;
 
         p.ptr = nullptr;
+        p.valid = nullptr;
         p.size = DEFAULT_PAGE_SZ;
         p.elems = 0;
         return *this;
@@ -94,21 +101,25 @@ struct Page
     void repaginate()
     {
         delete[] ptr;
+        delete[] valid;
         ptr = new T[size] {};
+        valid = new bool[size] {};
         elems = 0;
     }
 
     void unpaginate()
     {
         delete[] ptr;
+        delete[] valid;
         ptr = nullptr;
+        valid = nullptr;
         elems = 0;
     }
 
     T& operator[](const size_t index) { return ptr[index]; }
     const T& operator[](const size_t index) const { return ptr[index]; }
 
-    bool initialised() const { return nullptr != ptr; }
+    bool initialised() const { return nullptr != ptr && nullptr != valid; }
 
     using iterator = T*;
     using const_iterator = const T*;
@@ -125,7 +136,7 @@ template <typename T>
 class PaginatedSet
 {
     ArrayList<Page<T>> pages;
-    const size_t pageSize = DEFAULT_PAGE_SZ;
+    size_t pageSize = DEFAULT_PAGE_SZ;
     size_t m_elems = 0;
 
     Page<T>& _guarantee_page(size_t index);
@@ -137,6 +148,11 @@ class PaginatedSet
 public:
     PaginatedSet() = default;
     explicit PaginatedSet(const size_t ps) : pageSize(ps) {}
+
+    PaginatedSet(const PaginatedSet& set) noexcept = default;
+    PaginatedSet(PaginatedSet&& set) noexcept;
+    PaginatedSet& operator=(const PaginatedSet& set) noexcept = default;
+    PaginatedSet& operator=(PaginatedSet&& set) noexcept;
 
     size_t size() const { return m_elems; }
     bool empty() const { return 0 == m_elems; }
@@ -150,7 +166,7 @@ public:
     T& at(size_t index);
     const T& at(size_t index) const;
 
-    void set( size_t index, T elem);
+    void set(size_t index, const T& elem);
     void set(size_t index, T&& elem);
     template <typename... Args>
     T& emplace(size_t index, Args&&... args);
@@ -159,9 +175,36 @@ public:
 };
 
 template <typename T>
+PaginatedSet<T>::PaginatedSet(PaginatedSet&& set) noexcept
+{
+    this->pages    = std::move(set.pages);
+    this->pageSize = set.pageSize;
+    this->m_elems  = set.m_elems;
+
+    set.m_elems = 0;
+}
+
+template <typename T>
+PaginatedSet<T>& PaginatedSet<T>::operator=(PaginatedSet&& set) noexcept
+{
+    this->pages    = std::move(set.pages);
+    this->pageSize = set.pageSize;
+    this->m_elems  = set.m_elems;
+
+    set.m_elems = 0;
+    return *this;
+}
+
+template <typename T>
 Page<T>& PaginatedSet<T>::_guarantee_page(const size_t index)
 {
-    pages.guarantee(index);
+    if (index >= pages.length())
+    {
+        const size_t diff = index - pages.length();
+        for (size_t i = 0; i < diff; ++i)
+            pages.appendGhost();
+    }
+
     return pages[index];
 }
 
@@ -181,9 +224,15 @@ Page<T>& PaginatedSet<T>::_ensure_initialised(const size_t index)
 template <typename T>
 bool PaginatedSet<T>::contains(const size_t index) const
 {
-    if (index >= pages.length()) return false;
-    Page<T>& page = pages[index / pageSize];
-    return page.initialised();
+    const size_t pageIndex = index / pageSize;
+    if (pageIndex >= pages.length())
+        return false;
+
+    const Page<T>& page = pages[pageIndex];
+    if (!page.initialised())
+        return false;
+
+    return page.valid[index % pageSize];
 }
 
 template <typename T>
@@ -225,19 +274,19 @@ const T& PaginatedSet<T>::at(const size_t index) const
 }
 
 template <typename T>
-void PaginatedSet<T>::set(const size_t index, T elem)
+void PaginatedSet<T>::set(const size_t index, const T& elem)
 {
-    return this->set(index, std::move(elem));
+    this->set(index, T(elem));
 }
 
 template <typename T>
 void PaginatedSet<T>::set(const size_t index, T&& elem)
 {
     Page<T>& page = _ensure_initialised(index / pageSize);
-    const size_t locaIndex = index % pageSize;
+    const size_t localIndex = index % pageSize;
 
-    this->validate(page, locaIndex);
-    page[locaIndex] = std::move(elem);
+    this->validate(page, localIndex);
+    page[localIndex] = std::move(elem);
 }
 
 template <typename T>
@@ -261,20 +310,19 @@ void PaginatedSet<T>::erase(const size_t index)
 
     const size_t localIndex = index % pageSize;
 
+    if (!contains(index))
+        return;
+
     this->invalidate(page, localIndex);
-
-    page.valid[localIndex] = false;
-    --page.elems;
-    --m_elems;
-
-    if (page.elems == 0)
-        page.unpaginate();
-
 }
 
 template <typename T>
 void PaginatedSet<T>::invalidate(Page<T>& page, const size_t localIndex)
 {
+    if (!page.valid[localIndex])
+        return;
+
+    page.valid[localIndex] = false;
     --page.elems;
     --m_elems;
 
@@ -285,6 +333,10 @@ void PaginatedSet<T>::invalidate(Page<T>& page, const size_t localIndex)
 template <typename T>
 void PaginatedSet<T>::validate(Page<T>& page, const size_t localIndex)
 {
+    if (page.valid[localIndex])
+        return;
+
+    page.valid[localIndex] = true;
     ++page.elems;
     ++m_elems;
 }

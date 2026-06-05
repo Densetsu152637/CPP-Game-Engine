@@ -14,7 +14,7 @@
 template <typename T>
 class ArrayList {
 
-    Array<T> m_arr;
+    Array<T, false> m_arr;
 
     void _resize(size_t new_size)
     { m_arr.resize(new_size); }
@@ -33,6 +33,10 @@ public:
 
     ArrayList() = default;
     explicit ArrayList(const size_t initial_capacity) : ArrayList(initial_capacity, false) {}
+    ArrayList(const ArrayList& arr);
+    ArrayList(ArrayList&& arr) noexcept;
+    ArrayList& operator=(const ArrayList& arr);
+    ArrayList& operator=(ArrayList&& arr) noexcept;
 
     ArrayList(const size_t initial_capacity, const bool check_size)
     {
@@ -70,6 +74,9 @@ public:
     void clamp_size()
     { m_arr.clamp_size(); }
 
+    void realloc(const size_t space)
+    { m_arr.realloc(space); }
+
     void clear();
 
     //
@@ -100,7 +107,7 @@ public:
             m_arr[i].~T();
 
         // Construct in-place
-        m_arr[i] = T{std::forward<Args>(args)...};
+        m_arr[i] = T(std::forward<Args>(args)...);
 
         ++m_arr.size;
         return m_arr[i];
@@ -113,7 +120,7 @@ public:
         _resize_if_necessary();
 
         // Construct in-place
-        m_arr[i] = T{std::forward<Args>(args)...};
+        m_arr[i] = T(std::forward<Args>(args)...);
 
         ++m_arr.size;
         return m_arr[i];
@@ -238,10 +245,10 @@ template <typename T>
 void ArrayList<T>::_wrap_around_size(size_t& i) const
 {
     if (i < 0)
-    {
         i = (m_arr.size - i);
-    }
-    i %= m_arr.size;
+
+    if (i != 0)
+        i %= m_arr.size;
 }
 
 template <typename T>
@@ -346,23 +353,23 @@ void ArrayList<T>::clear()
     m_arr.ptr = nullptr;
     m_arr.size = 0;
     m_arr.cap = 0;
-
-    _resize(ARRAY_DEFAULT_INITIAL_CAPACITY);
 }
 
 template <typename T>
 T& ArrayList<T>::at(size_t index)
 {
-    _assert_within_bounds(index);
-    _wrap_around_size(index);
+    if (index >= m_arr.size)
+        throw std::out_of_range("ArrayList index out of range");
+
     return m_arr[index];
 }
 
 template <typename T>
 const T& ArrayList<T>::at(size_t index) const
 {
-    _assert_within_bounds(index);
-    _wrap_around_size(index);
+    if (index >= m_arr.size)
+        throw std::out_of_range("ArrayList index out of range");
+
     return m_arr[index];
 }
 

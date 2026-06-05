@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <cstdint>
+#include <utility>
+
 #include "text_colour.h"
 #include "../structs/arraylist.h"
 #include "../structs/smartstring.h"
@@ -11,12 +14,12 @@
 struct LoggedInformation
 {
 
-    long timestamp = 0;
+    int64_t timestamp = 0;
     ArrayList<TextColour> colours;
     std::string msg;
 
     LoggedInformation() = default;
-    LoggedInformation(long ts, std::string str) : timestamp(ts), msg(str) {}
+    LoggedInformation(const int64_t ts, std::string str) : timestamp(ts), msg(std::move(str)) {}
 
 };
 
@@ -35,7 +38,7 @@ public:
     void logHistory();
 
     void log(const LoggedInformation& info) { log(info.msg); };
-    virtual void log(const std::string& msg) {}
+    virtual void log(const std::string&) {}
 
     Logger& error(const std::exception& e);
     Logger& error(const std::exception& e, std::initializer_list<TextColour> colours);

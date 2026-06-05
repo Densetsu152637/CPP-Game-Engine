@@ -122,6 +122,24 @@ struct Array
     size_t length() const { return size; }
     size_t capacity() const { return cap; }
 
+    void realloc(const size_t space)
+    {
+        if (cap > space)
+        {
+            for (size_t i = 0; i < this->size; i++)
+            {
+                ptr[i].~T();
+            }
+            size = 0;
+            return;
+        }
+
+        // not enough space, just clear and realloc
+
+        clear();
+        reserve(space);
+    }
+
     void clear()
     {
         delete[] ptr;
@@ -133,7 +151,7 @@ struct Array
     using iterator = T*;
     using const_iterator = const T*;
 
-    size_t _end()
+    size_t _end() const
     {
         if constexpr (PREINITIALISE) return cap;
         else return size;
@@ -202,7 +220,7 @@ struct Array
 };
 
 template <typename T>
-void array_cpy(Array<T>& dst, const int dst_start, const Array<T>& src, const int src_start, const int length)
+void array_cpy(Array<T>& dst, const size_t dst_start, const Array<T>& src, const size_t src_start, const size_t length)
 {
     for (int i = 0; i < length; ++i)
     {

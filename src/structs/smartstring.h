@@ -9,6 +9,8 @@
 
 #include "arraylist.h"
 
+int safe_size_t_to_int(size_t& source);
+
 class SmartString;
 
 struct SharedString

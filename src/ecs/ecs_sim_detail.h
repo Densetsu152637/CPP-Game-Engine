@@ -21,8 +21,8 @@ namespace ecs_sim
 
     struct AccessSpec
     {
-        ArrayList<TypeId> reads;
-        ArrayList<TypeId> writes;
+        ArrayList<TypeId> reads{4};
+        ArrayList<TypeId> writes{4};
     };
 
     struct Job
@@ -30,6 +30,9 @@ namespace ecs_sim
         std::function<void(ECS&)> run;
         AccessSpec access;
     };
+
+    using SimulationJob = Job;
+    using RenderJob = Job;
 
     template <typename T>
     struct is_entity_arg : std::bool_constant<std::is_same_v<std::remove_cvref_t<T>, Entity>>
@@ -174,17 +177,17 @@ namespace ecs_sim
 
         if constexpr (is_read_wrapper_v<Arg>)
         {
-            using Component = std::remove_cvref_t<typename Arg::value_type>;
+            using Component = std::remove_cvref_t<typename Arg::component_type>;
             spec.reads.append(typeid(Component).hash_code());
         }
         else if constexpr (is_write_wrapper_v<Arg>)
         {
-            using Component = std::remove_cvref_t<typename Arg::value_type>;
+            using Component = std::remove_cvref_t<typename Arg::component_type>;
             spec.writes.append(typeid(Component).hash_code());
         }
         else if constexpr (is_readwrite_wrapper_v<Arg>)
         {
-            using Component = std::remove_cvref_t<typename Arg::value_type>;
+            using Component = std::remove_cvref_t<typename Arg::component_type>;
             const TypeId id = typeid(Component).hash_code();
             spec.reads.append(id);
             spec.writes.append(id);
@@ -199,6 +202,25 @@ namespace ecs_sim
         return spec;
     }
 
+    template <typename... Components>
+    AccessSpec build_render_access_spec()
+    {
+        AccessSpec spec;
+        (spec.reads.append(typeid(std::remove_cvref_t<Components>).hash_code()), ...);
+        return spec;
+    }
+
+    template <typename Wrapper, typename Component>
+    Wrapper make_component_argument(ECS& ecs, const Entity& entity, const char* missingMessage)
+    {
+        const size_t* roleLookup = nullptr;
+        auto* pair = ecs.try_get<Component>(entity, roleLookup);
+        if (nullptr == pair)
+            throw std::out_of_range(missingMessage);
+
+        return Wrapper(*pair, roleLookup);
+    }
+
     template <typename Arg>
     decltype(auto) make_argument(ECS& ecs, const Entity& entity)
     {
@@ -210,28 +232,30 @@ namespace ecs_sim
         }
         else if constexpr (is_read_wrapper_v<Decayed>)
         {
-            using Component = std::remove_cvref_t<typename Decayed::value_type>;
-            Component* ptr = ecs.try_read<Component>(entity);
-            if (nullptr == ptr)
-                throw std::out_of_range("Missing component for Read argument");
-            return Read<Component>(*ptr);
+            using Component = std::remove_cvref_t<typename Decayed::component_type>;
+            return make_component_argument<Read<Component>, Component>(
+                ecs,
+                entity,
+                "Missing component for Read argument"
+            );
         }
         else if constexpr (is_write_wrapper_v<Decayed>)
         {
-            using Component = std::remove_cvref_t<typename Decayed::value_type>;
-            Component* ptr = ecs.try_write<Component>(entity);
-            if (nullptr == ptr)
-                throw std::out_of_range("Missing component for Write argument");
-            return Write<Component>(*ptr);
+            using Component = std::remove_cvref_t<typename Decayed::component_type>;
+            return make_component_argument<Write<Component>, Component>(
+                ecs,
+                entity,
+                "Missing component for Write argument"
+            );
         }
         else if constexpr (is_readwrite_wrapper_v<Decayed>)
         {
-            using Component = std::remove_cvref_t<typename Decayed::value_type>;
-            Component* readPtr = ecs.try_read<Component>(entity);
-            Component* writePtr = ecs.try_write<Component>(entity);
-            if (nullptr == readPtr || nullptr == writePtr)
-                throw std::out_of_range("Missing component for ReadWrite argument");
-            return ReadWrite<Component>(*readPtr, *writePtr);
+            using Component = std::remove_cvref_t<typename Decayed::component_type>;
+            return make_component_argument<ReadWrite<Component>, Component>(
+                ecs,
+                entity,
+                "Missing component for ReadWrite argument"
+            );
         }
         else
         {
@@ -292,7 +316,7 @@ namespace ecs_sim
     void run_component_job(ECS& ecs, Callable& callable, type_list<Components...>)
     {
         auto view = ecs.view<Components...>();
-        view.each([&](const Entity& entity, Pair<Components>&...)
+        view.each([&](const Entity& entity, Pair<ecs::component_value_t<Components>>&...)
         {
             invoke_for_entity<Callable, Args...>(callable, ecs, entity);
         });
@@ -333,6 +357,44 @@ namespace ecs_sim
         return job;
     }
 
+    template <typename... Args, typename Callable>
+    SimulationJob make_sim_job(Callable&& callable)
+    {
+        return make_job<Args...>(std::forward<Callable>(callable));
+    }
+
+    template <typename... Components, typename Callable>
+    RenderJob make_render_job(Callable&& callable)
+    {
+        static_assert(
+            (... && !is_access_wrapper_v<Components>),
+            "ECSProcessor render arguments must be plain component types"
+        );
+
+        using DecayedCallable = std::decay_t<Callable>;
+        static_assert(
+            std::is_invocable_v<
+                DecayedCallable&,
+                const ecs::component_value_t<Components>&...
+            >,
+            "ECSProcessor render callable is not invocable with const component references"
+        );
+
+        RenderJob job;
+        job.access = build_render_access_spec<Components...>();
+        job.run = [
+            callable = DecayedCallable(std::forward<Callable>(callable))
+        ](ECS& ecs) mutable
+        {
+            auto view = ecs.view<Components...>();
+            view.each([&](Pair<ecs::component_value_t<Components>>&... components)
+            {
+                std::invoke(callable, std::as_const(components.at(READ_INDEX))...);
+            });
+        };
+        return job;
+    }
+
     template <typename T>
     void await_promises(ArrayList<Promise<T>>& promises)
     {
@@ -344,6 +406,66 @@ namespace ecs_sim
         }
     }
 
+    inline bool try_append_to_existing_batch(
+        ArrayList<ArrayList<Job*>>& batches,
+        ArrayList<AccessSpec>& batchAccess,
+        Job& job
+    ) {
+        for (size_t i = 0; i < batches.length(); ++i)
+        {
+            if (conflicts_with(batchAccess[i], job.access))
+                continue;
+
+            batches[i].append(&job);
+            append_access(batchAccess[i], job.access);
+            return true;
+        }
+
+        return false;
+    }
+
+    inline void append_new_batch(
+        ArrayList<ArrayList<Job*>>& batches,
+        ArrayList<AccessSpec>& batchAccess,
+        Job& job
+    ) {
+        batches.append(ArrayList<Job*>());
+        batches[batches.length() - 1].append(&job);
+        batchAccess.append(job.access);
+    }
+
+    inline void build_execution_batches(
+        ArrayList<Job>& jobs,
+        ArrayList<ArrayList<Job*>>& batches,
+        ArrayList<AccessSpec>& batchAccess
+    ) {
+        for (Job& job : jobs)
+        {
+            if (try_append_to_existing_batch(batches, batchAccess, job))
+                continue;
+
+            append_new_batch(batches, batchAccess, job);
+        }
+    }
+
+    inline void execute_batch(Threadpool& pool, ECS& ecs, const ArrayList<Job*>& batch)
+    {
+        ArrayList<Promise<bool>> promises;
+        promises.reserve(batch.length());
+
+        for (Job* job : batch)
+        {
+            promises.append(pool.submit([&ecs, job]()
+            {
+                job->run(ecs);
+                return true;
+            }));
+        }
+
+        await_promises(promises);
+        ecs.swapSimBuffers();
+    }
+
     inline void execute_wall(Threadpool& pool, ECS& ecs, ArrayList<Job>& jobs)
     {
         if (jobs.empty())
@@ -351,44 +473,29 @@ namespace ecs_sim
 
         ArrayList<ArrayList<Job*>> batches;
         ArrayList<AccessSpec> batchAccess;
+        build_execution_batches(jobs, batches, batchAccess);
+
+        for (const auto& batch : batches)
+            execute_batch(pool, ecs, batch);
+    }
+
+    inline void execute_readonly_wall(Threadpool& pool, ECS& ecs, ArrayList<Job>& jobs)
+    {
+        if (jobs.empty())
+            return;
+
+        ArrayList<Promise<bool>> promises;
+        promises.reserve(jobs.length());
 
         for (Job& job : jobs)
         {
-            bool placed = false;
-            for (size_t i = 0; i < batches.length(); ++i)
+            promises.append(pool.submit([&ecs, &job]()
             {
-                if (conflicts_with(batchAccess[i], job.access))
-                    continue;
-
-                batches[i].append(&job);
-                append_access(batchAccess[i], job.access);
-                placed = true;
-                break;
-            }
-
-            if (!placed)
-            {
-                batches.append(ArrayList<Job*>());
-                batches[batches.length() - 1].append(&job);
-                batchAccess.append(job.access);
-            }
+                job.run(ecs);
+                return true;
+            }));
         }
 
-        for (const auto& batch : batches)
-        {
-            ArrayList<Promise<bool>> promises;
-            promises.reserve(batch.length());
-
-            for (Job* job : batch)
-            {
-                promises.append(pool.submit([&ecs, job]()
-                {
-                    job->run(ecs);
-                    return true;
-                }));
-            }
-
-            await_promises(promises);
-        }
+        await_promises(promises);
     }
 }

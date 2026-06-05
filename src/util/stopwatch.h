@@ -5,9 +5,11 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
+#include <ctime>
 #include <string>
 
-inline long get_time_ns()
+inline int64_t get_time_ns()
 {
     auto now = std::chrono::high_resolution_clock::now();
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -15,24 +17,26 @@ inline long get_time_ns()
           ).count();;
 }
 
-inline std::string formatDateTime(const long timestamp) {
-    // 1. Convert long to time_t
-    const auto rawTime = static_cast<time_t>(timestamp);
+inline std::string formatDateTime(const int64_t timestampNs) {
+    const auto rawTime = static_cast<std::time_t>(timestampNs / 1'000'000'000);
+    std::tm timeInfo {};
 
-    // 2. Convert to local time structure
-    const tm *timeInfo = localtime(&rawTime);
+#ifdef _WIN32
+    localtime_s(&timeInfo, &rawTime);
+#else
+    localtime_r(&rawTime, &timeInfo);
+#endif
 
-    // 3. Format the string (e.g., YYYY-MM-DD HH:MM:SS)
-    char buffer[128]; // should be safe (hopefully)
-    strftime(buffer, sizeof(buffer), "%Y-%m-%d %HH:%MM:%SS", timeInfo);
+    char buffer[128];
+    std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &timeInfo);
 
     return std::string { buffer };
 }
 
 class StopWatch {
 
-    long vStart;
-    long vStop;
+    int64_t vStart;
+    int64_t vStop;
     bool stopped;
 
 public:
@@ -58,7 +62,7 @@ public:
         start();
     }
 
-    long delta_ns() const
+    int64_t delta_ns() const
     {
         return stopped ? (vStop - vStart) : get_time_ns() - vStart;
     }

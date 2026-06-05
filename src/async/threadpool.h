@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cstddef>
 #include <condition_variable>
 #include <functional>
 #include <memory>
@@ -27,17 +26,17 @@ size_t get_num_processors();
 
 class Threadpool {
 
-    static void thread_global_entrance_point(Threadpool* thread);
+    static void thread_global_entrance_point(Threadpool* pool);
 
-        ArrayList<std::thread> m_pool;
-        std::string m_name;
+    ArrayList<std::thread> m_pool;
+    std::string m_name;
 
-        Queue<std::function<void()>> m_queue;
+    Queue<std::function<void()>> m_queue;
 
-        std::mutex m_mutex;
-        std::condition_variable m_cv;
+    std::mutex m_mutex;
+    std::condition_variable m_cv;
 
-        bool m_stopping = false;
+    std::atomic_bool m_stopping = false;
 
 public:
 
@@ -89,8 +88,10 @@ public:
                 }
             );
 
-            std::lock_guard<std::mutex> lock(m_mutex);
-            m_queue.append(std::move(task));
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_queue.append(std::move(task));
+            }
         }
 
         m_cv.notify_one();
@@ -101,7 +102,7 @@ public:
     Promise<ArrayList<U>> map(
         std::function<U(const T&)> fn,
         const ArrayList<T>* data,
-        size_t min_batch_size = 0)
+        const size_t min_batch_size = 0)
     {
         auto promise = Promise<ArrayList<U>>(this);
         const size_t n = data->length();
@@ -160,8 +161,10 @@ public:
                 }
             });
 
-            std::lock_guard<std::mutex> lock(m_mutex);
-            m_queue.append(std::move(task));
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_queue.append(std::move(task));
+            }
         }
 
         m_cv.notify_all();

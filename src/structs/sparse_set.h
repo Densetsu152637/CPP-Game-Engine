@@ -12,8 +12,12 @@
 #include "page_set.h"
 
 template <typename T>
+class RenderComponentPool;
+
+template <typename T>
 class SparseSet
 {
+    friend class RenderComponentPool<T>;
 
     PaginatedSet<size_t> m_sparse;
     ArrayList<size_t> m_denseKeys;
@@ -136,6 +140,12 @@ public:
 
     size_t key_at(const size_t denseIndex) const
     { return m_denseKeys[denseIndex]; }
+
+    T& dense_at(const size_t denseIndex)
+    { return m_dense[denseIndex]; }
+
+    const T& dense_at(const size_t denseIndex) const
+    { return m_dense[denseIndex]; }
 
     auto begin() { return m_dense.begin(); }
     auto end() { return m_dense.end(); }

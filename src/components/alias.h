@@ -4,8 +4,12 @@
 
 #pragma once
 
+#include "../ecs/component_alias.h"
 #include "../structs/vector.h"
 
-using Position3D = Vector3f;
-using Velocity3D = Vector3f;
+struct Position3DTag {};
+struct Velocity3DTag {};
+
+using Position3D = ecs::Alias<Vector3f, Position3DTag>;
+using Velocity3D = ecs::Alias<Vector3f, Velocity3DTag>;
 

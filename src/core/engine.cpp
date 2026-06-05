@@ -7,6 +7,8 @@
 #include <chrono>
 #include <thread>
 
+#include "../ecs/processor.h"
+
 void enginePeriodicFunction(
     Engine* e,
     void (*fnPtr)(Engine*),
@@ -106,10 +108,11 @@ void Engine::logicAction() const
 
 void Engine::renderAction() const
 {
-    // do something here I guess
+    if (m_simulator)
+        m_simulator->render();
 }
 
-Engine& Engine::setSimulator(ECSSimulator* sim)
+Engine& Engine::setSimulator(ECSProcessor* sim)
 {
     if (sim) m_simulator = sim;
     return *this;
@@ -190,4 +193,3 @@ float Engine::fpsMs() const
 {
     return 1000.0f / static_cast<float>(FPS.load(std::memory_order_acquire));
 };
-

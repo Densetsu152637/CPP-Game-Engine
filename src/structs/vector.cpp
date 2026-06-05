@@ -20,7 +20,7 @@ Matrix4f Matrix4f::identity(float scale)
     result.m00 = scale;
     result.m11 = scale;
     result.m22 = scale;
-    result.m33 = 1;
+    result.m33 = 1.0f;
     return result;
 }
 
@@ -42,17 +42,17 @@ Matrix4f Matrix4f::mat_mult(const Matrix4f& other) const
 Matrix4f Matrix4f::translate(const Vector3i& v) const
 {
     Matrix4f result = Matrix4f::identity();
-    result.m30 = v.x;
-    result.m31 = v.y;
-    result.m32 = v.z;
+    result.m30 = static_cast<float>(v.x);
+    result.m31 = static_cast<float>(v.y);
+    result.m32 = static_cast<float>(v.z);
     return mat_mult(result);
 }
 
 Matrix4f Matrix4f::rotate(const float rad, const Vector3i& axis) const
 {
-    float x = axis.x;
-    float y = axis.y;
-    float z = axis.z;
+    float x = static_cast<float>(axis.x);
+    float y = static_cast<float>(axis.y);
+    float z = static_cast<float>(axis.z);
 
     float len = std::sqrt(x*x + y*y + z*z);
     if (len != 0.0f) {

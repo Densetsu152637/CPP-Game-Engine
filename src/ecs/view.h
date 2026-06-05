@@ -19,7 +19,7 @@ template <typename... Components>
 class View
 {
     ECS* m_ecs = nullptr;
-    std::tuple<ComponentPool<Components>*...> m_pools {};
+    std::tuple<ComponentPool<ecs::component_value_t<Components>>*...> m_pools {};
     size_t m_primaryIndex = Entity::N_POS;
     bool m_cacheResolved = false;
 
@@ -52,7 +52,7 @@ class View
         }
         else
         {
-            m_pools = std::tuple<ComponentPool<Components>*...>{ m_ecs->storage_if_exists<Components>()... };
+            m_pools = std::tuple<ComponentPool<ecs::component_value_t<Components>>*...>{ m_ecs->storage_if_exists<Components>()... };
             m_primaryIndex = select_primary_storage();
         }
 
@@ -204,6 +204,37 @@ class View
         );
     }
 
+    template <typename Callable>
+    bool execute_mt_entity_callback(const Entity& entity, Callable& callable)
+    {
+        if constexpr (0 == sizeof...(Components))
+        {
+            invoke_entity_only_callback(entity, callable);
+        }
+        else
+        {
+            this->visit_entity(
+                entity.index,
+                callable,
+                std::make_index_sequence<sizeof...(Components)>{}
+            );
+        }
+
+        return true;
+    }
+
+    template <typename Callable>
+    std::function<bool(const Entity&)> make_mt_executor(Callable&& callable)
+    {
+        using DecayedCallable = std::decay_t<Callable>;
+        return std::function<bool(const Entity&)>(
+            [this, callable = DecayedCallable(std::forward<Callable>(callable))](const Entity& entity) mutable
+            {
+                return this->execute_mt_entity_callback(entity, callable);
+            }
+        );
+    }
+
     template <typename Func, size_t... Is>
     void visit_entity(const size_t entityIndex, Func& func, std::index_sequence<Is...>)
     {
@@ -211,11 +242,11 @@ class View
         if (!(((std::get<Is>(components) != nullptr) && ...)))
             return;
 
-        if constexpr (std::is_invocable_v<Func&, Entity, Pair<Components>&...>)
+        if constexpr (std::is_invocable_v<Func&, Entity, Pair<ecs::component_value_t<Components>>&...>)
         {
             func(m_ecs->make_handle(entityIndex), *std::get<Is>(components)...);
         }
-        else if constexpr (std::is_invocable_v<Func&, Pair<Components>&...>)
+        else if constexpr (std::is_invocable_v<Func&, Pair<ecs::component_value_t<Components>>&...>)
         {
             func(*std::get<Is>(components)...);
         }
@@ -223,7 +254,7 @@ class View
         {
             static_assert(
                 always_false_v<Func>,
-                "View::each callback must accept `(Entity, Pair<Components>&...)` or `(Pair<Components>&...)`."
+                "View::each callback must accept `(Entity, Pair<Component>&...)` or `(Pair<Component>&...)`."
             );
         }
     }
@@ -236,10 +267,7 @@ public:
         if (!ensure_cache())
             return true;
 
-        if constexpr (0 == sizeof...(Components))
-            return 0 == alive_entity_count();
-
-        return 0 == primary_size_runtime();
+        return 0 == size();
     }
 
     void refresh()
@@ -256,13 +284,15 @@ public:
         if constexpr (0 == sizeof...(Components))
             return alive_entity_count();
 
-        return primary_size_runtime();
+        size_t matches = 0;
+        each([&](auto&&...) { ++matches; });
+        return matches;
     }
 
     ArrayList<Entity> allEntities()
     {
         ArrayList<Entity> entities;
-        this->each([&entities](const Entity& entity, Pair<Components>&...)
+        this->each([&entities](const Entity& entity, Pair<ecs::component_value_t<Components>>&...)
         {
             entities.append(entity);
         });
@@ -275,24 +305,23 @@ public:
         if (!ensure_cache())
             return;
 
-        auto&& callable = func;
         if constexpr (0 == sizeof...(Components))
         {
-            iterate_all_entities(callable);
+            iterate_all_entities(func);
         }
         else
         {
-            each_range(0, primary_size_runtime(), callable);
+            each_range(0, primary_size_runtime(), func);
         }
     }
 
     template <typename Func>
-    void each_mt(Func&& func, Threadpool& pool, const size_t minChunk = 0)
+    void each_mt(Func&& func, Threadpool& pool, const size_t minChunk = 256)
     {
         if (!ensure_cache())
             return;
 
-        ArrayList<Entity> entities = allEntities();
+        const ArrayList<Entity> entities = allEntities();
         if (entities.empty())
             return;
 
@@ -300,25 +329,7 @@ public:
         Callable callableSeed(std::forward<Func>(func));
 
         auto promise = pool.map<Entity, bool>(
-            std::function<bool(const Entity&)>(
-                [this, callable = std::move(callableSeed)](const Entity& entity) mutable
-                {
-                    if constexpr (0 == sizeof...(Components))
-                    {
-                        invoke_entity_only_callback(entity, callable);
-                    }
-                    else
-                    {
-                        this->visit_entity(
-                            entity.index,
-                            callable,
-                            std::make_index_sequence<sizeof...(Components)>{}
-                        );
-                    }
-
-                    return true;
-                }
-            ),
+            make_mt_executor(std::move(callableSeed)),
             &entities,
             minChunk
         );

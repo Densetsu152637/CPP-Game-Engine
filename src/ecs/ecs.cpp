@@ -4,6 +4,7 @@
 
 #include "ecs.h"
 
+#include <format>
 #include <ranges>
 
 Entity ECS::make_handle(const EntityRecord& record, const size_t& index)
@@ -56,6 +57,11 @@ void ECS::destroyEntity(const Entity& entity)
     {
         pool->erase(entity.index);
     }
+
+    for (const auto& pool : m_renderComponentPools | std::views::values)
+    {
+        pool->erase(entity.index);
+    }
 }
 
 bool ECS::hasEntity(const Entity& entity) const
@@ -72,11 +78,24 @@ void ECS::clear()
     {
         pool->clear();
     }
+
+    for (auto& pool : m_renderComponentPools | std::views::values)
+    {
+        pool->clear();
+    }
 }
 
-void ECS::swapBuffers()
+void ECS::swapSimBuffers()
 {
     for (auto& pool : m_componentPools | std::views::values)
+    {
+        pool->swapBuffers();
+    }
+}
+
+void ECS::swapRenderBuffers()
+{
+    for (auto& pool : m_renderComponentPools | std::views::values)
     {
         pool->swapBuffers();
     }

@@ -7,9 +7,9 @@
 
 #include "interfaces.h"
 #include "../async/lock.h"
+#include "../ecs/ecs.h"
 #include "../structs/arraylist.h"
 #include "../logging/logger.h"
-#include "ecs/ecs_sim.h"
 
 class Engine
 {
@@ -18,7 +18,7 @@ class Engine
     ArrayList<std::function<void()>> m_startupListeners;
     ArrayList<std::function<void()>> m_shutdownListeners;
 
-    ECSSimulator* m_simulator = nullptr;
+    ECSProcessor* m_simulator = nullptr;
     IDisplayManager* m_display = nullptr;
     Logger* m_logger = nullptr;
     Waiter m_finisher;
@@ -43,7 +43,7 @@ public:
     void logicAction() const;
     void renderAction() const;
 
-    Engine& setSimulator(ECSSimulator* sim);
+    Engine& setSimulator(ECSProcessor* sim);
     Engine& setLogger(Logger* logger);
     Engine& setDisplay(IDisplayManager* display);
     Engine& addEventListener(WindowEventListener* l);

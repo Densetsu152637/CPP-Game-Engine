@@ -2,7 +2,9 @@
 // Created by Nicholas on 01/05/26.
 //
 
+#ifdef CPP_GAME_ENGINE_USE_VULKAN
 #define GLFW_INCLUDE_VULKAN
+#endif
 #include <GLFW/glfw3.h>
 
 #include <stdexcept>
