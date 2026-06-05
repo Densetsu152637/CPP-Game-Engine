@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <exception>
 #include <iterator>
 #include <functional>
 #include <tuple>
@@ -25,6 +26,29 @@ class View
 
     template <typename>
     static constexpr bool always_false_v = false;
+
+    using component_tuple = std::tuple<Components...>;
+
+    template <size_t I>
+    using component_at_t = std::tuple_element_t<I, component_tuple>;
+
+    template <size_t I>
+    using pair_at_t = Pair<ecs::component_value_t<component_at_t<I>>>;
+
+    struct dense_range
+    {
+        size_t begin = 0;
+        size_t end = 0;
+    };
+
+    static size_t chunk_count(const size_t total, const size_t chunkSize)
+    { return (total + chunkSize - 1) / chunkSize; }
+
+    static dense_range make_chunk_range(const size_t chunk, const size_t chunkSize, const size_t total)
+    {
+        const size_t begin = chunk * chunkSize;
+        return { begin, std::min(total, begin + chunkSize) };
+    }
 
     template <size_t... Is>
     std::array<size_t, sizeof...(Components)> storage_sizes(std::index_sequence<Is...>) const
@@ -150,7 +174,66 @@ class View
         return primarySize;
     }
 
-    template <typename PoolT, typename Func>
+    size_t dense_chunk_size(const size_t total, Threadpool& pool, const size_t minChunk) const
+    {
+        const size_t numThreads = std::max<size_t>(1, pool.size());
+        const size_t defaultChunk = std::max<size_t>(1, total / numThreads);
+        return std::max<size_t>(
+            1,
+            minChunk == 0 ? defaultChunk : minChunk
+        );
+    }
+
+    template <typename Func, typename Tuple, size_t... Is>
+    void invoke_component_callback(const size_t entityIndex, Func& func, Tuple& components, std::index_sequence<Is...>)
+    {
+        if constexpr (std::is_invocable_v<Func&, Entity, pair_at_t<Is>&...>)
+        {
+            func(m_ecs->make_handle(entityIndex), *std::get<Is>(components)...);
+        }
+        else if constexpr (std::is_invocable_v<Func&, pair_at_t<Is>&...>)
+        {
+            func(*std::get<Is>(components)...);
+        }
+        else
+        {
+            static_assert(
+                always_false_v<Func>,
+                "View::each callback must accept `(Entity, Pair<Component>&...)` or `(Pair<Component>&...)`."
+            );
+        }
+    }
+
+    template <size_t I, size_t PrimaryI>
+    pair_at_t<I>* component_ptr_from_primary(const size_t entityIndex, pair_at_t<PrimaryI>& primaryComponent)
+    {
+        if constexpr (I == PrimaryI)
+            return &primaryComponent;
+        else
+            return std::get<I>(m_pools)->try_get(entityIndex);
+    }
+
+    template <typename Tuple, size_t... Is>
+    bool all_components_present(const Tuple& components, std::index_sequence<Is...>) const
+    { return ((std::get<Is>(components) != nullptr) && ...); }
+
+    template <size_t PrimaryI, typename Func, size_t... Is>
+    void visit_entity_from_primary(
+        const size_t entityIndex,
+        pair_at_t<PrimaryI>& primaryComponent,
+        Func& func,
+        std::index_sequence<Is...>
+    ) {
+        auto components = std::tuple{
+            component_ptr_from_primary<Is, PrimaryI>(entityIndex, primaryComponent)...
+        };
+        if (!all_components_present(components, std::make_index_sequence<sizeof...(Components)>{}))
+            return;
+
+        invoke_component_callback(entityIndex, func, components, std::make_index_sequence<sizeof...(Components)>{});
+    }
+
+    template <size_t PrimaryI, typename PoolT, typename Func>
     void iterate_primary_pool_range(PoolT* primary, const size_t beginDense, const size_t endDense, Func& func)
     {
         if (nullptr == primary)
@@ -163,7 +246,13 @@ class View
             if (!m_ecs->is_alive_index(entityIndex))
                 continue;
 
-            this->visit_entity(entityIndex, func, std::make_index_sequence<sizeof...(Components)>{});
+            auto& primaryComponent = primary->dense_at(denseIndex);
+            this->visit_entity_from_primary<PrimaryI>(
+                entityIndex,
+                primaryComponent,
+                func,
+                std::make_index_sequence<sizeof...(Components)>{}
+            );
         }
     }
 
@@ -177,8 +266,10 @@ class View
         bool handled = false;
         size_t currentIndex = 0;
 
-        auto dispatch = [&](auto* primary)
+        auto dispatch = [&](auto index, auto* primary)
         {
+            constexpr size_t I = decltype(index)::value;
+
             if (handled || currentIndex != m_primaryIndex)
             {
                 ++currentIndex;
@@ -186,11 +277,11 @@ class View
             }
 
             handled = true;
-            iterate_primary_pool_range(primary, beginDense, endDense, func);
+            iterate_primary_pool_range<I>(primary, beginDense, endDense, func);
             ++currentIndex;
         };
 
-        (dispatch(std::get<Is>(m_pools)), ...);
+        (dispatch(std::integral_constant<size_t, Is>{}, std::get<Is>(m_pools)), ...);
     }
 
     template <typename Func>
@@ -239,24 +330,84 @@ class View
     void visit_entity(const size_t entityIndex, Func& func, std::index_sequence<Is...>)
     {
         auto components = std::tuple{ std::get<Is>(m_pools)->try_get(entityIndex)... };
-        if (!(((std::get<Is>(components) != nullptr) && ...)))
+        if (!all_components_present(components, std::make_index_sequence<sizeof...(Components)>{}))
             return;
 
-        if constexpr (std::is_invocable_v<Func&, Entity, Pair<ecs::component_value_t<Components>>&...>)
+        invoke_component_callback(entityIndex, func, components, std::make_index_sequence<sizeof...(Components)>{});
+    }
+
+    template <size_t... Is>
+    auto role_lookups_impl(std::index_sequence<Is...>)
+    {
+        ensure_cache();
+        return std::tuple{
+            (nullptr == std::get<Is>(m_pools) ? nullptr : std::get<Is>(m_pools)->role_lookup())...
+        };
+    }
+
+    template <typename Callable>
+    void append_dense_range_jobs(
+        Threadpool& pool,
+        const size_t total,
+        const size_t chunkSize,
+        const size_t chunks,
+        Callable& callable,
+        ArrayList<Promise<bool>>& promises
+    ) {
+        promises.reserve(chunks);
+
+        for (size_t chunk = 0; chunk < chunks; ++chunk)
         {
-            func(m_ecs->make_handle(entityIndex), *std::get<Is>(components)...);
+            const dense_range range = make_chunk_range(chunk, chunkSize, total);
+            promises.append(pool.submit([this, range, callable]() mutable
+            {
+                each_range(range.begin, range.end, callable);
+                return true;
+            }));
         }
-        else if constexpr (std::is_invocable_v<Func&, Pair<ecs::component_value_t<Components>>&...>)
+    }
+
+    void await_all(ArrayList<Promise<bool>>& promises)
+    {
+        for (auto& promise : promises)
         {
-            func(*std::get<Is>(components)...);
+            auto& result = promise.await();
+            if (result.is_failure())
+                std::rethrow_exception(result.exception());
         }
-        else
-        {
-            static_assert(
-                always_false_v<Func>,
-                "View::each callback must accept `(Entity, Pair<Component>&...)` or `(Pair<Component>&...)`."
-            );
-        }
+    }
+
+    template <typename Callable>
+    void each_component_mt(Threadpool& pool, const size_t minChunk, Callable&& callable)
+    {
+        const size_t total = primary_size_runtime();
+        if (0 == total)
+            return;
+
+        const size_t chunkSize = dense_chunk_size(total, pool, minChunk);
+        const size_t chunks = chunk_count(total, chunkSize);
+
+        ArrayList<Promise<bool>> promises;
+        append_dense_range_jobs(pool, total, chunkSize, chunks, callable, promises);
+        await_all(promises);
+    }
+
+    template <typename Callable>
+    void each_entity_mt(Threadpool& pool, const size_t minChunk, Callable&& callable)
+    {
+        const ArrayList<Entity> entities = allEntities();
+        if (entities.empty())
+            return;
+
+        auto promise = pool.map<Entity, bool>(
+            make_mt_executor(std::forward<Callable>(callable)),
+            &entities,
+            minChunk
+        );
+
+        auto& result = promise.await();
+        if (result.is_failure())
+            std::rethrow_exception(result.exception());
     }
 
 public:
@@ -283,6 +434,8 @@ public:
 
         if constexpr (0 == sizeof...(Components))
             return alive_entity_count();
+        else if constexpr (1 == sizeof...(Components))
+            return primary_size_runtime();
 
         size_t matches = 0;
         each([&](auto&&...) { ++matches; });
@@ -292,6 +445,7 @@ public:
     ArrayList<Entity> allEntities()
     {
         ArrayList<Entity> entities;
+        entities.reserve(primary_size_runtime());
         this->each([&entities](const Entity& entity, Pair<ecs::component_value_t<Components>>&...)
         {
             entities.append(entity);
@@ -321,27 +475,23 @@ public:
         if (!ensure_cache())
             return;
 
-        const ArrayList<Entity> entities = allEntities();
-        if (entities.empty())
-            return;
-
         using Callable = std::decay_t<Func>;
         Callable callableSeed(std::forward<Func>(func));
 
-        auto promise = pool.map<Entity, bool>(
-            make_mt_executor(std::move(callableSeed)),
-            &entities,
-            minChunk
-        );
-
-        auto& result = promise.await();
-        if (result.is_failure())
-            std::rethrow_exception(result.exception());
+        if constexpr (0 == sizeof...(Components))
+            each_entity_mt(pool, minChunk, std::move(callableSeed));
+        else
+            each_component_mt(pool, minChunk, std::move(callableSeed));
     }
 
     template <typename Func>
     void each(Func&& func, Threadpool& pool)
     {
         each_mt(std::forward<Func>(func), pool);
+    }
+
+    auto role_lookups()
+    {
+        return role_lookups_impl(std::make_index_sequence<sizeof...(Components)>{});
     }
 };

@@ -38,6 +38,8 @@ class ComponentPool final : public IComponentPool
     std::array<size_t, 2> m_roleToBuffer {READ_INDEX, WRITE_INDEX};
 
 public:
+    using value_type = T;
+    using pair_type = Pair<T>;
 
     ComponentPool() = default;
 
@@ -74,6 +76,15 @@ public:
 
     size_t entity_at(const size_t denseIndex) const
     { return m_storage.key_at(denseIndex); }
+
+    Pair<T>& dense_at(const size_t denseIndex)
+    { return m_storage.dense_at(denseIndex); }
+
+    const Pair<T>& dense_at(const size_t denseIndex) const
+    { return m_storage.dense_at(denseIndex); }
+
+    size_t dense_index_of(const size_t entityIndex) const
+    { return m_storage.index_of(entityIndex); }
 
     size_t read_index() const
     { return m_roleToBuffer[READ_INDEX]; }

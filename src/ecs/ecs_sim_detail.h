@@ -122,6 +122,28 @@ namespace ecs_sim
         using type = type_list<Ts..., T>;
     };
 
+    template <typename List, typename T>
+    struct contains_type;
+
+    template <typename T>
+    struct contains_type<type_list<>, T> : std::false_type
+    {};
+
+    template <typename Head, typename... Tail, typename T>
+    struct contains_type<type_list<Head, Tail...>, T>
+        : std::bool_constant<std::is_same_v<Head, T> || contains_type<type_list<Tail...>, T>::value>
+    {};
+
+    template <typename List, typename T>
+    struct push_unique_type
+    {
+        using type = std::conditional_t<
+            contains_type<List, T>::value,
+            List,
+            typename push_type<List, T>::type
+        >;
+    };
+
     template <typename List, typename... Args>
     struct collect_components;
 
@@ -138,13 +160,25 @@ namespace ecs_sim
         using next = std::conditional_t<
             std::is_void_v<component>,
             List,
-            typename push_type<List, component>::type
+            typename push_unique_type<List, component>::type
         >;
         using type = typename collect_components<next, Rest...>::type;
     };
 
     template <typename... Args>
     using component_list_t = typename collect_components<type_list<>, Args...>::type;
+
+    template <typename T, typename... Ts>
+    struct type_index;
+
+    template <typename T, typename... Rest>
+    struct type_index<T, T, Rest...> : std::integral_constant<size_t, 0>
+    {};
+
+    template <typename T, typename Head, typename... Rest>
+    struct type_index<T, Head, Rest...>
+        : std::integral_constant<size_t, 1 + type_index<T, Rest...>::value>
+    {};
 
     inline bool contains_any(const ArrayList<TypeId>& haystack, const ArrayList<TypeId>& needles)
     {
@@ -249,6 +283,44 @@ namespace ecs_sim
         }
     }
 
+    template <typename Arg, typename... Components, typename ComponentTuple, typename RoleTuple>
+    decltype(auto) make_argument_from_components(
+        const Entity& entity,
+        ComponentTuple& components,
+        const RoleTuple& roleLookups
+    ) {
+        using Decayed = std::remove_cvref_t<Arg>;
+
+        if constexpr (is_entity_arg_v<Decayed>)
+        {
+            return entity;
+        }
+        else
+        {
+            using Component = component_for_arg_t<Decayed>;
+            constexpr size_t componentIndex = type_index<Component, Components...>::value;
+            auto& pair = std::get<componentIndex>(components);
+            const size_t* roleLookup = std::get<componentIndex>(roleLookups);
+
+            if constexpr (is_read_wrapper_v<Decayed>)
+            {
+                return Read<Component>(pair, roleLookup);
+            }
+            else if constexpr (is_write_wrapper_v<Decayed>)
+            {
+                return Write<Component>(pair, roleLookup);
+            }
+            else if constexpr (is_readwrite_wrapper_v<Decayed>)
+            {
+                return ReadWrite<Component>(pair, roleLookup);
+            }
+            else
+            {
+                static_assert(sizeof(Arg) == 0, "Unsupported ECSSimulator argument");
+            }
+        }
+    }
+
     template <typename Callable, typename... Args, size_t... Is>
     void invoke_for_entity_impl(Callable& callable, ECS& ecs, const Entity& entity, std::index_sequence<Is...>)
     {
@@ -272,6 +344,27 @@ namespace ecs_sim
             ecs,
             entity,
             std::make_index_sequence<sizeof...(Args)>{}
+        );
+    }
+
+    template <typename Callable, typename... Args, typename... Components, typename ComponentTuple, typename RoleTuple>
+    void invoke_for_entity_with_components(
+        Callable& callable,
+        type_list<Args...>,
+        type_list<Components...>,
+        const Entity& entity,
+        ComponentTuple& components,
+        const RoleTuple& roleLookups
+    ) {
+        auto args = std::tuple{
+            make_argument_from_components<Args, Components...>(entity, components, roleLookups)...
+        };
+        std::apply(
+            [&](auto&... unpacked)
+            {
+                std::invoke(callable, unpacked...);
+            },
+            args
         );
     }
 
@@ -302,9 +395,18 @@ namespace ecs_sim
     void run_component_job(ECS& ecs, Callable& callable, type_list<Components...>)
     {
         auto view = ecs.view<Components...>();
-        view.each([&](const Entity& entity, Pair<ecs::component_value_t<Components>>&...)
+        auto roleLookups = view.role_lookups();
+        view.each([&](const Entity& entity, Pair<ecs::component_value_t<Components>>&... components)
         {
-            invoke_for_entity<Callable, Args...>(callable, ecs, entity);
+            auto componentTuple = std::forward_as_tuple(components...);
+            invoke_for_entity_with_components(
+                callable,
+                type_list<Args...>{},
+                type_list<Components...>{},
+                entity,
+                componentTuple,
+                roleLookups
+            );
         });
     }
 

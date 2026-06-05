@@ -24,6 +24,8 @@ class SparseSet
     ArrayList<T> m_dense;
 
 public:
+    static constexpr size_t N_POS = static_cast<size_t>(-1);
+
     SparseSet() = default;
 
     size_t size() const
@@ -32,36 +34,42 @@ public:
     bool empty() const
     { return m_dense.empty(); }
 
-    bool contains(const size_t key) const
+    size_t index_of(const size_t key) const
     {
-        if (!m_sparse.contains(key)) return false;
-        const size_t hit = m_sparse[key];
-        if (hit >= m_denseKeys.length()) return false;
-        return key == m_denseKeys[hit];
+        const size_t* denseIndex = m_sparse.try_get(key);
+        if (nullptr == denseIndex || *denseIndex >= m_denseKeys.length())
+            return N_POS;
+
+        return key == m_denseKeys[*denseIndex] ? *denseIndex : N_POS;
     }
 
-    T* try_get_dense(const size_t key)
+    bool contains(const size_t key) const
+    { return N_POS != index_of(key); }
+
+    T* try_get_dense(const size_t denseIndex)
     {
-        if (key >= m_dense.length())
+        if (denseIndex >= m_dense.length())
             return nullptr;
 
-        return &m_dense[key];
+        return &m_dense[denseIndex];
     }
 
     T* try_get(const size_t key)
     {
-        if (!contains(key))
+        const size_t denseIndex = index_of(key);
+        if (N_POS == denseIndex)
         { return nullptr; }
 
-        return &m_dense[m_sparse[key]];
+        return &m_dense[denseIndex];
     }
 
     const T* try_get(const size_t key) const
     {
-        if (!contains(key))
+        const size_t denseIndex = index_of(key);
+        if (N_POS == denseIndex)
         { return nullptr; }
 
-        return &m_dense[m_sparse[key]];
+        return &m_dense[denseIndex];
     }
 
     T& at(const size_t key)
@@ -91,11 +99,11 @@ public:
     template <typename... Args>
     T& emplace(const size_t key, Args&&... args)
     {
-        if (contains(key))
+        const size_t existingIndex = index_of(key);
+        if (N_POS != existingIndex)
         {
-            const size_t denseIndex = m_sparse[key];
-            m_dense[denseIndex] = T(std::forward<Args>(args)...);
-            return m_dense[denseIndex];
+            m_dense[existingIndex] = T(std::forward<Args>(args)...);
+            return m_dense[existingIndex];
         }
 
         const size_t denseIndex = m_dense.length();
@@ -113,10 +121,10 @@ public:
 
     void erase(const size_t key)
     {
-        if (!contains(key))
+        const size_t denseIndex = index_of(key);
+        if (N_POS == denseIndex)
             return;
 
-        const size_t denseIndex = m_sparse[key];
         const size_t lastIndex = m_dense.length() - 1;
 
         if (denseIndex != lastIndex)
