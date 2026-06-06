@@ -33,7 +33,8 @@ namespace ecs_processor_detail
             {
                 throw std::runtime_error(
                     "ECSProcessor job \"" + jobName + "\" conflicts with job \"" +
-                    existingJobName + "\" already queued into wall \"" + wallName + "\""
+                    existingJobName + "\" already queued into wall \"" + wallName +
+                    "\" because both jobs access a non-buffered component mutably"
                 );
             }
         }
@@ -43,10 +44,16 @@ namespace ecs_processor_detail
     void guarantee_sim_pool(ECS& ecs)
     {
         using Component = ecs_sim::component_for_arg_t<Arg>;
+        using ArrayComponent = ecs_sim::array_component_for_arg_t<Arg>;
 
         if constexpr (!std::is_void_v<Component>)
         {
             ecs.template guarantee_component_pool<Component>();
+        }
+
+        if constexpr (!std::is_void_v<ArrayComponent>)
+        {
+            ecs.template guarantee_component_pool<ArrayComponent>();
         }
     }
 

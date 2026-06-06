@@ -11,15 +11,37 @@
 #include <utility>
 
 #include "../structs/sparse_set.h"
-#include "structs/templates.h"
+#include "../structs/templates.h"
+#include "component_alias.h"
 
 constexpr int READ_INDEX = 0;
 constexpr int WRITE_INDEX = 1;
 
+template <typename T>
+class ComponentPool;
+
+template <typename T>
+class BufferedComponentPool;
+
+template <typename T>
+class RenderComponentPool;
+
+namespace component_pool_detail
+{
+    template <typename T>
+    void bind_to_role_lookup(T&, const size_t*) noexcept
+    {}
+
+    template <typename T>
+        requires ecs::is_buffered_component_v<T>
+    void bind_to_role_lookup(T& component, const size_t* roleLookup) noexcept
+    { component.bindRoleLookup(roleLookup); }
+
+}
+
 class IComponentPool
 {
 public:
-
     virtual ~IComponentPool() = default;
     virtual void erase(size_t entityIndex) = 0;
     virtual void clear() = 0;
@@ -34,12 +56,11 @@ class ComponentPool final : public IComponentPool
 {
     friend class RenderComponentPool<T>;
 
-    SparseSet<Pair<T>> m_storage;
-    std::array<size_t, 2> m_roleToBuffer {READ_INDEX, WRITE_INDEX};
+    SparseSet<T> m_storage;
 
 public:
     using value_type = T;
-    using pair_type = Pair<T>;
+    using dense_array_type = ArrayList<T>;
 
     ComponentPool() = default;
 
@@ -49,24 +70,24 @@ public:
     bool contains(const size_t entityIndex) const
     { return m_storage.contains(entityIndex); }
 
-    Pair<T>* try_get(const size_t entityIndex)
+    T* try_get(const size_t entityIndex)
     { return m_storage.try_get(entityIndex); }
 
-    const Pair<T>* try_get(const size_t entityIndex) const
+    const T* try_get(const size_t entityIndex) const
     { return m_storage.try_get(entityIndex); }
 
-    Pair<T>& at(const size_t entityIndex)
+    T& at(const size_t entityIndex)
     { return m_storage.at(entityIndex); }
 
-    const Pair<T>& at(const size_t entityIndex) const
+    const T& at(const size_t entityIndex) const
     { return m_storage.at(entityIndex); }
 
     template <typename... Args>
-    Pair<T>& emplace(const size_t entityIndex, Args&&... args)
+    T& emplace(const size_t entityIndex, Args&&... args)
     { return m_storage.emplace(entityIndex, std::forward<Args>(args)...); }
 
-    Pair<T>& insert_or_assign(const size_t entityIndex, T value)
-    { return m_storage.insert_or_assign(entityIndex, Pair { value } ); }
+    T& insert_or_assign(const size_t entityIndex, T value)
+    { return m_storage.insert_or_assign(entityIndex, std::move(value)); }
 
     void erase(const size_t entityIndex) override
     { m_storage.erase(entityIndex); }
@@ -77,11 +98,99 @@ public:
     size_t entity_at(const size_t denseIndex) const
     { return m_storage.key_at(denseIndex); }
 
-    Pair<T>& dense_at(const size_t denseIndex)
+    T& dense_at(const size_t denseIndex)
     { return m_storage.dense_at(denseIndex); }
 
-    const Pair<T>& dense_at(const size_t denseIndex) const
+    const T& dense_at(const size_t denseIndex) const
     { return m_storage.dense_at(denseIndex); }
+
+    ArrayList<T>& dense()
+    { return m_storage.dense_values(); }
+
+    const ArrayList<T>& dense() const
+    { return m_storage.dense_values(); }
+
+    size_t dense_index_of(const size_t entityIndex) const
+    { return m_storage.index_of(entityIndex); }
+
+    void swapBuffers() override {}
+
+    void writeFrom(IComponentPool&) override
+    { throw std::runtime_error("ComponentPool cannot write from another pool"); }
+};
+
+template <typename T>
+class BufferedComponentPool final : public IComponentPool
+{
+    friend class RenderComponentPool<T>;
+
+    SparseSet<T> m_storage;
+    std::array<size_t, 2> m_roleToBuffer { READ_INDEX, WRITE_INDEX };
+
+public:
+    using value_type = T;
+    using dense_array_type = ArrayList<T>;
+
+    static_assert(
+        ecs::is_buffered_component_v<T>,
+        "BufferedComponentPool can only store ecs::BufferedAlias component types"
+    );
+
+    BufferedComponentPool() = default;
+
+    size_t size() const override
+    { return m_storage.size(); }
+
+    bool contains(const size_t entityIndex) const
+    { return m_storage.contains(entityIndex); }
+
+    T* try_get(const size_t entityIndex)
+    { return m_storage.try_get(entityIndex); }
+
+    const T* try_get(const size_t entityIndex) const
+    { return m_storage.try_get(entityIndex); }
+
+    T& at(const size_t entityIndex)
+    { return m_storage.at(entityIndex); }
+
+    const T& at(const size_t entityIndex) const
+    { return m_storage.at(entityIndex); }
+
+    template <typename... Args>
+    T& emplace(const size_t entityIndex, Args&&... args)
+    {
+        T& component = m_storage.emplace(entityIndex, std::forward<Args>(args)...);
+        bind(component);
+        return component;
+    }
+
+    T& insert_or_assign(const size_t entityIndex, T value)
+    {
+        T& component = m_storage.insert_or_assign(entityIndex, std::move(value));
+        bind(component);
+        return component;
+    }
+
+    void erase(const size_t entityIndex) override
+    { m_storage.erase(entityIndex); }
+
+    void clear() override
+    { m_storage.clear(); }
+
+    size_t entity_at(const size_t denseIndex) const
+    { return m_storage.key_at(denseIndex); }
+
+    T& dense_at(const size_t denseIndex)
+    { return m_storage.dense_at(denseIndex); }
+
+    const T& dense_at(const size_t denseIndex) const
+    { return m_storage.dense_at(denseIndex); }
+
+    ArrayList<T>& dense()
+    { return m_storage.dense_values(); }
+
+    const ArrayList<T>& dense() const
+    { return m_storage.dense_values(); }
 
     size_t dense_index_of(const size_t entityIndex) const
     { return m_storage.index_of(entityIndex); }
@@ -92,34 +201,41 @@ public:
     size_t write_index() const
     { return m_roleToBuffer[WRITE_INDEX]; }
 
-    const size_t* role_lookup() const
-    { return m_roleToBuffer.data(); }
-
     void swapBuffers() override
-    { std::swap(m_roleToBuffer[READ_INDEX], m_roleToBuffer[WRITE_INDEX]); }
+    {
+        std::swap(m_roleToBuffer[READ_INDEX], m_roleToBuffer[WRITE_INDEX]);
+    }
 
     void writeFrom(IComponentPool&) override
-    { throw std::runtime_error("ComponentPool cannot write from another pool"); }
+    { throw std::runtime_error("BufferedComponentPool cannot write from another pool"); }
 
+private:
+    void bind(T& component) const noexcept
+    { component_pool_detail::bind_to_role_lookup(component, m_roleToBuffer.data()); }
 };
 
 template <typename T>
 class RenderComponentPool final : public IComponentPool
 {
     friend ComponentPool<T>;
+    friend BufferedComponentPool<T>;
     friend SparseSet<T>;
-    friend SparseSet<Pair<T>>;
 
     Pair<SparseSet<T>> m_storage;
     std::array<size_t, 2> m_roleToBuffer {READ_INDEX, WRITE_INDEX};
     std::atomic_bool m_shouldSwap = false;
 
 public:
-
     RenderComponentPool() = default;
 
     size_t size() const override
     { return readSet().size(); }
+
+    bool contains(const size_t entityIndex) const
+    { return readSet().contains(entityIndex); }
+
+    const T* try_get(const size_t entityIndex) const
+    { return readSet().try_get(entityIndex); }
 
     void erase(const size_t entityIndex) override
     {
@@ -140,6 +256,12 @@ public:
     const SparseSet<T>& readSet() const
     { return m_storage.at(read_index()); }
 
+    size_t entity_at(const size_t denseIndex) const
+    { return readSet().key_at(denseIndex); }
+
+    const T& dense_at(const size_t denseIndex) const
+    { return readSet().dense_at(denseIndex); }
+
     size_t read_index() const
     { return m_roleToBuffer[READ_INDEX]; }
 
@@ -157,28 +279,64 @@ public:
 
     void writeFrom(ComponentPool<T>& componentPool)
     {
-        const SparseSet<Pair<T>>& readSet = componentPool.m_storage;
-        const size_t readIndex = componentPool.read_index();
-        SparseSet<T>& storage = m_storage.at(write_index());
+        writeDirectFromSet(componentPool.m_storage);
+    }
 
+    template <typename U = T>
+        requires ecs::is_buffered_component_v<U>
+    void writeFrom(BufferedComponentPool<U>& componentPool)
+    {
+        writeBufferedFromSet(componentPool.m_storage);
+    }
+
+    void writeFrom(IComponentPool& componentPool) override
+    {
+        if (auto* typedPool = dynamic_cast<ComponentPool<T>*>(&componentPool))
+        {
+            writeFrom(*typedPool);
+            return;
+        }
+
+        if constexpr (ecs::is_buffered_component_v<T>)
+        {
+            if (auto* bufferedPool = dynamic_cast<BufferedComponentPool<T>*>(&componentPool))
+            {
+                writeFrom(*bufferedPool);
+                return;
+            }
+        }
+
+        throw std::invalid_argument("RenderComponentPool received incompatible source pool");
+    }
+
+private:
+    void writeDirectFromSet(const SparseSet<T>& readSet)
+    {
+        SparseSet<T>& storage = m_storage.at(write_index());
         storage.clear();
 
         for (size_t i = 0; i < readSet.size(); ++i)
         {
-            const Pair<T>& pair = readSet.dense_at(i);
-            storage.emplace(readSet.key_at(i), pair.at(readIndex));
+            T& component = storage.emplace(readSet.key_at(i), readSet.dense_at(i));
+            component_pool_detail::bind_to_role_lookup(component, m_roleToBuffer.data());
         }
 
         m_shouldSwap.store(true, std::memory_order_release);
     }
 
-    void writeFrom(IComponentPool& componentPool) override
+    template <typename U = T>
+        requires ecs::is_buffered_component_v<U>
+    void writeBufferedFromSet(const SparseSet<U>& readSet)
     {
-        auto* typedPool = dynamic_cast<ComponentPool<T>*>(&componentPool);
-        if (nullptr == typedPool)
-            throw std::invalid_argument("RenderComponentPool received incompatible source pool");
+        SparseSet<T>& storage = m_storage.at(write_index());
+        storage.clear();
 
-        writeFrom(*typedPool);
+        for (size_t i = 0; i < readSet.size(); ++i)
+        {
+            T& component = storage.emplace(readSet.key_at(i), readSet.dense_at(i).read());
+            component_pool_detail::bind_to_role_lookup(component, m_roleToBuffer.data());
+        }
+
+        m_shouldSwap.store(true, std::memory_order_release);
     }
-
 };

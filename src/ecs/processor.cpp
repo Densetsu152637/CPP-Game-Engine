@@ -69,7 +69,12 @@ void ECSProcessor::simulate()
             [this](const auto& name)
                 { return m_sim_jobs[name]; }
         );
-        ecs_sim::execute_wall(m_pool, m_ecs, sim_jobs);
+        ecs_sim::execute_jobs_concurrently(
+            m_pool,
+            m_ecs,
+            sim_jobs,
+            ecs_sim::BufferSwap::Simulation
+        );
     }
 
     // copy read data into rendering pipeline
@@ -102,5 +107,10 @@ void ECSProcessor::render()
     {
         render_jobs.append(job);
     }
-    ecs_sim::execute_readonly_wall(m_pool, m_ecs, render_jobs);
+    ecs_sim::execute_jobs_concurrently(
+        m_pool,
+        m_ecs,
+        render_jobs,
+        ecs_sim::BufferSwap::Rendering
+    );
 }

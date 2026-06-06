@@ -149,6 +149,18 @@ public:
     size_t key_at(const size_t denseIndex) const
     { return m_denseKeys[denseIndex]; }
 
+    ArrayList<size_t>& dense_keys()
+    { return m_denseKeys; }
+
+    const ArrayList<size_t>& dense_keys() const
+    { return m_denseKeys; }
+
+    ArrayList<T>& dense_values()
+    { return m_dense; }
+
+    const ArrayList<T>& dense_values() const
+    { return m_dense; }
+
     T& dense_at(const size_t denseIndex)
     { return m_dense[denseIndex]; }
 

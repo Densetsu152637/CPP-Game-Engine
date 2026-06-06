@@ -11,22 +11,41 @@
 // simulation
 void movementSystem(Engine& engine, ECSProcessor& sim)
 {
-    sim.queue_into_sim<Read<Velocity3D>, ReadWrite<Position3D>>(
+    sim.queue_into_sim<Velocity3D, Position3D>(
         "MOVEMENT_SYSTEM_3D",
-        [&engine](Read<Velocity3D>& velocity, ReadWrite<Position3D>& position)
+        [&engine](Velocity3D& velocity, Position3D& position)
         {
             const float deltaTime = engine.upsMs();
-            position.dst = position.src + (velocity.src * deltaTime);
+            position = position + (velocity * deltaTime);
+        }
+    );
+}
+
+void collisionSystemExample([[maybe_unused]] Engine& engine, ECSProcessor& sim)
+{
+    sim.queue_into_sim<Position3D, CollisionSurface, ArrayFor<CollisionSurface>>(
+        "COLLISION_SYSTEM_EXAMPLE",
+        [](
+            [[maybe_unused]] Position3D& position,
+            [[maybe_unused]] CollisionSurface& localSurface,
+            const ArrayList<CollisionSurface>& surfaces
+        )
+        {
+            // transform surface into position
+            for ([[maybe_unused]] const auto& surface : surfaces)
+            {
+                // check if the surface intersects the transformed surface
+            }
         }
     );
 }
 
 // rendering
-void entityRenderer(Engine&, ECSProcessor& sim)
+void entityRenderingExample(Engine&, ECSProcessor& sim)
 {
     sim.queue_into_rendering<Position3D>(
         "ENTITY_RENDERING_EXAMPLE",
-        [](const auto&)
+        []([[maybe_unused]] const Position3D& position)
         {
             // do some kind of per-entity rendering here
         }

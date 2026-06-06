@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
+#include <type_traits>
 #include <typeindex>
 #include <unordered_map>
 #include <utility>
@@ -50,7 +51,11 @@ class ECS
     using component_value_t = ecs::component_value_t<T>;
 
     template <typename T>
-    using pool_t = ComponentPool<component_value_t<T>>;
+    using pool_t = std::conditional_t<
+        ecs::is_buffered_component_v<component_value_t<T>>,
+        BufferedComponentPool<component_value_t<T>>,
+        ComponentPool<component_value_t<T>>
+    >;
 
     template <typename T>
     using render_pool_t = RenderComponentPool<component_value_t<T>>;
@@ -154,31 +159,37 @@ public:
     bool hasComponent(const Entity& entity) const;
 
     template <typename T>
-    Pair<ecs::component_value_t<T>>* try_get_index(const size_t& index);
+    ecs::component_value_t<T>* try_get_index(const size_t& index);
 
     template <typename T>
-    const Pair<ecs::component_value_t<T>>* try_get_index(const size_t& index) const;
+    const ecs::component_value_t<T>* try_get_index(const size_t& index) const;
 
     template <typename T>
-    Pair<ecs::component_value_t<T>>* try_get(const Entity& entity);
+    ecs::component_value_t<T>* try_get(const Entity& entity);
 
     template <typename T>
-    const Pair<ecs::component_value_t<T>>* try_get(const Entity& entity) const;
-
-    template <typename T>
-    Pair<ecs::component_value_t<T>>* try_get(const Entity& entity, const size_t*& roleLookup);
+    const ecs::component_value_t<T>* try_get(const Entity& entity) const;
 
     template <typename T, typename... Args>
-    Pair<ecs::component_value_t<T>>& emplaceComponent(const Entity& entity, Args&&... args);
+    ecs::component_value_t<T>& emplaceComponent(const Entity& entity, Args&&... args);
 
     template <typename T, typename U>
-    Pair<ecs::component_value_t<T>>& setComponent(const Entity& entity, U&& newComponent);
+    ecs::component_value_t<T>& setComponent(const Entity& entity, U&& newComponent);
 
     template <typename T>
     bool removeComponent(const Entity& entity);
 
+    template <typename T>
+    ArrayList<ecs::component_value_t<T>>& denseComponents();
+
+    template <typename T>
+    const ArrayList<ecs::component_value_t<T>>& denseComponents() const;
+
     template <typename... Components>
     View<Components...> view();
+
+    template <typename... Components>
+    View<Components...> render_view();
 
     template <typename... Components>
     View<Components...> query()
@@ -201,7 +212,7 @@ bool ECS::hasComponent(const Entity& entity) const
 }
 
 template <typename T>
-Pair<ecs::component_value_t<T>>* ECS::try_get_index(const size_t& index)
+ecs::component_value_t<T>* ECS::try_get_index(const size_t& index)
 {
     pool_t<T>* pool = storage_if_exists<T>();
     if (nullptr == pool) return nullptr;
@@ -209,7 +220,7 @@ Pair<ecs::component_value_t<T>>* ECS::try_get_index(const size_t& index)
 }
 
 template <typename T>
-const Pair<ecs::component_value_t<T>>* ECS::try_get_index(const size_t& index) const
+const ecs::component_value_t<T>* ECS::try_get_index(const size_t& index) const
 {
     const pool_t<T>* pool = storage_if_exists<T>();
     if (nullptr == pool) return nullptr;
@@ -217,7 +228,7 @@ const Pair<ecs::component_value_t<T>>* ECS::try_get_index(const size_t& index) c
 }
 
 template <typename T>
-Pair<ecs::component_value_t<T>>* ECS::try_get(const Entity& entity)
+ecs::component_value_t<T>* ECS::try_get(const Entity& entity)
 {
     if (!is_valid_handle(entity))
         return nullptr;
@@ -226,31 +237,16 @@ Pair<ecs::component_value_t<T>>* ECS::try_get(const Entity& entity)
 }
 
 template <typename T>
-const Pair<ecs::component_value_t<T>>* ECS::try_get(const Entity& entity) const
+const ecs::component_value_t<T>* ECS::try_get(const Entity& entity) const
 {
     if (!is_valid_handle(entity))
         return nullptr;
 
     return this->try_get_index<T>(entity.index);
-}
-
-template <typename T>
-Pair<ecs::component_value_t<T>>* ECS::try_get(const Entity& entity, const size_t*& roleLookup)
-{
-    if (!is_valid_handle(entity))
-        return nullptr;
-
-    pool_t<T>* pool = storage_if_exists<T>();
-    if (nullptr == pool)
-        return nullptr;
-
-    roleLookup = pool->role_lookup();
-    Pair<ecs::component_value_t<T>>* pair = pool->try_get(entity.index);
-    return pair;
 }
 
 template <typename T, typename... Args>
-Pair<ecs::component_value_t<T>>& ECS::emplaceComponent(const Entity& entity, Args&&... args)
+ecs::component_value_t<T>& ECS::emplaceComponent(const Entity& entity, Args&&... args)
 {
     if (!is_valid_handle(entity))
         throw std::out_of_range("Entity is not valid");
@@ -259,7 +255,7 @@ Pair<ecs::component_value_t<T>>& ECS::emplaceComponent(const Entity& entity, Arg
 }
 
 template <typename T, typename U>
-Pair<ecs::component_value_t<T>>& ECS::setComponent(const Entity& entity, U&& newComponent)
+ecs::component_value_t<T>& ECS::setComponent(const Entity& entity, U&& newComponent)
 {
     if (!is_valid_handle(entity))
         throw std::out_of_range("Entity is not valid");
@@ -281,9 +277,29 @@ bool ECS::removeComponent(const Entity& entity)
     return true;
 }
 
+template <typename T>
+ArrayList<ecs::component_value_t<T>>& ECS::denseComponents()
+{
+    return storage<T>().dense();
+}
+
+template <typename T>
+const ArrayList<ecs::component_value_t<T>>& ECS::denseComponents() const
+{
+    const pool_t<T>* pool = storage_if_exists<T>();
+    if (nullptr == pool)
+        throw std::out_of_range("Component pool does not exist");
+
+    return pool->dense();
+}
+
 template <typename... Components>
 View<Components...> ECS::view()
 { return View<Components...>(*this); }
+
+template <typename... Components>
+View<Components...> ECS::render_view()
+{ return View<Components...>(*this, ViewStorage::Rendering); }
 
 template <typename Func>
 void ECS::eachEntity(Func&& func)

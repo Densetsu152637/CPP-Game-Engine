@@ -5,11 +5,8 @@
 #pragma once
 
 #include <array>
-#include <stdexcept>
 #include <type_traits>
 #include <utility>
-
-#include "../ecs/component_alias.h"
 
 template <typename T>
 struct Pair
@@ -40,62 +37,7 @@ struct Pair
 };
 
 template <typename T>
-struct Read
+struct ArrayFor
 {
     using component_type = std::remove_cvref_t<T>;
-    using value_type = ecs::component_value_t<component_type>;
-    using src_type = value_type;
-
-    value_type& src;
-
-    explicit Read(Pair<value_type>& p, const size_t* roleLookup) :
-        src(p.at(roleLookup[0]))
-    {}
-    explicit operator const value_type&() const { return src; }
-    Read& operator=(value_type& _ignored)
-    { throw std::runtime_error("Illegal use of Read operator="); }
 };
-
-template <typename T>
-struct Write
-{
-    using component_type = std::remove_cvref_t<T>;
-    using value_type = ecs::component_value_t<component_type>;
-    using dst_type = value_type;
-
-    value_type& dst;
-
-    explicit Write(Pair<value_type>& p, const size_t* roleLookup) :
-        dst(p.at(roleLookup[1]))
-    {}
-    explicit operator value_type&()
-    { throw std::runtime_error("Illegal use of Write implicit conversion="); }
-    Write& operator=(value_type value)
-    {
-        dst = std::move(value);
-        return *this;
-    }
-};
-
-template <typename T>
-struct ReadWrite
-{
-    using component_type = std::remove_cvref_t<T>;
-    using value_type = ecs::component_value_t<component_type>;
-
-    value_type& src;
-    value_type& dst;
-
-    explicit ReadWrite(Pair<value_type>& p, const size_t* roleLookup) :
-        src(p.at(roleLookup[0])),
-        dst(p.at(roleLookup[1]))
-    {}
-    explicit operator value_type&() { return src; }
-    ReadWrite& operator=(value_type value)
-    {
-        dst = std::move(value);
-        return *this;
-    }
-};
-
-

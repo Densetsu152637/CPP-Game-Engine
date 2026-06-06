@@ -60,6 +60,10 @@ add_executable(CPPGameEngine
         src/ecs/ecs.cpp
         src/ecs/ecs.h
         src/ecs/component_alias.h
+        src/ecs/component_alias_basic.h
+        src/ecs/component_alias_buffered.h
+        src/ecs/component_alias_ops.h
+        src/ecs/component_alias_traits.h
         src/ecs/view.h
         src/core/interfaces.h
         src/async/buffer.h
@@ -72,6 +76,11 @@ add_executable(CPPGameEngine
         src/structs/page_set.h
         src/structs/templates.h
         src/ecs/ecs_sim_detail.h
+        src/ecs/ecs_sim_access.h
+        src/ecs/ecs_sim_arg_traits.h
+        src/ecs/ecs_sim_execution.h
+        src/ecs/ecs_sim_invocation.h
+        src/ecs/ecs_sim_types.h
         src/components/alias.h
         src/components/systems.cpp
         src/components/systems.h

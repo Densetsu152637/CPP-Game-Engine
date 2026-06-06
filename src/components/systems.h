@@ -10,8 +10,10 @@
 // simulation
 void movementSystem(Engine& engine, ECSProcessor& sim);
 
+void collisionSystemExample(Engine& engine, ECSProcessor& sim);
+
 
 
 
 // rendering
-void entityRenderer(Engine& engine, ECSProcessor& sim);
+void entityRenderingExample(Engine& engine, ECSProcessor& sim);

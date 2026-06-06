@@ -16,13 +16,31 @@
 #include "component_pool.h"
 #include "../async/threadpool.h"
 
+enum class ViewStorage
+{
+    Simulation,
+    Rendering
+};
+
 template <typename... Components>
 class View
 {
+    template <typename Component>
+    using sim_pool_t = std::conditional_t<
+        ecs::is_buffered_component_v<ecs::component_value_t<Component>>,
+        BufferedComponentPool<ecs::component_value_t<Component>>,
+        ComponentPool<ecs::component_value_t<Component>>
+    >;
+
+    using sim_pool_tuple = std::tuple<sim_pool_t<Components>*...>;
+    using render_pool_tuple = std::tuple<RenderComponentPool<ecs::component_value_t<Components>>*...>;
+
     ECS* m_ecs = nullptr;
-    std::tuple<ComponentPool<ecs::component_value_t<Components>>*...> m_pools {};
+    sim_pool_tuple m_pools {};
+    render_pool_tuple m_renderPools {};
     size_t m_primaryIndex = Entity::N_POS;
     bool m_cacheResolved = false;
+    ViewStorage m_storage = ViewStorage::Simulation;
 
     template <typename>
     static constexpr bool always_false_v = false;
@@ -33,7 +51,7 @@ class View
     using component_at_t = std::tuple_element_t<I, component_tuple>;
 
     template <size_t I>
-    using pair_at_t = Pair<ecs::component_value_t<component_at_t<I>>>;
+    using value_at_t = ecs::component_value_t<component_at_t<I>>;
 
     struct dense_range
     {
@@ -50,17 +68,21 @@ class View
         return { begin, std::min(total, begin + chunkSize) };
     }
 
-    template <size_t... Is>
-    std::array<size_t, sizeof...(Components)> storage_sizes(std::index_sequence<Is...>) const
+    bool is_rendering_storage() const
+    { return ViewStorage::Rendering == m_storage; }
+
+    template <typename PoolTuple, size_t... Is>
+    std::array<size_t, sizeof...(Components)> storage_sizes(const PoolTuple& pools, std::index_sequence<Is...>) const
     {
         return {
-            (nullptr == std::get<Is>(m_pools) ? 0 : std::get<Is>(m_pools)->size())...
+            (nullptr == std::get<Is>(pools) ? 0 : std::get<Is>(pools)->size())...
         };
     }
 
-    size_t select_primary_storage() const
+    template <typename PoolTuple>
+    size_t select_primary_storage(const PoolTuple& pools) const
     {
-        const auto sizes = storage_sizes(std::make_index_sequence<sizeof...(Components)>{});
+        const auto sizes = storage_sizes(pools, std::make_index_sequence<sizeof...(Components)>{});
         if (std::any_of(sizes.begin(), sizes.end(), [](const size_t size) { return 0 == size; }))
             return Entity::N_POS;
 
@@ -76,8 +98,20 @@ class View
         }
         else
         {
-            m_pools = std::tuple<ComponentPool<ecs::component_value_t<Components>>*...>{ m_ecs->storage_if_exists<Components>()... };
-            m_primaryIndex = select_primary_storage();
+            if (is_rendering_storage())
+            {
+                m_renderPools = render_pool_tuple{
+                    m_ecs->render_storage_if_exists<Components>()...
+                };
+                m_primaryIndex = select_primary_storage(m_renderPools);
+            }
+            else
+            {
+                m_pools = sim_pool_tuple{
+                    m_ecs->storage_if_exists<Components>()...
+                };
+                m_primaryIndex = select_primary_storage(m_pools);
+            }
         }
 
         m_cacheResolved = true;
@@ -141,7 +175,8 @@ class View
         }
     }
 
-    size_t primary_size_runtime() const
+    template <typename PoolTuple>
+    size_t primary_size_runtime(const PoolTuple& pools) const
     {
         if constexpr (0 == sizeof...(Components))
             return alive_entity_count();
@@ -168,10 +203,20 @@ class View
 
                 (select(pools), ...);
             },
-            m_pools
+            pools
         );
 
         return primarySize;
+    }
+
+    size_t primary_size_runtime() const
+    {
+        if constexpr (0 == sizeof...(Components))
+            return alive_entity_count();
+        else if (is_rendering_storage())
+            return primary_size_runtime(m_renderPools);
+        else
+            return primary_size_runtime(m_pools);
     }
 
     size_t dense_chunk_size(const size_t total, Threadpool& pool, const size_t minChunk) const
@@ -184,14 +229,40 @@ class View
         );
     }
 
+    template <typename Func, size_t... Is>
+    static constexpr bool accepts_sim_refs(std::index_sequence<Is...>)
+    {
+        return std::is_invocable_v<Func&, Entity, value_at_t<Is>&...>
+            || std::is_invocable_v<Func&, value_at_t<Is>&...>;
+    }
+
+    template <typename Func, size_t... Is>
+    static constexpr bool accepts_render_refs(std::index_sequence<Is...>)
+    {
+        return std::is_invocable_v<Func&, Entity, const value_at_t<Is>&...>
+            || std::is_invocable_v<Func&, const value_at_t<Is>&...>;
+    }
+
+    template <typename Func>
+    static constexpr bool accepts_sim_refs()
+    {
+        return accepts_sim_refs<Func>(std::make_index_sequence<sizeof...(Components)>{});
+    }
+
+    template <typename Func>
+    static constexpr bool accepts_render_refs()
+    {
+        return accepts_render_refs<Func>(std::make_index_sequence<sizeof...(Components)>{});
+    }
+
     template <typename Func, typename Tuple, size_t... Is>
     void invoke_component_callback(const size_t entityIndex, Func& func, Tuple& components, std::index_sequence<Is...>)
     {
-        if constexpr (std::is_invocable_v<Func&, Entity, pair_at_t<Is>&...>)
+        if constexpr (std::is_invocable_v<Func&, Entity, decltype(*std::get<Is>(components))...>)
         {
             func(m_ecs->make_handle(entityIndex), *std::get<Is>(components)...);
         }
-        else if constexpr (std::is_invocable_v<Func&, pair_at_t<Is>&...>)
+        else if constexpr (std::is_invocable_v<Func&, decltype(*std::get<Is>(components))...>)
         {
             func(*std::get<Is>(components)...);
         }
@@ -199,33 +270,38 @@ class View
         {
             static_assert(
                 always_false_v<Func>,
-                "View::each callback must accept `(Entity, Pair<Component>&...)` or `(Pair<Component>&...)`."
+                "View::each callback must accept `(Entity, Component&...)`, `(Component&...)`, or const equivalents for render storage."
             );
         }
     }
 
-    template <size_t I, size_t PrimaryI>
-    pair_at_t<I>* component_ptr_from_primary(const size_t entityIndex, pair_at_t<PrimaryI>& primaryComponent)
+    template <size_t I, size_t PrimaryI, typename PoolTuple, typename PrimaryComponent>
+    auto component_ptr_from_primary(
+        PoolTuple& pools,
+        const size_t entityIndex,
+        PrimaryComponent& primaryComponent
+    )
     {
         if constexpr (I == PrimaryI)
             return &primaryComponent;
         else
-            return std::get<I>(m_pools)->try_get(entityIndex);
+            return std::get<I>(pools)->try_get(entityIndex);
     }
 
     template <typename Tuple, size_t... Is>
     bool all_components_present(const Tuple& components, std::index_sequence<Is...>) const
     { return ((std::get<Is>(components) != nullptr) && ...); }
 
-    template <size_t PrimaryI, typename Func, size_t... Is>
+    template <size_t PrimaryI, typename PoolTuple, typename PrimaryComponent, typename Func, size_t... Is>
     void visit_entity_from_primary(
+        PoolTuple& pools,
         const size_t entityIndex,
-        pair_at_t<PrimaryI>& primaryComponent,
+        PrimaryComponent& primaryComponent,
         Func& func,
         std::index_sequence<Is...>
     ) {
         auto components = std::tuple{
-            component_ptr_from_primary<Is, PrimaryI>(entityIndex, primaryComponent)...
+            component_ptr_from_primary<Is, PrimaryI>(pools, entityIndex, primaryComponent)...
         };
         if (!all_components_present(components, std::make_index_sequence<sizeof...(Components)>{}))
             return;
@@ -233,8 +309,14 @@ class View
         invoke_component_callback(entityIndex, func, components, std::make_index_sequence<sizeof...(Components)>{});
     }
 
-    template <size_t PrimaryI, typename PoolT, typename Func>
-    void iterate_primary_pool_range(PoolT* primary, const size_t beginDense, const size_t endDense, Func& func)
+    template <size_t PrimaryI, typename PoolTuple, typename PoolT, typename Func>
+    void iterate_primary_pool_range(
+        PoolTuple& pools,
+        PoolT* primary,
+        const size_t beginDense,
+        const size_t endDense,
+        Func& func
+    )
     {
         if (nullptr == primary)
             return;
@@ -248,6 +330,7 @@ class View
 
             auto& primaryComponent = primary->dense_at(denseIndex);
             this->visit_entity_from_primary<PrimaryI>(
+                pools,
                 entityIndex,
                 primaryComponent,
                 func,
@@ -256,8 +339,9 @@ class View
         }
     }
 
-    template <typename Func, size_t... Is>
+    template <typename PoolTuple, typename Func, size_t... Is>
     void each_with_primary_range_impl(
+        PoolTuple& pools,
         const size_t beginDense,
         const size_t endDense,
         Func& func,
@@ -277,22 +361,53 @@ class View
             }
 
             handled = true;
-            iterate_primary_pool_range<I>(primary, beginDense, endDense, func);
+            iterate_primary_pool_range<I>(pools, primary, beginDense, endDense, func);
             ++currentIndex;
         };
 
-        (dispatch(std::integral_constant<size_t, Is>{}, std::get<Is>(m_pools)), ...);
+        (dispatch(std::integral_constant<size_t, Is>{}, std::get<Is>(pools)), ...);
     }
 
     template <typename Func>
     void each_range(const size_t beginDense, const size_t endDense, Func& func)
     {
-        each_with_primary_range_impl(
-            beginDense,
-            endDense,
-            func,
-            std::make_index_sequence<sizeof...(Components)>{}
-        );
+        if (is_rendering_storage())
+        {
+            if constexpr (accepts_render_refs<Func>())
+            {
+                each_with_primary_range_impl(
+                    m_renderPools,
+                    beginDense,
+                    endDense,
+                    func,
+                    std::make_index_sequence<sizeof...(Components)>{}
+                );
+            }
+            else
+            {
+                throw std::invalid_argument("View render storage callback must accept const component references");
+            }
+        }
+        else
+        {
+            if constexpr (accepts_sim_refs<Func>())
+            {
+                each_with_primary_range_impl(
+                    m_pools,
+                    beginDense,
+                    endDense,
+                    func,
+                    std::make_index_sequence<sizeof...(Components)>{}
+                );
+            }
+            else
+            {
+                static_assert(
+                    always_false_v<Func>,
+                    "View simulation storage callback must accept mutable component references"
+                );
+            }
+        }
     }
 
     template <typename Callable>
@@ -306,8 +421,7 @@ class View
         {
             this->visit_entity(
                 entity.index,
-                callable,
-                std::make_index_sequence<sizeof...(Components)>{}
+                callable
             );
         }
 
@@ -327,7 +441,7 @@ class View
     }
 
     template <typename Func, size_t... Is>
-    void visit_entity(const size_t entityIndex, Func& func, std::index_sequence<Is...>)
+    void visit_entity_from_sim_pools(const size_t entityIndex, Func& func, std::index_sequence<Is...>)
     {
         auto components = std::tuple{ std::get<Is>(m_pools)->try_get(entityIndex)... };
         if (!all_components_present(components, std::make_index_sequence<sizeof...(Components)>{}))
@@ -336,13 +450,44 @@ class View
         invoke_component_callback(entityIndex, func, components, std::make_index_sequence<sizeof...(Components)>{});
     }
 
-    template <size_t... Is>
-    auto role_lookups_impl(std::index_sequence<Is...>)
+    template <typename Func, size_t... Is>
+    void visit_entity_from_render_pools(const size_t entityIndex, Func& func, std::index_sequence<Is...>)
     {
-        ensure_cache();
-        return std::tuple{
-            (nullptr == std::get<Is>(m_pools) ? nullptr : std::get<Is>(m_pools)->role_lookup())...
-        };
+        auto components = std::tuple{ std::get<Is>(m_renderPools)->try_get(entityIndex)... };
+        if (!all_components_present(components, std::make_index_sequence<sizeof...(Components)>{}))
+            return;
+
+        invoke_component_callback(entityIndex, func, components, std::make_index_sequence<sizeof...(Components)>{});
+    }
+
+    template <typename Func>
+    void visit_entity(const size_t entityIndex, Func& func)
+    {
+        if (is_rendering_storage())
+        {
+            if constexpr (accepts_render_refs<Func>())
+            {
+                visit_entity_from_render_pools(entityIndex, func, std::make_index_sequence<sizeof...(Components)>{});
+            }
+            else
+            {
+                throw std::invalid_argument("View render storage callback must accept const component references");
+            }
+        }
+        else
+        {
+            if constexpr (accepts_sim_refs<Func>())
+            {
+                visit_entity_from_sim_pools(entityIndex, func, std::make_index_sequence<sizeof...(Components)>{});
+            }
+            else
+            {
+                static_assert(
+                    always_false_v<Func>,
+                    "View simulation storage callback must accept mutable component references"
+                );
+            }
+        }
     }
 
     template <typename Callable>
@@ -411,7 +556,10 @@ class View
     }
 
 public:
-    explicit View(ECS& ecs) : m_ecs(&ecs) {}
+    explicit View(ECS& ecs, const ViewStorage storage = ViewStorage::Simulation)
+        : m_ecs(&ecs),
+          m_storage(storage)
+    {}
 
     bool empty()
     {
@@ -446,7 +594,7 @@ public:
     {
         ArrayList<Entity> entities;
         entities.reserve(primary_size_runtime());
-        this->each([&entities](const Entity& entity, Pair<ecs::component_value_t<Components>>&...)
+        this->each([&entities](const Entity& entity, auto&...)
         {
             entities.append(entity);
         });
@@ -490,8 +638,4 @@ public:
         each_mt(std::forward<Func>(func), pool);
     }
 
-    auto role_lookups()
-    {
-        return role_lookups_impl(std::make_index_sequence<sizeof...(Components)>{});
-    }
 };
