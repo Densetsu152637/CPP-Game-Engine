@@ -100,3 +100,12 @@ void ECS::swapRenderBuffers()
         pool->swapBuffers();
     }
 }
+
+void ECS::markComponentDirty(const size_t componentTypeId)
+{
+    for (auto& pool : m_componentPools | std::views::values)
+    {
+        if (pool->type_id() == componentTypeId)
+            pool->markDirty();
+    }
+}

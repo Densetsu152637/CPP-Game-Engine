@@ -142,6 +142,7 @@ public:
     void clear();
     void swapSimBuffers();
     void swapRenderBuffers();
+    void markComponentDirty(size_t componentTypeId);
 
     template <typename T>
     void guarantee_component_pool()

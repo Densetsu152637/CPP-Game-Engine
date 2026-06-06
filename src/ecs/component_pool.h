@@ -8,6 +8,7 @@
 #include <array>
 #include <stdexcept>
 #include <type_traits>
+#include <typeinfo>
 #include <utility>
 
 #include "../structs/sparse_set.h"
@@ -41,14 +42,26 @@ namespace component_pool_detail
 
 class IComponentPool
 {
+    bool m_dirty = true;
+
 public:
     virtual ~IComponentPool() = default;
+    virtual size_t type_id() const = 0;
     virtual void erase(size_t entityIndex) = 0;
     virtual void clear() = 0;
     virtual size_t size() const = 0;
     virtual void swapBuffers() = 0;
     virtual void writeFrom(IComponentPool&)
     { throw std::runtime_error("writeFrom is only supported by render component pools"); }
+
+    bool isDirty() const
+    { return m_dirty; }
+
+    void markDirty()
+    { m_dirty = true; }
+
+    void clearDirty()
+    { m_dirty = false; }
 };
 
 template <typename T>
@@ -63,6 +76,9 @@ public:
     using dense_array_type = ArrayList<T>;
 
     ComponentPool() = default;
+
+    size_t type_id() const override
+    { return typeid(ecs::component_key_t<T>).hash_code(); }
 
     size_t size() const override
     { return m_storage.size(); }
@@ -84,16 +100,28 @@ public:
 
     template <typename... Args>
     T& emplace(const size_t entityIndex, Args&&... args)
-    { return m_storage.emplace(entityIndex, std::forward<Args>(args)...); }
+    {
+        this->markDirty();
+        return m_storage.emplace(entityIndex, std::forward<Args>(args)...);
+    }
 
     T& insert_or_assign(const size_t entityIndex, T value)
-    { return m_storage.insert_or_assign(entityIndex, std::move(value)); }
+    {
+        this->markDirty();
+        return m_storage.insert_or_assign(entityIndex, std::move(value));
+    }
 
     void erase(const size_t entityIndex) override
-    { m_storage.erase(entityIndex); }
+    {
+        this->markDirty();
+        m_storage.erase(entityIndex);
+    }
 
     void clear() override
-    { m_storage.clear(); }
+    {
+        this->markDirty();
+        m_storage.clear();
+    }
 
     size_t entity_at(const size_t denseIndex) const
     { return m_storage.key_at(denseIndex); }
@@ -138,6 +166,9 @@ public:
 
     BufferedComponentPool() = default;
 
+    size_t type_id() const override
+    { return typeid(ecs::component_key_t<T>).hash_code(); }
+
     size_t size() const override
     { return m_storage.size(); }
 
@@ -159,6 +190,7 @@ public:
     template <typename... Args>
     T& emplace(const size_t entityIndex, Args&&... args)
     {
+        this->markDirty();
         T& component = m_storage.emplace(entityIndex, std::forward<Args>(args)...);
         bind(component);
         return component;
@@ -166,16 +198,23 @@ public:
 
     T& insert_or_assign(const size_t entityIndex, T value)
     {
+        this->markDirty();
         T& component = m_storage.insert_or_assign(entityIndex, std::move(value));
         bind(component);
         return component;
     }
 
     void erase(const size_t entityIndex) override
-    { m_storage.erase(entityIndex); }
+    {
+        this->markDirty();
+        m_storage.erase(entityIndex);
+    }
 
     void clear() override
-    { m_storage.clear(); }
+    {
+        this->markDirty();
+        m_storage.clear();
+    }
 
     size_t entity_at(const size_t denseIndex) const
     { return m_storage.key_at(denseIndex); }
@@ -228,6 +267,9 @@ class RenderComponentPool final : public IComponentPool
 public:
     RenderComponentPool() = default;
 
+    size_t type_id() const override
+    { return typeid(ecs::component_key_t<T>).hash_code(); }
+
     size_t size() const override
     { return readSet().size(); }
 
@@ -261,6 +303,9 @@ public:
 
     const T& dense_at(const size_t denseIndex) const
     { return readSet().dense_at(denseIndex); }
+
+    size_t dense_index_of(const size_t entityIndex) const
+    { return readSet().index_of(entityIndex); }
 
     size_t read_index() const
     { return m_roleToBuffer[READ_INDEX]; }

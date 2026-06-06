@@ -72,6 +72,54 @@ namespace ecs_sim
         }
     }
 
+    template <typename Param>
+    void append_callable_param_access(AccessSpec& spec)
+    {
+        using Arg = std::remove_cvref_t<Param>;
+
+        if constexpr (is_entity_arg_v<Arg>)
+        {
+            return;
+        }
+        else if constexpr (is_array_list_param_v<Param>)
+        {
+            using Component = array_list_param_component_t<Param>;
+            append_unique_access(spec.reads, component_type_id<Component>());
+        }
+        else
+        {
+            using Component = Arg;
+            const TypeId id = component_type_id<Component>();
+
+            if constexpr (std::is_const_v<std::remove_reference_t<Param>>)
+            {
+                append_unique_access(spec.reads, id);
+            }
+            else
+            {
+                append_unique_access(spec.reads, id);
+                append_unique_access(spec.writes, id);
+
+                if constexpr (!ecs::is_buffered_component_v<Component>)
+                    append_unique_access(spec.exclusiveWrites, id);
+            }
+        }
+    }
+
+    template <typename... Params>
+    AccessSpec build_callable_access_spec(type_list<Params...>)
+    {
+        AccessSpec spec;
+        (append_callable_param_access<Params>(spec), ...);
+        return spec;
+    }
+
+    template <typename Callable>
+    AccessSpec build_callable_access_spec()
+    {
+        return build_callable_access_spec(callable_arg_list_t<Callable>{});
+    }
+
     template <typename... Args>
     AccessSpec build_access_spec()
     {

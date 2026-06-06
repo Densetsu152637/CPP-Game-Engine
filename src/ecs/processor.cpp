@@ -80,6 +80,7 @@ void ECSProcessor::simulate()
     // copy read data into rendering pipeline
 
     ArrayList<Promise<bool>> transfer_promises{ m_ecs.m_renderComponentPools.size() };
+    ArrayList<IComponentPool*> transferred_sources{ m_ecs.m_renderComponentPools.size() };
 
     for (auto& [type, renderPool] : m_ecs.m_renderComponentPools)
     {
@@ -90,6 +91,10 @@ void ECSProcessor::simulate()
         IComponentPool* renderPoolPtr = renderPool.get();
         IComponentPool* simPoolPtr = simPoolHit->second.get();
 
+        if (!simPoolPtr->isDirty())
+            continue;
+
+        transferred_sources.append(simPoolPtr);
         transfer_promises.append(m_pool.submit([renderPoolPtr, simPoolPtr]()
         {
             renderPoolPtr->writeFrom(*simPoolPtr);
@@ -98,6 +103,9 @@ void ECSProcessor::simulate()
     }
 
     ecs_sim::await_promises(transfer_promises);
+
+    for (IComponentPool* pool : transferred_sources)
+        pool->clearDirty();
 }
 
 void ECSProcessor::render()

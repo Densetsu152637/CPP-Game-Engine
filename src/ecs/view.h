@@ -59,6 +59,17 @@ class View
         size_t end = 0;
     };
 
+    using dense_index_array = std::array<size_t, sizeof...(Components)>;
+
+    struct view_match
+    {
+        size_t entityIndex = Entity::N_POS;
+        dense_index_array denseIndices {};
+    };
+
+    ArrayList<view_match> m_matches;
+    bool m_matchesResolved = false;
+
     static size_t chunk_count(const size_t total, const size_t chunkSize)
     { return (total + chunkSize - 1) / chunkSize; }
 
@@ -88,6 +99,123 @@ class View
 
         const auto smallest = std::min_element(sizes.begin(), sizes.end());
         return static_cast<size_t>(std::distance(sizes.begin(), smallest));
+    }
+
+    template <size_t I, size_t PrimaryI, typename PoolTuple>
+    bool fill_match_dense_index(
+        PoolTuple& pools,
+        const size_t entityIndex,
+        const size_t primaryDenseIndex,
+        view_match& match
+    ) const
+    {
+        if constexpr (I == PrimaryI)
+        {
+            match.denseIndices[I] = primaryDenseIndex;
+            return true;
+        }
+        else
+        {
+            auto* pool = std::get<I>(pools);
+            if (nullptr == pool)
+                return false;
+
+            const size_t denseIndex = pool->dense_index_of(entityIndex);
+            if (SparseSet<value_at_t<I>>::N_POS == denseIndex)
+                return false;
+
+            match.denseIndices[I] = denseIndex;
+            return true;
+        }
+    }
+
+    template <size_t PrimaryI, typename PoolTuple, size_t... Is>
+    bool fill_match(
+        PoolTuple& pools,
+        const size_t entityIndex,
+        const size_t primaryDenseIndex,
+        view_match& match,
+        std::index_sequence<Is...>
+    ) const
+    {
+        return (fill_match_dense_index<Is, PrimaryI>(
+            pools,
+            entityIndex,
+            primaryDenseIndex,
+            match
+        ) && ...);
+    }
+
+    template <size_t PrimaryI, typename PoolTuple, typename PoolT>
+    void append_matches_from_primary(PoolTuple& pools, PoolT* primary)
+    {
+        if (nullptr == primary)
+            return;
+
+        for (size_t denseIndex = 0; denseIndex < primary->size(); ++denseIndex)
+        {
+            const size_t entityIndex = primary->entity_at(denseIndex);
+            if (!m_ecs->is_alive_index(entityIndex))
+                continue;
+
+            view_match match;
+            match.entityIndex = entityIndex;
+            if (fill_match<PrimaryI>(
+                pools,
+                entityIndex,
+                denseIndex,
+                match,
+                std::make_index_sequence<sizeof...(Components)>{}
+            )) {
+                m_matches.append(std::move(match));
+            }
+        }
+    }
+
+    template <typename PoolTuple, size_t... Is>
+    void resolve_matches_from_pools(PoolTuple& pools, std::index_sequence<Is...>)
+    {
+        bool handled = false;
+        size_t currentIndex = 0;
+
+        auto dispatch = [&](auto index, auto* primary)
+        {
+            constexpr size_t I = decltype(index)::value;
+
+            if (handled || currentIndex != m_primaryIndex)
+            {
+                ++currentIndex;
+                return;
+            }
+
+            handled = true;
+            append_matches_from_primary<I>(pools, primary);
+            ++currentIndex;
+        };
+
+        (dispatch(std::integral_constant<size_t, Is>{}, std::get<Is>(pools)), ...);
+    }
+
+    void resolve_matches()
+    {
+        m_matches.clear();
+
+        if constexpr (sizeof...(Components) > 1)
+        {
+            if (Entity::N_POS != m_primaryIndex)
+            {
+                if (is_rendering_storage())
+                {
+                    resolve_matches_from_pools(m_renderPools, std::make_index_sequence<sizeof...(Components)>{});
+                }
+                else
+                {
+                    resolve_matches_from_pools(m_pools, std::make_index_sequence<sizeof...(Components)>{});
+                }
+            }
+        }
+
+        m_matchesResolved = true;
     }
 
     void resolve_cache()
@@ -129,6 +257,17 @@ class View
             return true;
 
         return m_primaryIndex != Entity::N_POS;
+    }
+
+    bool ensure_matches()
+    {
+        if (!ensure_cache())
+            return false;
+
+        if (!m_matchesResolved)
+            resolve_matches();
+
+        return true;
     }
 
     size_t alive_entity_count() const
@@ -217,6 +356,17 @@ class View
             return primary_size_runtime(m_renderPools);
         else
             return primary_size_runtime(m_pools);
+    }
+
+    size_t iteration_size_runtime()
+    {
+        if constexpr (sizeof...(Components) <= 1)
+            return primary_size_runtime();
+        else
+        {
+            ensure_matches();
+            return m_matches.length();
+        }
     }
 
     size_t dense_chunk_size(const size_t total, Threadpool& pool, const size_t minChunk) const
@@ -368,6 +518,30 @@ class View
         (dispatch(std::integral_constant<size_t, Is>{}, std::get<Is>(pools)), ...);
     }
 
+    template <typename PoolTuple, typename Func, size_t... Is>
+    void visit_match(PoolTuple& pools, const view_match& match, Func& func, std::index_sequence<Is...>)
+    {
+        auto components = std::tuple{
+            &std::get<Is>(pools)->dense_at(match.denseIndices[Is])...
+        };
+        invoke_component_callback(match.entityIndex, func, components, std::make_index_sequence<sizeof...(Components)>{});
+    }
+
+    template <typename PoolTuple, typename Func>
+    void each_match_range(PoolTuple& pools, const size_t beginMatch, const size_t endMatch, Func& func)
+    {
+        const size_t boundedEnd = std::min(endMatch, m_matches.length());
+        for (size_t matchIndex = beginMatch; matchIndex < boundedEnd; ++matchIndex)
+        {
+            visit_match(
+                pools,
+                m_matches[matchIndex],
+                func,
+                std::make_index_sequence<sizeof...(Components)>{}
+            );
+        }
+    }
+
     template <typename Func>
     void each_range(const size_t beginDense, const size_t endDense, Func& func)
     {
@@ -375,13 +549,20 @@ class View
         {
             if constexpr (accepts_render_refs<Func>())
             {
-                each_with_primary_range_impl(
-                    m_renderPools,
-                    beginDense,
-                    endDense,
-                    func,
-                    std::make_index_sequence<sizeof...(Components)>{}
-                );
+                if constexpr (sizeof...(Components) > 1)
+                {
+                    each_match_range(m_renderPools, beginDense, endDense, func);
+                }
+                else
+                {
+                    each_with_primary_range_impl(
+                        m_renderPools,
+                        beginDense,
+                        endDense,
+                        func,
+                        std::make_index_sequence<sizeof...(Components)>{}
+                    );
+                }
             }
             else
             {
@@ -392,13 +573,20 @@ class View
         {
             if constexpr (accepts_sim_refs<Func>())
             {
-                each_with_primary_range_impl(
-                    m_pools,
-                    beginDense,
-                    endDense,
-                    func,
-                    std::make_index_sequence<sizeof...(Components)>{}
-                );
+                if constexpr (sizeof...(Components) > 1)
+                {
+                    each_match_range(m_pools, beginDense, endDense, func);
+                }
+                else
+                {
+                    each_with_primary_range_impl(
+                        m_pools,
+                        beginDense,
+                        endDense,
+                        func,
+                        std::make_index_sequence<sizeof...(Components)>{}
+                    );
+                }
             }
             else
             {
@@ -525,7 +713,7 @@ class View
     template <typename Callable>
     void each_component_mt(Threadpool& pool, const size_t minChunk, Callable&& callable)
     {
-        const size_t total = primary_size_runtime();
+        const size_t total = iteration_size_runtime();
         if (0 == total)
             return;
 
@@ -572,28 +760,27 @@ public:
     void refresh()
     {
         m_cacheResolved = false;
+        m_matchesResolved = false;
         ensure_cache();
     }
 
     size_t size()
     {
-        if (!ensure_cache())
+        if (!ensure_matches())
             return 0;
 
         if constexpr (0 == sizeof...(Components))
             return alive_entity_count();
         else if constexpr (1 == sizeof...(Components))
             return primary_size_runtime();
-
-        size_t matches = 0;
-        each([&](auto&&...) { ++matches; });
-        return matches;
+        else
+            return m_matches.length();
     }
 
     ArrayList<Entity> allEntities()
     {
         ArrayList<Entity> entities;
-        entities.reserve(primary_size_runtime());
+        entities.reserve(iteration_size_runtime());
         this->each([&entities](const Entity& entity, auto&...)
         {
             entities.append(entity);
@@ -604,7 +791,7 @@ public:
     template <typename Func>
     void each(Func&& func)
     {
-        if (!ensure_cache())
+        if (!ensure_matches())
             return;
 
         if constexpr (0 == sizeof...(Components))
@@ -613,14 +800,14 @@ public:
         }
         else
         {
-            each_range(0, primary_size_runtime(), func);
+            each_range(0, iteration_size_runtime(), func);
         }
     }
 
     template <typename Func>
     void each_mt(Func&& func, Threadpool& pool, const size_t minChunk = 256)
     {
-        if (!ensure_cache())
+        if (!ensure_matches())
             return;
 
         using Callable = std::decay_t<Func>;

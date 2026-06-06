@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <functional>
 #include <type_traits>
 
 #include "ecs.h"
@@ -11,6 +12,10 @@
 
 namespace ecs_sim
 {
+    template <typename... Ts>
+    struct type_list
+    {};
+
     template <typename T>
     struct is_entity_arg : std::bool_constant<std::is_same_v<std::remove_cvref_t<T>, Entity>>
     {};
@@ -104,9 +109,114 @@ namespace ecs_sim
     template <typename Arg>
     using call_arg_t = typename call_arg<Arg>::type;
 
-    template <typename... Ts>
-    struct type_list
+    template <typename T>
+    struct callable_traits
+    {
+        static constexpr bool is_inspectable = false;
+    };
+
+    template <typename R, typename... Args>
+    struct callable_traits<R(*)(Args...)>
+    {
+        static constexpr bool is_inspectable = true;
+        using arg_types = type_list<Args...>;
+        static constexpr size_t arity = sizeof...(Args);
+    };
+
+    template <typename R, typename... Args>
+    struct callable_traits<R(&)(Args...)> : callable_traits<R(*)(Args...)>
     {};
+
+    template <typename R, typename... Args>
+    struct callable_traits<std::function<R(Args...)>> : callable_traits<R(*)(Args...)>
+    {};
+
+    template <typename Class, typename R, typename... Args>
+    struct callable_traits<R(Class::*)(Args...)> : callable_traits<R(*)(Args...)>
+    {};
+
+    template <typename Class, typename R, typename... Args>
+    struct callable_traits<R(Class::*)(Args...) const> : callable_traits<R(*)(Args...)>
+    {};
+
+    template <typename T, bool Inspectable = callable_traits<std::remove_cvref_t<T>>::is_inspectable>
+    struct callable_non_object_traits
+    {
+        static constexpr bool is_inspectable = false;
+        using arg_types = type_list<>;
+        static constexpr size_t arity = 0;
+    };
+
+    template <typename T>
+    struct callable_non_object_traits<T, true> : callable_traits<std::remove_cvref_t<T>>
+    {};
+
+    template <typename T, typename = void>
+    struct callable_object_traits : callable_non_object_traits<T>
+    {
+    };
+
+    template <typename T>
+    struct callable_object_traits<T, std::void_t<decltype(&std::remove_cvref_t<T>::operator())>>
+        : callable_traits<decltype(&std::remove_cvref_t<T>::operator())>
+    {};
+
+    template <typename T>
+    inline constexpr bool is_callable_inspectable_v = callable_object_traits<T>::is_inspectable;
+
+    template <typename T>
+    using callable_arg_list_t = typename callable_object_traits<T>::arg_types;
+
+    template <typename T>
+    inline constexpr size_t callable_arity_v = callable_object_traits<T>::arity;
+
+    template <typename T>
+    struct array_list_param_component
+    {
+        using type = void;
+    };
+
+    template <typename T>
+    struct array_list_param_component<ArrayList<T>>
+    {
+        using type = std::remove_cvref_t<T>;
+    };
+
+    template <typename T>
+    using array_list_param_component_t = typename array_list_param_component<std::remove_cvref_t<T>>::type;
+
+    template <typename T>
+    inline constexpr bool is_array_list_param_v =
+        !std::is_void_v<array_list_param_component_t<T>>;
+
+    template <typename T>
+    inline constexpr bool is_const_lvalue_ref_v =
+        std::is_lvalue_reference_v<T> &&
+        std::is_const_v<std::remove_reference_t<T>>;
+
+    template <typename T>
+    inline constexpr bool is_valid_callable_param_v =
+        is_entity_arg_v<T> ||
+        (
+            is_array_list_param_v<T> &&
+            is_const_lvalue_ref_v<T>
+        ) ||
+        (
+            !is_array_list_param_v<T> &&
+            is_plain_component_arg_v<T> &&
+            std::is_lvalue_reference_v<T>
+        );
+
+    template <typename List>
+    struct valid_callable_params;
+
+    template <typename... Args>
+    struct valid_callable_params<type_list<Args...>>
+        : std::bool_constant<(... && is_valid_callable_param_v<Args>)>
+    {};
+
+    template <typename List>
+    inline constexpr bool valid_callable_params_v = valid_callable_params<List>::value;
 
     template <typename List, typename T>
     struct push_type;

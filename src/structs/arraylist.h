@@ -43,11 +43,9 @@ public:
         _resize(initial_capacity);
         if (check_size) // initializes all elements
         {
-            for (size_t i = 0; i < m_arr.cap; i++)
-            {
-                m_arr.ptr[i].~T();
-                m_arr.ptr[i] = T{};
-            }
+            for (size_t i = 0; i < initial_capacity; i++)
+                m_arr.construct(i);
+            m_arr.size = initial_capacity;
         }
     }
 
@@ -90,7 +88,9 @@ public:
 
     void appendGhost();
     ArrayList<T>& append(const T& t);
+    ArrayList<T>& append(T&& t);
     ArrayList<T>& append(size_t i, const T& t);
+    ArrayList<T>& append(size_t i, T&& t);
     ArrayList<T>& append(const ArrayList<T>& arr);
     ArrayList<T>& append(const T* ts, size_t elems);
     ArrayList<T> concat(const ArrayList<T>& arr);
@@ -102,12 +102,7 @@ public:
         _resize_if_necessary();
 
         this->_shuffle_up(i);
-
-        if (i < m_arr.size)
-            m_arr[i].~T();
-
-        // Construct in-place
-        m_arr[i] = T(std::forward<Args>(args)...);
+        m_arr.construct(i, std::forward<Args>(args)...);
 
         ++m_arr.size;
         return m_arr[i];
@@ -119,8 +114,7 @@ public:
         size_t i = m_arr.size;
         _resize_if_necessary();
 
-        // Construct in-place
-        m_arr[i] = T(std::forward<Args>(args)...);
+        m_arr.construct(i, std::forward<Args>(args)...);
 
         ++m_arr.size;
         return m_arr[i];
@@ -263,7 +257,8 @@ void ArrayList<T>::_shuffle_up(size_t i)
 
     for (size_t j = m_arr.size; j > i; --j)
     {
-        m_arr[j] = std::move(m_arr[j - 1]);
+        m_arr.construct(j, std::move(m_arr[j - 1]));
+        m_arr.destroy(j - 1);
     }
 }
 
@@ -275,15 +270,16 @@ T ArrayList<T>::_pop_and_shuffle_down(size_t i)
         throw std::out_of_range("ArrayList pop index out of range");
     }
 
-    T ret = m_arr[i];
+    T ret = std::move(m_arr[i]);
+    m_arr.destroy(i);
 
     for (size_t j = i; j + 1 < m_arr.size; ++j)
     {
-        m_arr[j] = std::move(m_arr[j + 1]);
+        m_arr.construct(j, std::move(m_arr[j + 1]));
+        m_arr.destroy(j + 1);
     }
 
     --m_arr.size;
-    m_arr[m_arr.size] = T{};
     return ret;
 }
 
@@ -291,25 +287,18 @@ template <typename T>
 ArrayList<T>::ArrayList(const ArrayList& arr)
 {
     _resize(arr.m_arr.cap);
-    m_arr.size = arr.m_arr.size;
 
     for (size_t i = 0; i < arr.m_arr.size; ++i)
     {
-        m_arr[i] = arr.m_arr[i];
+        m_arr.construct(i, arr.m_arr[i]);
     }
+    m_arr.size = arr.m_arr.size;
 }
 
 template <typename T>
 ArrayList<T>::ArrayList(ArrayList&& arr) noexcept
-{
-    m_arr = arr.m_arr;
-    m_arr.size = arr.m_arr.size;
-    m_arr.cap = arr.m_arr.cap;
-
-    arr.m_arr.ptr = nullptr;
-    arr.m_arr.size = 0;
-    arr.m_arr.cap = 0;
-}
+    : m_arr(std::move(arr.m_arr))
+{}
 
 template <typename T>
 ArrayList<T>& ArrayList<T>::operator=(const ArrayList& arr)
@@ -319,13 +308,14 @@ ArrayList<T>& ArrayList<T>::operator=(const ArrayList& arr)
         return *this;
     }
 
+    clear();
     reserve(arr.m_arr.cap);
-    m_arr.size = arr.m_arr.size;
 
     for (size_t i = 0; i < arr.m_arr.size; ++i)
     {
-        m_arr[i] = arr.m_arr[i];
+        m_arr.construct(i, arr.m_arr[i]);
     }
+    m_arr.size = arr.m_arr.size;
 
     return *this;
 }
@@ -338,21 +328,14 @@ ArrayList<T>& ArrayList<T>::operator=(ArrayList&& arr) noexcept
         return *this;
     }
 
-    delete[] m_arr.ptr;
-    m_arr = arr.m_arr;
-    arr.m_arr.ptr = nullptr;
-    arr.m_arr.size = 0;
-    arr.m_arr.cap = 0;
+    m_arr = std::move(arr.m_arr);
     return *this;
 }
 
 template <typename T>
 void ArrayList<T>::clear()
 {
-    delete[] m_arr.ptr;
-    m_arr.ptr = nullptr;
-    m_arr.size = 0;
-    m_arr.cap = 0;
+    m_arr.clear();
 }
 
 template <typename T>
@@ -379,13 +362,21 @@ template <typename T>
 void ArrayList<T>::appendGhost()
 {
     _resize_if_necessary();
-    m_arr.ptr[m_arr.size++] = T{};
+    m_arr.construct(m_arr.size);
+    ++m_arr.size;
 }
 
 template <typename T>
 ArrayList<T>& ArrayList<T>::append(const T& t)
 {
     this->append(m_arr.size, t);
+    return *this;
+}
+
+template <typename T>
+ArrayList<T>& ArrayList<T>::append(T&& t)
+{
+    this->append(m_arr.size, std::move(t));
     return *this;
 }
 
@@ -399,7 +390,21 @@ ArrayList<T>& ArrayList<T>::append(size_t i, const T& t)
     }
 
     this->_shuffle_up(i);
-    m_arr[i] = t;
+    m_arr.construct(i, t);
+    ++m_arr.size;
+    return *this;
+}
+
+template <typename T>
+ArrayList<T>& ArrayList<T>::append(size_t i, T&& t)
+{
+    if (i > m_arr.size)
+    {
+        i = m_arr.size;
+    }
+
+    this->_shuffle_up(i);
+    m_arr.construct(i, std::move(t));
     ++m_arr.size;
     return *this;
 }

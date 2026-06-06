@@ -227,6 +227,23 @@ namespace ecs_sim
         );
 
         using DecayedCallable = std::decay_t<Callable>;
+        using CallableArgs = callable_arg_list_t<DecayedCallable>;
+
+        static_assert(
+            is_callable_inspectable_v<DecayedCallable>,
+            "ECSProcessor simulation callables must have a non-generic, inspectable operator() so access can be derived from parameter constness"
+        );
+
+        static_assert(
+            callable_arity_v<DecayedCallable> == sizeof...(Args),
+            "ECSProcessor simulation callable parameter count must match the submitted argument count"
+        );
+
+        static_assert(
+            valid_callable_params_v<CallableArgs>,
+            "ECSProcessor simulation callable parameters must be Entity, component lvalue references, or const ArrayList<T>& for ArrayFor<T>"
+        );
+
         static_assert(
             std::is_invocable_v<
                 DecayedCallable&,
@@ -236,7 +253,7 @@ namespace ecs_sim
         );
 
         Job job;
-        job.access = build_access_spec<Args...>();
+        job.access = build_callable_access_spec<DecayedCallable>();
         job.run = [callable = DecayedCallable(std::forward<Callable>(callable))](ECS& ecs) mutable
         {
             run_job<DecayedCallable, Args...>(ecs, callable);
