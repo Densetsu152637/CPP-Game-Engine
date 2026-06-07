@@ -11,7 +11,7 @@
 // simulation
 void movementSystem(Engine& engine, ECSProcessor& sim)
 {
-    sim.queue_into_sim<Velocity3D, Position3D>(
+    sim.queue_into_sim<Velocity3D, ecs::Dirty<Position3D>>(
         "MOVEMENT_SYSTEM_3D",
         [&engine](const Velocity3D& velocity, Position3D& position)
         {
@@ -21,13 +21,13 @@ void movementSystem(Engine& engine, ECSProcessor& sim)
     );
 }
 
-void collisionSystemExample(Engine& engine, ECSProcessor& sim)
+void dirtyCollisionSystemExample(Engine& engine, ECSProcessor& sim)
 {
-    sim.queue_into_sim<Position3D, CollisionSurface, ArrayFor<CollisionSurface>>(
+    sim.queue_into_sim<ecs::Dirty<Position3D>, CollisionSurface, ArrayFor<CollisionSurface>>(
         "COLLISION_SYSTEM_EXAMPLE",
         [](
             Position3D& position,
-            CollisionSurface& localSurface,
+            const CollisionSurface& localSurface,
             const ArrayList<CollisionSurface>& surfaces
         )
         {

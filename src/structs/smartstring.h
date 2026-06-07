@@ -94,7 +94,7 @@ public:
 
     SmartString replace(char old_value, char new_value) const;
     SmartString replace(const std::string& old_pattern, const std::string& new_pattern);
-    SmartString repeat(int count);
+    SmartString repeat(int count) const;
 
     ArrayList<SmartString> partition(const std::string& separator);
     ArrayList<SmartString> rpartition(const std::string& separator);

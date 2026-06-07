@@ -10,7 +10,7 @@
 // simulation
 void movementSystem(Engine& engine, ECSProcessor& sim);
 
-void collisionSystemExample(Engine& engine, ECSProcessor& sim);
+void dirtyCollisionSystemExample(Engine& engine, ECSProcessor& sim);
 
 
 

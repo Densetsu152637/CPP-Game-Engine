@@ -9,9 +9,11 @@
 #include <string>
 
 #include "component_type_id.h"
+#include "../structs/templates.h"
 #include "../structs/arraylist.h"
 
 class ECS;
+class Threadpool;
 
 namespace ecs_sim
 {
@@ -29,8 +31,9 @@ namespace ecs_sim
 
     struct Job
     {
-        std::function<void(ECS&)> run;
+        std::function<void(ECS&, Threadpool&)> run;
         AccessSpec access;
+        bool usesInternalParallelism = false;
     };
 
     using SimulationJob = Job;

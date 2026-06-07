@@ -106,18 +106,14 @@ void ECS::swapRenderBuffers()
 
 void ECS::markComponentDirty(const ecs::ComponentTypeId componentTypeId)
 {
-    for (auto& pool : m_componentPools | std::views::values)
-    {
-        if (pool->type_id() == componentTypeId)
-            pool->markDirty();
-    }
+    const auto it = m_componentPools.find(componentTypeId);
+    if (it != m_componentPools.end())
+        it->second->markDirty();
 }
 
 void ECS::markComponentEntityDirty(const ecs::ComponentTypeId componentTypeId, const size_t entityIndex)
 {
-    for (auto& pool : m_componentPools | std::views::values)
-    {
-        if (pool->type_id() == componentTypeId)
-            pool->markEntityDirty(entityIndex);
-    }
+    const auto it = m_componentPools.find(componentTypeId);
+    if (it != m_componentPools.end())
+        it->second->markEntityDirty(entityIndex);
 }

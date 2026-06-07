@@ -81,11 +81,12 @@ void ECSProcessor::simulate()
                 std::to_string(m_wall_jobs[wallName].length()) + " jobs"
         );
 
-        ArrayList<SimulationJob> sim_jobs = m_wall_jobs[wallName]
-            .map(
-            [this](const auto& name)
-                { return m_sim_jobs[name]; }
-        );
+        ArrayList<ecs_sim::Job*> sim_jobs{m_wall_jobs[wallName].length()};
+        for (const std::string& name : m_wall_jobs[wallName])
+        {
+            sim_jobs.append(&m_sim_jobs.at(name));
+        }
+
         ecs_sim::execute_jobs_concurrently(
             m_pool,
             m_ecs,
@@ -136,10 +137,10 @@ void ECSProcessor::simulate()
 
 void ECSProcessor::render()
 {
-    ArrayList<RenderJob> render_jobs{m_render_jobs.size()};
-    for (const auto& [name, job] : m_render_jobs)
+    ArrayList<ecs_sim::Job*> render_jobs{m_render_jobs.size()};
+    for (auto& [name, job] : m_render_jobs)
     {
-        render_jobs.append(job);
+        render_jobs.append(&job);
     }
 
     ecs_processor_detail::log_scheduler_event(

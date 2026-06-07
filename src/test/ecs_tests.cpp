@@ -291,6 +291,77 @@ namespace
         );
     }
 
+    void test_dirty_wrapper_forces_full_transfer()
+    {
+        Threadpool pool(1, std::string("ecs-test"));
+        ECSProcessor processor(pool);
+        ECS& ecs = processor.ecs();
+
+        for (int i = 0; i < 5; ++i)
+        {
+            const Entity entity = ecs.createEntity();
+            ecs.emplaceComponent<Velocity>(entity, i);
+        }
+
+        processor.queue_into_rendering<Velocity>("noop", [](const Velocity& velocity)
+        {
+            (void)velocity;
+        });
+
+        processor.simulate();
+        processor.render();
+        processor.render();
+
+        CapturingLogger logger;
+        processor.setSchedulerLogger(&logger);
+        processor.queue_into_sim<ecs::Dirty<Velocity>>("mark-velocity-dirty", [](Velocity& velocity)
+        {
+            velocity = static_cast<int>(velocity);
+        });
+
+        processor.simulate();
+        logger.logHistory();
+
+        require(
+            contains_line(logger.lines, "mode=full"),
+            "ecs::Dirty<T> wrapper did not force a full render transfer"
+        );
+    }
+
+    void test_global_dirty_wrapper_matches_namespaced_dirty_wrapper()
+    {
+        Threadpool pool(1, std::string("ecs-test"));
+        ECSProcessor processor(pool);
+        ECS& ecs = processor.ecs();
+
+        const Entity entity = ecs.createEntity();
+        ecs.emplaceComponent<Velocity>(entity, 1);
+
+        processor.queue_into_rendering<Velocity>("noop", [](const Velocity& velocity)
+        {
+            (void)velocity;
+        });
+
+        processor.simulate();
+        processor.render();
+        processor.render();
+
+        CapturingLogger logger;
+        processor.setSchedulerLogger(&logger);
+        processor.queue_into_sim<Dirty<Velocity>>("mark-velocity-dirty", [](Velocity& velocity)
+        {
+            velocity = static_cast<int>(velocity);
+        });
+
+        processor.simulate();
+        logger.logHistory();
+
+        require(
+            contains_line(logger.lines, "mode=full"),
+            "Dirty<T> wrapper did not match ecs::Dirty<T> dirty transfer behaviour"
+        );
+    }
+
     void test_scheduler_logging()
     {
         Threadpool pool(1, std::string("ecs-test"));
@@ -330,6 +401,8 @@ int main()
         test_buffered_simulation_write_transfers_to_render();
         test_unwritten_buffered_pool_does_not_swap_on_unrelated_wall();
         test_dirty_threshold_promotes_to_full_transfer();
+        test_dirty_wrapper_forces_full_transfer();
+        test_global_dirty_wrapper_matches_namespaced_dirty_wrapper();
         test_scheduler_logging();
     }
     catch (const std::exception& exception)

@@ -105,6 +105,22 @@ namespace ecs_sim
         );
     }
 
+    template <typename Component>
+    void append_guaranteed_dirty_access(AccessSpec& spec)
+    {
+        append_read<Component>(spec);
+        append_write<Component>(spec);
+
+        if constexpr (!ecs::is_buffered_component_v<Component>)
+            append_exclusive_write<Component>(spec);
+    }
+
+    template <typename... Components>
+    void append_guaranteed_dirty_access(AccessSpec& spec, type_list<Components...>)
+    {
+        (append_guaranteed_dirty_access<Components>(spec), ...);
+    }
+
     template <typename T>
     void append_access(AccessSpec& spec)
     {
@@ -179,6 +195,14 @@ namespace ecs_sim
     AccessSpec build_callable_access_spec()
     {
         return build_callable_access_spec(callable_arg_list_t<Callable>{});
+    }
+
+    template <typename Callable, typename DirtyComponents>
+    AccessSpec build_callable_access_spec()
+    {
+        AccessSpec spec = build_callable_access_spec<Callable>();
+        append_guaranteed_dirty_access(spec, DirtyComponents{});
+        return spec;
     }
 
     template <typename... Args>

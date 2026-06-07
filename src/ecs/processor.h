@@ -6,6 +6,7 @@
 
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 
@@ -196,7 +197,7 @@ ECSProcessor& ECSProcessor::queue_into_sim(const std::string& name, std::string 
         throw std::out_of_range("ECSProcessor wall does not exist: " + wall);
 
     ecs_processor_detail::guarantee_sim_pools<Args...>(m_ecs);
-    const SimulationJob job = ecs_sim::make_sim_job<Args...>(std::forward<Callable>(callable));
+    SimulationJob job = ecs_sim::make_sim_job<Args...>(std::forward<Callable>(callable));
 
     ecs_processor_detail::throw_if_wall_conflicts(
         name,
@@ -207,12 +208,12 @@ ECSProcessor& ECSProcessor::queue_into_sim(const std::string& name, std::string 
     );
 
     _remove_job_from_walls(name);
-    m_sim_jobs[name] = job;
+    m_sim_jobs.insert_or_assign(name, std::move(job));
     m_wall_jobs[wall].append(name);
     ecs_processor_detail::log_scheduler_event(
         m_schedulerLogger,
         "queued simulation job \"" + name + "\" into wall \"" + wall + "\" " +
-            ecs_processor_detail::access_summary(job.access)
+            ecs_processor_detail::access_summary(m_sim_jobs.at(name).access)
     );
 
     return *this;
@@ -225,9 +226,9 @@ ECSProcessor& ECSProcessor::queue_into_rendering(const std::string& name, Callab
         throw std::invalid_argument("ECSProcessor job name cannot be empty");
 
     ecs_processor_detail::guarantee_render_pools<Args...>(m_ecs);
-    const RenderJob job = ecs_sim::make_render_job<Args...>(std::forward<Callable>(callable));
+    RenderJob job = ecs_sim::make_render_job<Args...>(std::forward<Callable>(callable));
 
-    m_render_jobs[name] = job;
+    m_render_jobs.insert_or_assign(name, std::move(job));
     ecs_processor_detail::log_scheduler_event(
         m_schedulerLogger,
         "queued rendering job \"" + name + "\""

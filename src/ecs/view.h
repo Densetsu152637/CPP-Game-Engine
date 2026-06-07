@@ -9,6 +9,7 @@
 #include <exception>
 #include <iterator>
 #include <functional>
+#include <memory>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -743,9 +744,10 @@ class View
         for (size_t chunk = 0; chunk < chunks; ++chunk)
         {
             const dense_range range = make_chunk_range(chunk, chunkSize, total);
-            promises.append(pool.submit([this, range, callable]() mutable
+            auto chunkCallable = std::make_shared<Callable>(callable);
+            promises.append(pool.submit([this, range, chunkCallable]() mutable
             {
-                each_range(range.begin, range.end, callable);
+                each_range(range.begin, range.end, *chunkCallable);
                 return true;
             }));
         }
@@ -770,9 +772,11 @@ class View
 
         const size_t chunkSize = dense_chunk_size(total, pool, minChunk);
         const size_t chunks = chunk_count(total, chunkSize);
+        using DecayedCallable = std::decay_t<Callable>;
+        DecayedCallable callableSeed(std::forward<Callable>(callable));
 
         ArrayList<Promise<bool>> promises;
-        append_dense_range_jobs(pool, total, chunkSize, chunks, callable, promises);
+        append_dense_range_jobs(pool, total, chunkSize, chunks, callableSeed, promises);
         await_all(promises);
     }
 

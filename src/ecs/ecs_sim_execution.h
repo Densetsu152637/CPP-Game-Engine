@@ -41,7 +41,44 @@ namespace ecs_sim
         }
     }
 
-    inline void execute_jobs_concurrently(Threadpool& pool, ECS& ecs, ArrayList<Job>& jobs, const BufferSwap swap)
+    inline bool contains_internally_parallel_jobs(const ArrayList<Job*>& jobs)
+    {
+        for (const Job* job : jobs)
+        {
+            if (job->usesInternalParallelism)
+                return true;
+        }
+
+        return false;
+    }
+
+    inline bool should_run_jobs_on_caller(Threadpool& pool, const ArrayList<Job*>& jobs)
+    {
+        return contains_internally_parallel_jobs(jobs) &&
+            jobs.length() >= pool.size();
+    }
+
+    inline void run_jobs_on_caller(Threadpool& pool, ECS& ecs, ArrayList<Job*>& jobs)
+    {
+        for (Job* job : jobs)
+            job->run(ecs, pool);
+    }
+
+    inline void submit_jobs(Threadpool& pool, ECS& ecs, ArrayList<Job*>& jobs, ArrayList<Promise<bool>>& promises)
+    {
+        promises.reserve(jobs.length());
+
+        for (Job* job : jobs)
+        {
+            promises.append(pool.submit([&ecs, &pool, job]()
+            {
+                job->run(ecs, pool);
+                return true;
+            }));
+        }
+    }
+
+    inline void execute_jobs_concurrently(Threadpool& pool, ECS& ecs, ArrayList<Job*>& jobs, const BufferSwap swap)
     {
         if (jobs.empty())
         {
@@ -49,18 +86,15 @@ namespace ecs_sim
             return;
         }
 
-        ArrayList<Promise<bool>> promises;
-        promises.reserve(jobs.length());
-
-        for (Job& job : jobs)
+        if (should_run_jobs_on_caller(pool, jobs))
         {
-            promises.append(pool.submit([&ecs, &job]()
-            {
-                job.run(ecs);
-                return true;
-            }));
+            run_jobs_on_caller(pool, ecs, jobs);
+            swap_after_jobs(ecs, swap);
+            return;
         }
 
+        ArrayList<Promise<bool>> promises;
+        submit_jobs(pool, ecs, jobs, promises);
         await_promises(promises);
 
         swap_after_jobs(ecs, swap);

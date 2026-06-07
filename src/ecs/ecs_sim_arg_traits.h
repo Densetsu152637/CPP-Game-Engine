@@ -35,9 +35,31 @@ namespace ecs_sim
     inline constexpr bool is_array_for_v = is_array_for<std::remove_cvref_t<T>>::value;
 
     template <typename T>
+    struct is_dirty_component_arg : std::false_type
+    {};
+
+    template <typename T>
+    struct is_dirty_component_arg<ecs::Dirty<T>> : std::true_type
+    {};
+
+    template <typename T>
+    inline constexpr bool is_dirty_component_arg_v =
+        is_dirty_component_arg<std::remove_cvref_t<T>>::value;
+
+    template <typename T>
+    inline constexpr bool is_wrapped_component_arg_v =
+        is_dirty_component_arg_v<T>;
+
+    template <typename T>
     inline constexpr bool is_plain_component_arg_v =
         !is_entity_arg_v<T> &&
-        !is_array_for_v<T>;
+        !is_array_for_v<T> &&
+        !is_wrapped_component_arg_v<T>;
+
+    template <typename T>
+    inline constexpr bool is_component_submit_arg_v =
+        is_plain_component_arg_v<T> ||
+        is_wrapped_component_arg_v<T>;
 
     template <typename T>
     inline constexpr bool is_const_component_arg_v =
@@ -48,7 +70,7 @@ namespace ecs_sim
     inline constexpr bool is_supported_submit_arg_v =
         is_entity_arg_v<T> ||
         is_array_for_v<T> ||
-        is_plain_component_arg_v<T>;
+        is_component_submit_arg_v<T>;
 
     template <typename T>
     struct component_for_arg
@@ -67,7 +89,13 @@ namespace ecs_sim
     };
 
     template <typename T>
-    using component_for_arg_t = typename component_for_arg<T>::type;
+    struct component_for_arg<ecs::Dirty<T>>
+    {
+        using type = std::remove_cvref_t<T>;
+    };
+
+    template <typename T>
+    using component_for_arg_t = typename component_for_arg<std::remove_cvref_t<T>>::type;
 
     template <typename T>
     struct array_component_for_arg
@@ -104,6 +132,12 @@ namespace ecs_sim
     struct call_arg<Arg, ArrayFor<T>>
     {
         using type = const ArrayList<ecs::component_value_t<T>>&;
+    };
+
+    template <typename Arg, typename T>
+    struct call_arg<Arg, ecs::Dirty<T>>
+    {
+        using type = ecs::component_value_t<T>&;
     };
 
     template <typename Arg>
@@ -272,6 +306,51 @@ namespace ecs_sim
 
     template <typename... Args>
     using component_list_t = typename collect_components<type_list<>, Args...>::type;
+
+    template <typename... Args>
+    using callable_submit_arg_list_t = type_list<Args...>;
+
+    template <typename List, typename Arg>
+    struct append_guaranteed_dirty_component
+    {
+        using type = List;
+    };
+
+    template <typename List, typename Component>
+    struct append_guaranteed_dirty_component<List, ecs::Dirty<Component>>
+    {
+        using type = typename push_unique_type<List, std::remove_cvref_t<Component>>::type;
+    };
+
+    template <typename List, typename... Args>
+    struct collect_guaranteed_dirty_components;
+
+    template <typename List>
+    struct collect_guaranteed_dirty_components<List>
+    {
+        using type = List;
+    };
+
+    template <typename List, typename Arg, typename... Rest>
+    struct collect_guaranteed_dirty_components<List, Arg, Rest...>
+    {
+        using next = typename append_guaranteed_dirty_component<List, std::remove_cvref_t<Arg>>::type;
+        using type = typename collect_guaranteed_dirty_components<next, Rest...>::type;
+    };
+
+    template <typename... Args>
+    using guaranteed_dirty_component_list_t =
+        typename collect_guaranteed_dirty_components<type_list<>, Args...>::type;
+
+    template <typename List>
+    struct type_list_size;
+
+    template <typename... Args>
+    struct type_list_size<type_list<Args...>> : std::integral_constant<size_t, sizeof...(Args)>
+    {};
+
+    template <typename List>
+    inline constexpr size_t type_list_size_v = type_list_size<List>::value;
 
     template <typename T, typename... Ts>
     struct type_index;

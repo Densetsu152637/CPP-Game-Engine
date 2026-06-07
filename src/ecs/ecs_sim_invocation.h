@@ -30,7 +30,23 @@ namespace ecs_sim
         }
     }
 
-    template <typename Param>
+    template <typename Component, typename DirtyComponents>
+    inline constexpr bool is_guaranteed_dirty_component_v =
+        contains_type<DirtyComponents, std::remove_cvref_t<Component>>::value;
+
+    template <typename Component>
+    void mark_guaranteed_dirty_component(ECS& ecs)
+    {
+        ecs.template markComponentDirty<Component>();
+    }
+
+    template <typename... Components>
+    void mark_guaranteed_dirty_components(ECS& ecs, type_list<Components...>)
+    {
+        (mark_guaranteed_dirty_component<Components>(ecs), ...);
+    }
+
+    template <typename Param, typename DirtyComponents>
     void mark_callable_param_entity_dirty(ECS& ecs, const size_t entityIndex)
     {
         using Arg = std::remove_cvref_t<Param>;
@@ -39,22 +55,23 @@ namespace ecs_sim
             !is_entity_arg_v<Arg> &&
             !is_array_list_param_v<Param> &&
             is_plain_component_arg_v<Arg> &&
-            !std::is_const_v<std::remove_reference_t<Param>>
+            !std::is_const_v<std::remove_reference_t<Param>> &&
+            !is_guaranteed_dirty_component_v<Arg, DirtyComponents>
         ) {
             ecs.template markComponentEntityDirty<Arg>(entityIndex);
         }
     }
 
-    template <typename... Params>
+    template <typename DirtyComponents, typename... Params>
     void mark_entity_dirty_for_writes(ECS& ecs, const size_t entityIndex, type_list<Params...>)
     {
-        (mark_callable_param_entity_dirty<Params>(ecs, entityIndex), ...);
+        (mark_callable_param_entity_dirty<Params, DirtyComponents>(ecs, entityIndex), ...);
     }
 
-    template <typename Callable>
+    template <typename Callable, typename DirtyComponents>
     void mark_entity_dirty_for_writes(ECS& ecs, const size_t entityIndex)
     {
-        mark_entity_dirty_for_writes(ecs, entityIndex, callable_arg_list_t<Callable>{});
+        mark_entity_dirty_for_writes<DirtyComponents>(ecs, entityIndex, callable_arg_list_t<Callable>{});
     }
 
     template <typename Arg>
@@ -70,9 +87,9 @@ namespace ecs_sim
         {
             return make_global_argument<Arg>(ecs);
         }
-        else if constexpr (is_plain_component_arg_v<Arg>)
+        else if constexpr (is_component_submit_arg_v<Arg>)
         {
-            using Component = std::remove_cvref_t<Arg>;
+            using Component = component_for_arg_t<Arg>;
             auto* component = ecs.try_get<Component>(entity);
             if (nullptr == component)
                 throw std::out_of_range("Missing component for plain component argument");
@@ -109,14 +126,14 @@ namespace ecs_sim
 
             if constexpr (is_const_component_arg_v<Arg>)
                 return static_cast<const ecs::component_value_t<Component>&>(component);
-            else if constexpr (is_plain_component_arg_v<Arg>)
+            else if constexpr (is_component_submit_arg_v<Arg>)
                 return component;
             else
                 static_assert(sizeof(Arg) == 0, "Unsupported ECSProcessor argument");
         }
     }
 
-    template <typename Callable, typename... Args, size_t... Is>
+    template <typename Callable, typename DirtyComponents, typename... Args, size_t... Is>
     void invoke_for_entity_impl(Callable& callable, ECS& ecs, const Entity& entity, std::index_sequence<Is...>)
     {
         using ArgTuple = std::tuple<Args...>;
@@ -132,13 +149,13 @@ namespace ecs_sim
             args
         );
 
-        mark_entity_dirty_for_writes<Callable>(ecs, entity.index);
+        mark_entity_dirty_for_writes<Callable, DirtyComponents>(ecs, entity.index);
     }
 
-    template <typename Callable, typename... Args>
+    template <typename Callable, typename DirtyComponents, typename... Args>
     void invoke_for_entity(Callable& callable, ECS& ecs, const Entity& entity)
     {
-        invoke_for_entity_impl<Callable, Args...>(
+        invoke_for_entity_impl<Callable, DirtyComponents, Args...>(
             callable,
             ecs,
             entity,
@@ -173,7 +190,7 @@ namespace ecs_sim
         );
     }
 
-    template <typename Callable, typename... Args, typename... Components, typename ComponentTuple>
+    template <typename Callable, typename DirtyComponents, typename... Args, typename... Components, typename ComponentTuple>
     void invoke_for_entity_with_components(
         ECS& ecs,
         Callable& callable,
@@ -194,11 +211,11 @@ namespace ecs_sim
             args
         );
 
-        mark_entity_dirty_for_writes<Callable>(ecs, entity.index);
+        mark_entity_dirty_for_writes<Callable, DirtyComponents>(ecs, entity.index);
     }
 
-    template <typename Callable, typename... Args>
-    void run_no_component_job(ECS& ecs, Callable& callable)
+    template <typename Callable, typename DirtyComponents, typename... Args>
+    void run_no_component_job(ECS& ecs, Threadpool& pool, Callable& callable)
     {
         if constexpr (sizeof...(Args) == 0)
         {
@@ -207,10 +224,10 @@ namespace ecs_sim
         else if constexpr (has_entity_arg_pack_v<Args...>)
         {
             auto view = ecs.view<>();
-            view.each([&](const Entity& entity)
+            view.each_mt([&](const Entity& entity)
             {
-                invoke_for_entity<Callable, Args...>(callable, ecs, entity);
-            });
+                invoke_for_entity<Callable, DirtyComponents, Args...>(callable, ecs, entity);
+            }, pool);
         }
         else
         {
@@ -218,20 +235,20 @@ namespace ecs_sim
         }
     }
 
-    template <typename Callable, typename... Args>
-    void run_component_job(ECS& ecs, Callable& callable, type_list<>)
+    template <typename Callable, typename DirtyComponents, typename... Args>
+    void run_component_job(ECS& ecs, Threadpool& pool, Callable& callable, type_list<>)
     {
-        run_no_component_job<Callable, Args...>(ecs, callable);
+        run_no_component_job<Callable, DirtyComponents, Args...>(ecs, pool, callable);
     }
 
-    template <typename Callable, typename... Args, typename... Components>
-    void run_component_job(ECS& ecs, Callable& callable, type_list<Components...>)
+    template <typename Callable, typename DirtyComponents, typename... Args, typename... Components>
+    void run_component_job(ECS& ecs, Threadpool& pool, Callable& callable, type_list<Components...>)
     {
         auto view = ecs.view<Components...>();
-        view.each([&](const Entity& entity, ecs::component_value_t<Components>&... components)
+        view.each_mt([&](const Entity& entity, ecs::component_value_t<Components>&... components)
         {
             auto componentTuple = std::forward_as_tuple(components...);
-            invoke_for_entity_with_components(
+            invoke_for_entity_with_components<Callable, DirtyComponents>(
                 ecs,
                 callable,
                 type_list<Args...>{},
@@ -239,24 +256,25 @@ namespace ecs_sim
                 entity,
                 componentTuple
             );
-        });
+        }, pool);
     }
 
-    template <typename Callable, typename... Args>
-    void run_job(ECS& ecs, Callable& callable)
+    template <typename Callable, typename DirtyComponents, typename... Args>
+    void run_job(ECS& ecs, Threadpool& pool, Callable& callable)
     {
         using Components = component_list_t<Args...>;
-        run_component_job<Callable, Args...>(ecs, callable, Components{});
+        run_component_job<Callable, DirtyComponents, Args...>(ecs, pool, callable, Components{});
+        mark_guaranteed_dirty_components(ecs, DirtyComponents{});
     }
 
-    template <typename... Args, typename Callable>
-    Job make_job(Callable&& callable)
-    {
-        static_assert(
-            (... && is_supported_submit_arg_v<Args>),
-            "ECSProcessor submit arguments must be component types, ArrayFor<T>, or Entity"
-        );
+    template <typename... Args>
+    inline constexpr bool job_uses_internal_parallelism_v =
+        has_entity_arg_pack_v<Args...> ||
+        type_list_size_v<component_list_t<Args...>> > 0;
 
+    template <typename DirtyComponents, typename... Args, typename Callable>
+    Job make_job_from_args(type_list<Args...>, Callable&& callable)
+    {
         using DecayedCallable = std::decay_t<Callable>;
         using CallableArgs = callable_arg_list_t<DecayedCallable>;
 
@@ -266,7 +284,7 @@ namespace ecs_sim
         );
 
         static_assert(
-            callable_arity_v<DecayedCallable> == sizeof...(Args),
+            callable_arity_v<DecayedCallable> == type_list_size_v<type_list<Args...>>,
             "ECSProcessor simulation callable parameter count must match the submitted argument count"
         );
 
@@ -284,12 +302,26 @@ namespace ecs_sim
         );
 
         Job job;
-        job.access = build_callable_access_spec<DecayedCallable>();
-        job.run = [callable = DecayedCallable(std::forward<Callable>(callable))](ECS& ecs) mutable
+        job.access = build_callable_access_spec<DecayedCallable, DirtyComponents>();
+        job.usesInternalParallelism = job_uses_internal_parallelism_v<Args...>;
+        job.run = [callable = DecayedCallable(std::forward<Callable>(callable))](ECS& ecs, Threadpool& pool) mutable
         {
-            run_job<DecayedCallable, Args...>(ecs, callable);
+            run_job<DecayedCallable, DirtyComponents, Args...>(ecs, pool, callable);
         };
         return job;
+    }
+
+    template <typename... Args, typename Callable>
+    Job make_job(Callable&& callable)
+    {
+        static_assert(
+            (... && is_supported_submit_arg_v<Args>),
+            "ECSProcessor submit arguments must be component types, Dirty<T>, ecs::Dirty<T>, ArrayFor<T>, or Entity"
+        );
+
+        using CallableArgs = callable_submit_arg_list_t<Args...>;
+        using DirtyComponents = guaranteed_dirty_component_list_t<Args...>;
+        return make_job_from_args<DirtyComponents>(CallableArgs{}, std::forward<Callable>(callable));
     }
 
     template <typename... Args, typename Callable>
@@ -316,13 +348,14 @@ namespace ecs_sim
         );
 
         RenderJob job;
-        job.run = [callable = DecayedCallable(std::forward<Callable>(callable))](ECS& ecs) mutable
+        job.usesInternalParallelism = true;
+        job.run = [callable = DecayedCallable(std::forward<Callable>(callable))](ECS& ecs, Threadpool& pool) mutable
         {
             auto view = ecs.render_view<Components...>();
-            view.each([&](const ecs::component_value_t<Components>&... components)
+            view.each_mt([&](const ecs::component_value_t<Components>&... components)
             {
                 std::invoke(callable, components...);
-            });
+            }, pool);
         };
         return job;
     }

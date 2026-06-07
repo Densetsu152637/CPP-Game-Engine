@@ -306,14 +306,7 @@ public:
     { return m_roleToBuffer[WRITE_INDEX]; }
 
     void swapBuffers() override
-    {
-        if (!m_shouldSwap.exchange(false, std::memory_order_acq_rel))
-            return;
-
-        std::swap(m_roleToBuffer[READ_INDEX], m_roleToBuffer[WRITE_INDEX]);
-        this->bumpGeneration();
-        synchronizeInactiveBuffer();
-    }
+    { publishPendingWrites(); }
 
     void writeFrom(ComponentPool<T>& componentPool)
     {
@@ -354,6 +347,26 @@ public:
     }
 
 private:
+    bool consumePendingPublish()
+    {
+        return m_shouldSwap.exchange(false, std::memory_order_acq_rel);
+    }
+
+    void swapReadWriteRoles()
+    {
+        std::swap(m_roleToBuffer[READ_INDEX], m_roleToBuffer[WRITE_INDEX]);
+    }
+
+    void publishPendingWrites()
+    {
+        if (!consumePendingPublish())
+            return;
+
+        swapReadWriteRoles();
+        this->bumpGeneration();
+        synchronizeInactiveBuffer();
+    }
+
     template <typename Value>
     T& emplaceInto(SparseSet<T>& destination, const size_t entityIndex, Value&& value)
     {

@@ -221,12 +221,12 @@ ArrayList<SmartString> SmartString::split_on(const std::string& pattern) const
     size_t start = m_sI;
     size_t nextAllowed = m_sI;
 
-    for (const int hit : hits)
+    for (const size_t hit : hits)
     {
         if (hit < nextAllowed)
             continue;
 
-        splits.emplace(m_shared, start, static_cast<size_t>(hit));
+        splits.emplace(m_shared, start, hit);
         start = hit + pattern.length();
         nextAllowed = start;
     }
@@ -441,7 +441,7 @@ SmartString SmartString::replace(const std::string& old_pattern, const std::stri
     }
 
     if (
-        const int remaining_length = m_fI - src_index;
+        const size_t remaining_length = m_fI - src_index;
         remaining_length > 0
     ) {
         array_cpy(dst, dst_index, src, src_index, remaining_length);
@@ -451,22 +451,22 @@ SmartString SmartString::replace(const std::string& old_pattern, const std::stri
 }
 
 
-SmartString SmartString::repeat(const int count)
+SmartString SmartString::repeat(const int count) const
 {
     if (count <= 0 || is_empty())
     {
-        return SmartString("");
+        return { "" };
     }
 
     ArrayList<char> repeated(length() * count);
-    for (int i = 0; i < count; i++) {
-        for (int j = m_sI; j < m_fI; ++j)
+    for (int i = 0; i < count; ++i) {
+        for (size_t j = m_sI; j < m_fI; ++j)
         {
             repeated.append(m_shared->str.at(j));
         }
     }
 
-    return SmartString(std::move(repeated));
+    return { std::move(repeated) };
 }
 
 ArrayList<SmartString> SmartString::partition(const std::string& separator)

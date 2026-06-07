@@ -41,3 +41,15 @@ struct ArrayFor
 {
     using component_type = std::remove_cvref_t<T>;
 };
+
+namespace ecs
+{
+    template <typename T>
+    struct Dirty
+    {
+        using component_type = std::remove_cvref_t<T>;
+    };
+}
+
+template <typename T>
+using Dirty = ecs::Dirty<T>;
