@@ -39,6 +39,7 @@ Entity ECS::createEntity()
 
     auto& [version, alive] = m_entities[index];
     alive = true;
+    ++m_entityGeneration;
 
     return Entity { index, version };
 }
@@ -51,6 +52,7 @@ void ECS::destroyEntity(const Entity& entity)
     auto& [version, alive] = m_entities[entity.index];
     alive = false;
     ++version;
+    ++m_entityGeneration;
     m_freeList.append(entity.index);
 
     for (const auto& pool : m_componentPools | std::views::values)
@@ -73,6 +75,7 @@ void ECS::clear()
 {
     m_freeList.clear();
     m_entities.clear();
+    ++m_entityGeneration;
 
     for (auto& pool : m_componentPools | std::views::values)
     {
@@ -101,11 +104,20 @@ void ECS::swapRenderBuffers()
     }
 }
 
-void ECS::markComponentDirty(const size_t componentTypeId)
+void ECS::markComponentDirty(const ecs::ComponentTypeId componentTypeId)
 {
     for (auto& pool : m_componentPools | std::views::values)
     {
         if (pool->type_id() == componentTypeId)
             pool->markDirty();
+    }
+}
+
+void ECS::markComponentEntityDirty(const ecs::ComponentTypeId componentTypeId, const size_t entityIndex)
+{
+    for (auto& pool : m_componentPools | std::views::values)
+    {
+        if (pool->type_id() == componentTypeId)
+            pool->markEntityDirty(entityIndex);
     }
 }

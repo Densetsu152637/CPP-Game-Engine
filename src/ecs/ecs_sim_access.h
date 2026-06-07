@@ -4,13 +4,21 @@
 
 #pragma once
 
-#include <typeinfo>
+#include <string>
 #include <type_traits>
+#include <utility>
 
 #include "ecs_sim_arg_traits.h"
 
 namespace ecs_sim
 {
+    enum class AccessConflict
+    {
+        None,
+        MutableMutable,
+        NonBufferedMutableRead
+    };
+
     inline bool contains_any(const ArrayList<TypeId>& haystack, const ArrayList<TypeId>& needles)
     {
         for (size_t i = 0; i < needles.length(); ++i)
@@ -22,24 +30,79 @@ namespace ecs_sim
         return false;
     }
 
+    inline AccessConflict conflict_between(const AccessSpec& lhs, const AccessSpec& rhs)
+    {
+        if (contains_any(lhs.writes, rhs.writes))
+            return AccessConflict::MutableMutable;
+
+        if (contains_any(lhs.exclusiveWrites, rhs.reads)
+            || contains_any(rhs.exclusiveWrites, lhs.reads))
+            return AccessConflict::NonBufferedMutableRead;
+
+        return AccessConflict::None;
+    }
+
     inline bool conflicts_with(const AccessSpec& lhs, const AccessSpec& rhs)
     {
-        return contains_any(lhs.exclusiveWrites, rhs.reads)
-            || contains_any(lhs.exclusiveWrites, rhs.writes)
-            || contains_any(rhs.exclusiveWrites, lhs.reads)
-            || contains_any(rhs.exclusiveWrites, lhs.writes);
+        return AccessConflict::None != conflict_between(lhs, rhs);
     }
 
     template <typename Component>
     TypeId component_type_id()
     {
-        return typeid(ecs::component_key_t<Component>).hash_code();
+        return ecs::component_type_id<Component>();
     }
 
-    inline void append_unique_access(ArrayList<TypeId>& access, const TypeId id)
+    template <typename Component>
+    std::string component_type_name()
     {
+        return ecs::component_type_name<Component>();
+    }
+
+    inline void append_unique_access(
+        ArrayList<TypeId>& access,
+        ArrayList<std::string>& names,
+        const TypeId id,
+        std::string name
+    ) {
         if (!access.contains(id))
+        {
             access.append(id);
+            names.append(std::move(name));
+        }
+    }
+
+    template <typename Component>
+    void append_read(AccessSpec& spec)
+    {
+        append_unique_access(
+            spec.reads,
+            spec.readNames,
+            component_type_id<Component>(),
+            component_type_name<Component>()
+        );
+    }
+
+    template <typename Component>
+    void append_write(AccessSpec& spec)
+    {
+        append_unique_access(
+            spec.writes,
+            spec.writeNames,
+            component_type_id<Component>(),
+            component_type_name<Component>()
+        );
+    }
+
+    template <typename Component>
+    void append_exclusive_write(AccessSpec& spec)
+    {
+        append_unique_access(
+            spec.exclusiveWrites,
+            spec.exclusiveWriteNames,
+            component_type_id<Component>(),
+            component_type_name<Component>()
+        );
     }
 
     template <typename T>
@@ -50,24 +113,23 @@ namespace ecs_sim
         if constexpr (is_array_for_v<Arg>)
         {
             using Component = std::remove_cvref_t<typename Arg::component_type>;
-            append_unique_access(spec.reads, component_type_id<Component>());
+            append_read<Component>(spec);
         }
         else if constexpr (is_plain_component_arg_v<T>)
         {
             using Component = std::remove_cvref_t<T>;
-            const TypeId id = component_type_id<Component>();
 
             if constexpr (is_const_component_arg_v<T>)
             {
-                append_unique_access(spec.reads, id);
+                append_read<Component>(spec);
             }
             else
             {
-                append_unique_access(spec.reads, id);
-                append_unique_access(spec.writes, id);
+                append_read<Component>(spec);
+                append_write<Component>(spec);
 
                 if constexpr (!ecs::is_buffered_component_v<Component>)
-                    append_unique_access(spec.exclusiveWrites, id);
+                    append_exclusive_write<Component>(spec);
             }
         }
     }
@@ -84,24 +146,23 @@ namespace ecs_sim
         else if constexpr (is_array_list_param_v<Param>)
         {
             using Component = array_list_param_component_t<Param>;
-            append_unique_access(spec.reads, component_type_id<Component>());
+            append_read<Component>(spec);
         }
         else
         {
             using Component = Arg;
-            const TypeId id = component_type_id<Component>();
 
             if constexpr (std::is_const_v<std::remove_reference_t<Param>>)
             {
-                append_unique_access(spec.reads, id);
+                append_read<Component>(spec);
             }
             else
             {
-                append_unique_access(spec.reads, id);
-                append_unique_access(spec.writes, id);
+                append_read<Component>(spec);
+                append_write<Component>(spec);
 
                 if constexpr (!ecs::is_buffered_component_v<Component>)
-                    append_unique_access(spec.exclusiveWrites, id);
+                    append_exclusive_write<Component>(spec);
             }
         }
     }

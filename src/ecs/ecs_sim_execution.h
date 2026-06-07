@@ -41,19 +41,13 @@ namespace ecs_sim
         }
     }
 
-    inline void mark_simulation_writes_dirty(ECS& ecs, ArrayList<Job>& jobs)
-    {
-        for (const Job& job : jobs)
-        {
-            for (const TypeId componentTypeId : job.access.writes)
-                ecs.markComponentDirty(componentTypeId);
-        }
-    }
-
     inline void execute_jobs_concurrently(Threadpool& pool, ECS& ecs, ArrayList<Job>& jobs, const BufferSwap swap)
     {
         if (jobs.empty())
+        {
+            swap_after_jobs(ecs, swap);
             return;
+        }
 
         ArrayList<Promise<bool>> promises;
         promises.reserve(jobs.length());
@@ -68,9 +62,6 @@ namespace ecs_sim
         }
 
         await_promises(promises);
-
-        if (BufferSwap::Simulation == swap)
-            mark_simulation_writes_dirty(ecs, jobs);
 
         swap_after_jobs(ecs, swap);
     }

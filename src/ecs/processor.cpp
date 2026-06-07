@@ -6,6 +6,7 @@
 
 #include <format>
 #include <ranges>
+#include <string>
 
 void ECSProcessor::_append_default_walls()
 {
@@ -44,6 +45,16 @@ void ECSProcessor::clear()
     _append_default_walls();
 }
 
+void ECSProcessor::setSchedulerLogger(Logger* logger)
+{
+    m_schedulerLogger = logger;
+}
+
+void ECSProcessor::clearSchedulerLogger()
+{
+    m_schedulerLogger = nullptr;
+}
+
 ArrayList<std::string> ECSProcessor::getWallOrdering() const
 {
     ArrayList<std::pair<std::string, size_t>> wall_ordering{m_wall_order.size()};
@@ -64,6 +75,12 @@ void ECSProcessor::simulate()
 {
     for (const auto& wallName : getWallOrdering())
     {
+        ecs_processor_detail::log_scheduler_event(
+            m_schedulerLogger,
+            "running simulation wall \"" + wallName + "\" with " +
+                std::to_string(m_wall_jobs[wallName].length()) + " jobs"
+        );
+
         ArrayList<SimulationJob> sim_jobs = m_wall_jobs[wallName]
             .map(
             [this](const auto& name)
@@ -94,6 +111,15 @@ void ECSProcessor::simulate()
         if (!simPoolPtr->isDirty())
             continue;
 
+        ecs_processor_detail::log_scheduler_event(
+            m_schedulerLogger,
+            std::string("transferring dirty render component pool type=") +
+                renderPoolPtr->type_name() +
+                (simPoolPtr->isFullyDirty()
+                    ? std::string(" mode=full")
+                    : std::string(" mode=entities count=") + std::to_string(simPoolPtr->dirtyEntities().length()))
+        );
+
         transferred_sources.append(simPoolPtr);
         transfer_promises.append(m_pool.submit([renderPoolPtr, simPoolPtr]()
         {
@@ -115,6 +141,12 @@ void ECSProcessor::render()
     {
         render_jobs.append(job);
     }
+
+    ecs_processor_detail::log_scheduler_event(
+        m_schedulerLogger,
+        "running rendering batch with " + std::to_string(render_jobs.length()) + " jobs"
+    );
+
     ecs_sim::execute_jobs_concurrently(
         m_pool,
         m_ecs,

@@ -30,6 +30,33 @@ namespace ecs_sim
         }
     }
 
+    template <typename Param>
+    void mark_callable_param_entity_dirty(ECS& ecs, const size_t entityIndex)
+    {
+        using Arg = std::remove_cvref_t<Param>;
+
+        if constexpr (
+            !is_entity_arg_v<Arg> &&
+            !is_array_list_param_v<Param> &&
+            is_plain_component_arg_v<Arg> &&
+            !std::is_const_v<std::remove_reference_t<Param>>
+        ) {
+            ecs.template markComponentEntityDirty<Arg>(entityIndex);
+        }
+    }
+
+    template <typename... Params>
+    void mark_entity_dirty_for_writes(ECS& ecs, const size_t entityIndex, type_list<Params...>)
+    {
+        (mark_callable_param_entity_dirty<Params>(ecs, entityIndex), ...);
+    }
+
+    template <typename Callable>
+    void mark_entity_dirty_for_writes(ECS& ecs, const size_t entityIndex)
+    {
+        mark_entity_dirty_for_writes(ecs, entityIndex, callable_arg_list_t<Callable>{});
+    }
+
     template <typename Arg>
     decltype(auto) make_argument(ECS& ecs, const Entity& entity)
     {
@@ -104,6 +131,8 @@ namespace ecs_sim
             },
             args
         );
+
+        mark_entity_dirty_for_writes<Callable>(ecs, entity.index);
     }
 
     template <typename Callable, typename... Args>
@@ -164,6 +193,8 @@ namespace ecs_sim
             },
             args
         );
+
+        mark_entity_dirty_for_writes<Callable>(ecs, entity.index);
     }
 
     template <typename Callable, typename... Args>

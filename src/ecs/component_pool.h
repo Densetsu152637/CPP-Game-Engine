@@ -7,16 +7,13 @@
 #include <atomic>
 #include <array>
 #include <stdexcept>
-#include <type_traits>
 #include <typeinfo>
 #include <utility>
 
-#include "../structs/sparse_set.h"
 #include "../structs/templates.h"
-#include "component_alias.h"
-
-constexpr int READ_INDEX = 0;
-constexpr int WRITE_INDEX = 1;
+#include "component_pool_dirty.h"
+#include "component_pool_storage.h"
+#include "component_type_id.h"
 
 template <typename T>
 class ComponentPool;
@@ -27,26 +24,19 @@ class BufferedComponentPool;
 template <typename T>
 class RenderComponentPool;
 
-namespace component_pool_detail
-{
-    template <typename T>
-    void bind_to_role_lookup(T&, const size_t*) noexcept
-    {}
-
-    template <typename T>
-        requires ecs::is_buffered_component_v<T>
-    void bind_to_role_lookup(T& component, const size_t* roleLookup) noexcept
-    { component.bindRoleLookup(roleLookup); }
-
-}
-
 class IComponentPool
 {
-    bool m_dirty = true;
+    ComponentPoolDirtyTracker m_dirty;
+    size_t m_generation = 0;
+
+protected:
+    void bumpGeneration()
+    { ++m_generation; }
 
 public:
     virtual ~IComponentPool() = default;
-    virtual size_t type_id() const = 0;
+    virtual ecs::ComponentTypeId type_id() const = 0;
+    virtual const char* type_name() const = 0;
     virtual void erase(size_t entityIndex) = 0;
     virtual void clear() = 0;
     virtual size_t size() const = 0;
@@ -54,203 +44,183 @@ public:
     virtual void writeFrom(IComponentPool&)
     { throw std::runtime_error("writeFrom is only supported by render component pools"); }
 
+    size_t generation() const
+    { return m_generation; }
+
     bool isDirty() const
-    { return m_dirty; }
+    { return m_dirty.dirty(); }
 
-    void markDirty()
-    { m_dirty = true; }
+    bool isFullyDirty() const
+    { return m_dirty.fullyDirty(); }
 
-    void clearDirty()
-    { m_dirty = false; }
+    const ArrayList<size_t>& dirtyEntities() const
+    { return m_dirty.entities(); }
+
+    virtual void markDirty()
+    { m_dirty.markFull(); }
+
+    virtual void markEntityDirty(const size_t entityIndex)
+    { m_dirty.markEntity(entityIndex, size()); }
+
+    virtual void clearDirty()
+    { m_dirty.clear(); }
 };
 
-template <typename T>
-class ComponentPool final : public IComponentPool
+template <typename T, typename StoragePolicy>
+class SimulationComponentPoolBase : public IComponentPool
 {
     friend class RenderComponentPool<T>;
 
-    SparseSet<T> m_storage;
+    StoragePolicy m_storage;
 
 public:
     using value_type = T;
     using dense_array_type = ArrayList<T>;
 
-    ComponentPool() = default;
+    SimulationComponentPoolBase() = default;
 
-    size_t type_id() const override
-    { return typeid(ecs::component_key_t<T>).hash_code(); }
+    ecs::ComponentTypeId type_id() const override
+    { return ecs::component_type_id<T>(); }
+
+    const char* type_name() const override
+    { return ecs::component_type_name<T>(); }
 
     size_t size() const override
-    { return m_storage.size(); }
+    { return sourceSet().size(); }
 
     bool contains(const size_t entityIndex) const
-    { return m_storage.contains(entityIndex); }
+    { return sourceSet().contains(entityIndex); }
 
     T* try_get(const size_t entityIndex)
-    { return m_storage.try_get(entityIndex); }
+    { return sourceSet().try_get(entityIndex); }
 
     const T* try_get(const size_t entityIndex) const
-    { return m_storage.try_get(entityIndex); }
+    { return sourceSet().try_get(entityIndex); }
 
     T& at(const size_t entityIndex)
-    { return m_storage.at(entityIndex); }
+    { return sourceSet().at(entityIndex); }
 
     const T& at(const size_t entityIndex) const
-    { return m_storage.at(entityIndex); }
+    { return sourceSet().at(entityIndex); }
 
     template <typename... Args>
     T& emplace(const size_t entityIndex, Args&&... args)
     {
-        this->markDirty();
-        return m_storage.emplace(entityIndex, std::forward<Args>(args)...);
+        const bool existed = contains(entityIndex);
+        T& component = sourceSet().emplace(entityIndex, std::forward<Args>(args)...);
+        m_storage.bind(component);
+        noteEntityMutation(entityIndex, !existed);
+        return component;
     }
 
     T& insert_or_assign(const size_t entityIndex, T value)
     {
-        this->markDirty();
-        return m_storage.insert_or_assign(entityIndex, std::move(value));
+        const bool existed = contains(entityIndex);
+        T& component = sourceSet().insert_or_assign(entityIndex, std::move(value));
+        m_storage.bind(component);
+        noteEntityMutation(entityIndex, !existed);
+        return component;
     }
 
     void erase(const size_t entityIndex) override
     {
-        this->markDirty();
-        m_storage.erase(entityIndex);
+        if (!contains(entityIndex))
+            return;
+
+        this->markEntityDirty(entityIndex);
+        this->bumpGeneration();
+        sourceSet().erase(entityIndex);
     }
 
     void clear() override
     {
+        if (!sourceSet().empty())
+            this->bumpGeneration();
+
         this->markDirty();
-        m_storage.clear();
+        sourceSet().clear();
     }
 
     size_t entity_at(const size_t denseIndex) const
-    { return m_storage.key_at(denseIndex); }
+    { return sourceSet().key_at(denseIndex); }
 
     T& dense_at(const size_t denseIndex)
-    { return m_storage.dense_at(denseIndex); }
+    { return sourceSet().dense_at(denseIndex); }
 
     const T& dense_at(const size_t denseIndex) const
-    { return m_storage.dense_at(denseIndex); }
+    { return sourceSet().dense_at(denseIndex); }
 
     ArrayList<T>& dense()
-    { return m_storage.dense_values(); }
+    { return sourceSet().dense_values(); }
 
     const ArrayList<T>& dense() const
-    { return m_storage.dense_values(); }
+    { return sourceSet().dense_values(); }
 
     size_t dense_index_of(const size_t entityIndex) const
-    { return m_storage.index_of(entityIndex); }
+    { return sourceSet().index_of(entityIndex); }
 
-    void swapBuffers() override {}
+    void swapBuffers() override
+    { m_storage.swapBuffers(); }
 
     void writeFrom(IComponentPool&) override
-    { throw std::runtime_error("ComponentPool cannot write from another pool"); }
+    { throw std::runtime_error("Simulation component pools cannot write from another pool"); }
+
+protected:
+    SparseSet<T>& sourceSet()
+    { return m_storage.set(); }
+
+    const SparseSet<T>& sourceSet() const
+    { return m_storage.set(); }
+
+private:
+    void noteEntityMutation(const size_t entityIndex, const bool structural)
+    {
+        if (structural)
+            this->bumpGeneration();
+
+        this->markEntityDirty(entityIndex);
+    }
 };
 
 template <typename T>
-class BufferedComponentPool final : public IComponentPool
-{
-    friend class RenderComponentPool<T>;
+class ComponentPool final : public SimulationComponentPoolBase<T, DirectComponentStorage<T>>
+{};
 
-    SparseSet<T> m_storage;
-    std::array<size_t, 2> m_roleToBuffer { READ_INDEX, WRITE_INDEX };
+template <typename T>
+class BufferedComponentPool final : public SimulationComponentPoolBase<T, BufferedComponentStorage<T>>
+{
+    using base_type = SimulationComponentPoolBase<T, BufferedComponentStorage<T>>;
+
+    bool m_swapPending = false;
 
 public:
-    using value_type = T;
-    using dense_array_type = ArrayList<T>;
-
-    static_assert(
-        ecs::is_buffered_component_v<T>,
-        "BufferedComponentPool can only store ecs::BufferedAlias component types"
-    );
-
-    BufferedComponentPool() = default;
-
-    size_t type_id() const override
-    { return typeid(ecs::component_key_t<T>).hash_code(); }
-
-    size_t size() const override
-    { return m_storage.size(); }
-
-    bool contains(const size_t entityIndex) const
-    { return m_storage.contains(entityIndex); }
-
-    T* try_get(const size_t entityIndex)
-    { return m_storage.try_get(entityIndex); }
-
-    const T* try_get(const size_t entityIndex) const
-    { return m_storage.try_get(entityIndex); }
-
-    T& at(const size_t entityIndex)
-    { return m_storage.at(entityIndex); }
-
-    const T& at(const size_t entityIndex) const
-    { return m_storage.at(entityIndex); }
-
-    template <typename... Args>
-    T& emplace(const size_t entityIndex, Args&&... args)
+    void markDirty() override
     {
-        this->markDirty();
-        T& component = m_storage.emplace(entityIndex, std::forward<Args>(args)...);
-        bind(component);
-        return component;
+        base_type::markDirty();
+        m_swapPending = true;
     }
 
-    T& insert_or_assign(const size_t entityIndex, T value)
+    void markEntityDirty(const size_t entityIndex) override
     {
-        this->markDirty();
-        T& component = m_storage.insert_or_assign(entityIndex, std::move(value));
-        bind(component);
-        return component;
+        base_type::markEntityDirty(entityIndex);
+        m_swapPending = true;
     }
-
-    void erase(const size_t entityIndex) override
-    {
-        this->markDirty();
-        m_storage.erase(entityIndex);
-    }
-
-    void clear() override
-    {
-        this->markDirty();
-        m_storage.clear();
-    }
-
-    size_t entity_at(const size_t denseIndex) const
-    { return m_storage.key_at(denseIndex); }
-
-    T& dense_at(const size_t denseIndex)
-    { return m_storage.dense_at(denseIndex); }
-
-    const T& dense_at(const size_t denseIndex) const
-    { return m_storage.dense_at(denseIndex); }
-
-    ArrayList<T>& dense()
-    { return m_storage.dense_values(); }
-
-    const ArrayList<T>& dense() const
-    { return m_storage.dense_values(); }
-
-    size_t dense_index_of(const size_t entityIndex) const
-    { return m_storage.index_of(entityIndex); }
-
-    size_t read_index() const
-    { return m_roleToBuffer[READ_INDEX]; }
-
-    size_t write_index() const
-    { return m_roleToBuffer[WRITE_INDEX]; }
 
     void swapBuffers() override
     {
-        std::swap(m_roleToBuffer[READ_INDEX], m_roleToBuffer[WRITE_INDEX]);
+        if (!m_swapPending)
+            return;
+
+        base_type::swapBuffers();
+        m_swapPending = false;
     }
+};
 
-    void writeFrom(IComponentPool&) override
-    { throw std::runtime_error("BufferedComponentPool cannot write from another pool"); }
-
-private:
-    void bind(T& component) const noexcept
-    { component_pool_detail::bind_to_role_lookup(component, m_roleToBuffer.data()); }
+enum class RenderPoolSyncMode
+{
+    None,
+    Entities,
+    Full
 };
 
 template <typename T>
@@ -261,14 +231,19 @@ class RenderComponentPool final : public IComponentPool
     friend SparseSet<T>;
 
     Pair<SparseSet<T>> m_storage;
-    std::array<size_t, 2> m_roleToBuffer {READ_INDEX, WRITE_INDEX};
+    std::array<size_t, 2> m_roleToBuffer { READ_INDEX, WRITE_INDEX };
     std::atomic_bool m_shouldSwap = false;
+    RenderPoolSyncMode m_pendingSyncMode = RenderPoolSyncMode::None;
+    ArrayList<size_t> m_pendingSyncEntities;
 
 public:
     RenderComponentPool() = default;
 
-    size_t type_id() const override
-    { return typeid(ecs::component_key_t<T>).hash_code(); }
+    ecs::ComponentTypeId type_id() const override
+    { return ecs::component_type_id<T>(); }
+
+    const char* type_name() const override
+    { return ecs::component_type_name<T>(); }
 
     size_t size() const override
     { return readSet().size(); }
@@ -281,14 +256,25 @@ public:
 
     void erase(const size_t entityIndex) override
     {
+        const bool changed = m_storage.at(READ_INDEX).contains(entityIndex)
+            || m_storage.at(WRITE_INDEX).contains(entityIndex);
+
         m_storage.at(READ_INDEX).erase(entityIndex);
         m_storage.at(WRITE_INDEX).erase(entityIndex);
+
+        if (changed)
+            this->bumpGeneration();
     }
 
     void clear() override
     {
+        if (!m_storage.at(READ_INDEX).empty() || !m_storage.at(WRITE_INDEX).empty())
+            this->bumpGeneration();
+
         m_storage.at(READ_INDEX).clear();
         m_storage.at(WRITE_INDEX).clear();
+        m_pendingSyncEntities.clear();
+        m_pendingSyncMode = RenderPoolSyncMode::None;
         m_shouldSwap.store(false, std::memory_order_release);
     }
 
@@ -297,6 +283,12 @@ public:
 
     const SparseSet<T>& readSet() const
     { return m_storage.at(read_index()); }
+
+    SparseSet<T>& writeSet()
+    { return m_storage.at(write_index()); }
+
+    const SparseSet<T>& writeSet() const
+    { return m_storage.at(write_index()); }
 
     size_t entity_at(const size_t denseIndex) const
     { return readSet().key_at(denseIndex); }
@@ -315,23 +307,30 @@ public:
 
     void swapBuffers() override
     {
-        if (m_shouldSwap)
-        {
-            m_shouldSwap = false;
-            std::swap(m_roleToBuffer[READ_INDEX], m_roleToBuffer[WRITE_INDEX]);
-        }
+        if (!m_shouldSwap.exchange(false, std::memory_order_acq_rel))
+            return;
+
+        std::swap(m_roleToBuffer[READ_INDEX], m_roleToBuffer[WRITE_INDEX]);
+        this->bumpGeneration();
+        synchronizeInactiveBuffer();
     }
 
     void writeFrom(ComponentPool<T>& componentPool)
     {
-        writeDirectFromSet(componentPool.m_storage);
+        if (componentPool.isFullyDirty())
+            writeFullDirectFromSet(componentPool.sourceSet());
+        else
+            writeDirtyDirectFromSet(componentPool.sourceSet(), componentPool.dirtyEntities());
     }
 
     template <typename U = T>
         requires ecs::is_buffered_component_v<U>
     void writeFrom(BufferedComponentPool<U>& componentPool)
     {
-        writeBufferedFromSet(componentPool.m_storage);
+        if (componentPool.isFullyDirty())
+            writeFullBufferedFromSet(componentPool.sourceSet());
+        else
+            writeDirtyBufferedFromSet(componentPool.sourceSet(), componentPool.dirtyEntities());
     }
 
     void writeFrom(IComponentPool& componentPool) override
@@ -355,33 +354,132 @@ public:
     }
 
 private:
-    void writeDirectFromSet(const SparseSet<T>& readSet)
+    template <typename Value>
+    T& emplaceInto(SparseSet<T>& destination, const size_t entityIndex, Value&& value)
     {
-        SparseSet<T>& storage = m_storage.at(write_index());
-        storage.clear();
+        T& component = destination.emplace(entityIndex, std::forward<Value>(value));
+        component_pool_detail::bind_to_role_lookup(component, m_roleToBuffer.data());
+        return component;
+    }
 
-        for (size_t i = 0; i < readSet.size(); ++i)
+    void emplaceRenderCopy(SparseSet<T>& destination, const size_t entityIndex, const T& value)
+    {
+        if constexpr (ecs::is_buffered_component_v<T>)
+            emplaceInto(destination, entityIndex, value.read());
+        else
+            emplaceInto(destination, entityIndex, value);
+    }
+
+    void copyRenderSet(SparseSet<T>& destination, const SparseSet<T>& source)
+    {
+        destination.clear();
+
+        for (size_t i = 0; i < source.size(); ++i)
+            emplaceRenderCopy(destination, source.key_at(i), source.dense_at(i));
+    }
+
+    void markPendingFullSync()
+    {
+        m_pendingSyncEntities.clear();
+        m_pendingSyncMode = RenderPoolSyncMode::Full;
+        m_shouldSwap.store(true, std::memory_order_release);
+    }
+
+    void markPendingEntitySync(const ArrayList<size_t>& dirtyEntities)
+    {
+        m_pendingSyncEntities = dirtyEntities;
+        m_pendingSyncMode = RenderPoolSyncMode::Entities;
+        m_shouldSwap.store(true, std::memory_order_release);
+    }
+
+    void syncEntityFromReadToWrite(const size_t entityIndex)
+    {
+        const T* component = readSet().try_get(entityIndex);
+        if (nullptr == component)
         {
-            T& component = storage.emplace(readSet.key_at(i), readSet.dense_at(i));
-            component_pool_detail::bind_to_role_lookup(component, m_roleToBuffer.data());
+            writeSet().erase(entityIndex);
+            return;
         }
 
-        m_shouldSwap.store(true, std::memory_order_release);
+        emplaceRenderCopy(writeSet(), entityIndex, *component);
+    }
+
+    void synchronizeInactiveBuffer()
+    {
+        switch (m_pendingSyncMode)
+        {
+            case RenderPoolSyncMode::None:
+                return;
+            case RenderPoolSyncMode::Full:
+                copyRenderSet(writeSet(), readSet());
+                break;
+            case RenderPoolSyncMode::Entities:
+                for (const size_t entityIndex : m_pendingSyncEntities)
+                    syncEntityFromReadToWrite(entityIndex);
+                break;
+        }
+
+        m_pendingSyncEntities.clear();
+        m_pendingSyncMode = RenderPoolSyncMode::None;
+    }
+
+    void writeFullDirectFromSet(const SparseSet<T>& source)
+    {
+        SparseSet<T>& storage = writeSet();
+        storage.clear();
+
+        for (size_t i = 0; i < source.size(); ++i)
+            emplaceInto(storage, source.key_at(i), source.dense_at(i));
+
+        markPendingFullSync();
+    }
+
+    void writeDirtyDirectFromSet(const SparseSet<T>& source, const ArrayList<size_t>& dirtyEntities)
+    {
+        SparseSet<T>& storage = writeSet();
+
+        for (const size_t entityIndex : dirtyEntities)
+        {
+            const T* component = source.try_get(entityIndex);
+            if (nullptr == component)
+                storage.erase(entityIndex);
+            else
+                emplaceInto(storage, entityIndex, *component);
+        }
+
+        if (!dirtyEntities.empty())
+            markPendingEntitySync(dirtyEntities);
     }
 
     template <typename U = T>
         requires ecs::is_buffered_component_v<U>
-    void writeBufferedFromSet(const SparseSet<U>& readSet)
+    void writeFullBufferedFromSet(const SparseSet<U>& source)
     {
-        SparseSet<T>& storage = m_storage.at(write_index());
+        SparseSet<T>& storage = writeSet();
         storage.clear();
 
-        for (size_t i = 0; i < readSet.size(); ++i)
+        for (size_t i = 0; i < source.size(); ++i)
+            emplaceInto(storage, source.key_at(i), source.dense_at(i).read());
+
+        markPendingFullSync();
+    }
+
+    template <typename U = T>
+        requires ecs::is_buffered_component_v<U>
+    void writeDirtyBufferedFromSet(const SparseSet<U>& source, const ArrayList<size_t>& dirtyEntities)
+    {
+        SparseSet<T>& storage = writeSet();
+
+        for (const size_t entityIndex : dirtyEntities)
         {
-            T& component = storage.emplace(readSet.key_at(i), readSet.dense_at(i).read());
-            component_pool_detail::bind_to_role_lookup(component, m_roleToBuffer.data());
+            const U* component = source.try_get(entityIndex);
+            if (nullptr == component)
+                storage.erase(entityIndex);
+            else
+                emplaceInto(storage, entityIndex, component->read());
         }
 
-        m_shouldSwap.store(true, std::memory_order_release);
+        if (!dirtyEntities.empty())
+            markPendingEntitySync(dirtyEntities);
     }
 };

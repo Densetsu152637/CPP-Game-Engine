@@ -69,6 +69,10 @@ class View
 
     ArrayList<view_match> m_matches;
     bool m_matchesResolved = false;
+    static constexpr size_t UNOBSERVED_GENERATION = static_cast<size_t>(-1);
+    std::array<size_t, sizeof...(Components)> m_observedPoolGenerations {};
+    size_t m_observedEntityGeneration = UNOBSERVED_GENERATION;
+    size_t m_observedStorageGeneration = UNOBSERVED_GENERATION;
 
     static size_t chunk_count(const size_t total, const size_t chunkSize)
     { return (total + chunkSize - 1) / chunkSize; }
@@ -81,6 +85,50 @@ class View
 
     bool is_rendering_storage() const
     { return ViewStorage::Rendering == m_storage; }
+
+    size_t current_storage_generation() const
+    {
+        return is_rendering_storage()
+            ? m_ecs->render_storage_generation()
+            : m_ecs->component_storage_generation();
+    }
+
+    template <typename PoolTuple, size_t... Is>
+    std::array<size_t, sizeof...(Components)> current_pool_generations(
+        const PoolTuple& pools,
+        std::index_sequence<Is...>
+    ) const {
+        return {
+            (nullptr == std::get<Is>(pools) ? 0 : std::get<Is>(pools)->generation())...
+        };
+    }
+
+    std::array<size_t, sizeof...(Components)> current_pool_generations() const
+    {
+        if constexpr (0 == sizeof...(Components))
+            return {};
+        else if (is_rendering_storage())
+            return current_pool_generations(m_renderPools, std::make_index_sequence<sizeof...(Components)>{});
+        else
+            return current_pool_generations(m_pools, std::make_index_sequence<sizeof...(Components)>{});
+    }
+
+    bool cache_current() const
+    {
+        if (!m_cacheResolved || nullptr == m_ecs)
+            return false;
+
+        return m_observedEntityGeneration == m_ecs->entity_generation()
+            && m_observedStorageGeneration == current_storage_generation()
+            && m_observedPoolGenerations == current_pool_generations();
+    }
+
+    void capture_cache_generations()
+    {
+        m_observedEntityGeneration = m_ecs->entity_generation();
+        m_observedStorageGeneration = current_storage_generation();
+        m_observedPoolGenerations = current_pool_generations();
+    }
 
     template <typename PoolTuple, size_t... Is>
     std::array<size_t, sizeof...(Components)> storage_sizes(const PoolTuple& pools, std::index_sequence<Is...>) const
@@ -220,6 +268,8 @@ class View
 
     void resolve_cache()
     {
+        m_matchesResolved = false;
+
         if constexpr (0 == sizeof...(Components))
         {
             m_primaryIndex = 0;
@@ -243,6 +293,7 @@ class View
         }
 
         m_cacheResolved = true;
+        capture_cache_generations();
     }
 
     bool ensure_cache()
@@ -250,7 +301,7 @@ class View
         if (nullptr == m_ecs)
             return false;
 
-        if (!m_cacheResolved)
+        if (!m_cacheResolved || !cache_current())
             resolve_cache();
 
         if constexpr (0 == sizeof...(Components))

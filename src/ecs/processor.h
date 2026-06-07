@@ -10,9 +10,53 @@
 #include <utility>
 
 #include "ecs_sim_detail.h"
+#include "../logging/logger.h"
 
 namespace ecs_processor_detail
 {
+    inline std::string join_names(const ArrayList<std::string>& names)
+    {
+        if (names.empty())
+            return "none";
+
+        std::string output;
+        for (size_t i = 0; i < names.length(); ++i)
+        {
+            if (i > 0)
+                output += ", ";
+            output += names[i];
+        }
+        return output;
+    }
+
+    inline std::string access_summary(const ecs_sim::AccessSpec& access)
+    {
+        return "reads=[" + join_names(access.readNames) +
+            "] writes=[" + join_names(access.writeNames) +
+            "] exclusive=[" + join_names(access.exclusiveWriteNames) + "]";
+    }
+
+    inline const char* conflict_reason(const ecs_sim::AccessConflict conflict)
+    {
+        switch (conflict)
+        {
+            case ecs_sim::AccessConflict::MutableMutable:
+                return "both jobs mutably write the same component type";
+            case ecs_sim::AccessConflict::NonBufferedMutableRead:
+                return "one job mutably writes a non-buffered component read by the other job";
+            case ecs_sim::AccessConflict::None:
+                return "no conflict";
+        }
+
+        return "unknown conflict";
+    }
+
+    inline void log_scheduler_event(Logger* logger, std::string message)
+    {
+        if (nullptr != logger)
+            logger->push(std::move(message));
+    }
+
     inline void throw_if_wall_conflicts(
         const std::string& jobName,
         const std::string& wallName,
@@ -29,12 +73,13 @@ namespace ecs_processor_detail
             if (existingJob == simJobs.end())
                 continue;
 
-            if (ecs_sim::conflicts_with(existingJob->second.access, job.access))
+            const ecs_sim::AccessConflict conflict = ecs_sim::conflict_between(existingJob->second.access, job.access);
+            if (ecs_sim::AccessConflict::None != conflict)
             {
                 throw std::runtime_error(
                     "ECSProcessor job \"" + jobName + "\" conflicts with job \"" +
                     existingJobName + "\" already queued into wall \"" + wallName +
-                    "\" because both jobs access a non-buffered component mutably"
+                    "\" because " + conflict_reason(conflict)
                 );
             }
         }
@@ -89,6 +134,7 @@ class ECSProcessor
 
     std::unordered_map<std::string, SimulationJob> m_sim_jobs;
     std::unordered_map<std::string, RenderJob> m_render_jobs;
+    Logger* m_schedulerLogger = nullptr;
 
     void _append_default_walls();
     void _remove_job_from_walls(const std::string& jobName);
@@ -113,6 +159,8 @@ public:
 
     void createWall(const std::string& wallName, size_t position);
     void clear();
+    void setSchedulerLogger(Logger* logger);
+    void clearSchedulerLogger();
 
     void simulate();
     void render();
@@ -161,6 +209,11 @@ ECSProcessor& ECSProcessor::queue_into_sim(const std::string& name, std::string 
     _remove_job_from_walls(name);
     m_sim_jobs[name] = job;
     m_wall_jobs[wall].append(name);
+    ecs_processor_detail::log_scheduler_event(
+        m_schedulerLogger,
+        "queued simulation job \"" + name + "\" into wall \"" + wall + "\" " +
+            ecs_processor_detail::access_summary(job.access)
+    );
 
     return *this;
 }
@@ -175,5 +228,9 @@ ECSProcessor& ECSProcessor::queue_into_rendering(const std::string& name, Callab
     const RenderJob job = ecs_sim::make_render_job<Args...>(std::forward<Callable>(callable));
 
     m_render_jobs[name] = job;
+    ecs_processor_detail::log_scheduler_event(
+        m_schedulerLogger,
+        "queued rendering job \"" + name + "\""
+    );
     return *this;
 }

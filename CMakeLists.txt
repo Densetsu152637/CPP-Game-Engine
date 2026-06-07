@@ -13,6 +13,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(CPP_GAME_ENGINE_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(CPP_GAME_ENGINE_ENABLE_AVX2 "Enable AVX2 SIMD paths for supported vector operations" OFF)
+option(CPP_GAME_ENGINE_BUILD_TESTS "Build local engine test executables" ON)
 
 find_package(Vulkan QUIET)
 
@@ -64,6 +65,9 @@ add_executable(CPPGameEngine
         src/ecs/component_alias_buffered.h
         src/ecs/component_alias_ops.h
         src/ecs/component_alias_traits.h
+        src/ecs/component_pool_dirty.h
+        src/ecs/component_pool_storage.h
+        src/ecs/component_type_id.h
         src/ecs/view.h
         src/core/interfaces.h
         src/async/buffer.h
@@ -115,7 +119,7 @@ target_compile_definitions(CPPGameEngine
 )
 
 if(MSVC)
-    target_compile_options(CPPGameEngine PRIVATE /W4 /permissive- /EHsc)
+    target_compile_options(CPPGameEngine PRIVATE /W4 /permissive- /EHsc /wd4100 /wd4189)
     if(CPP_GAME_ENGINE_ENABLE_AVX2)
         target_compile_options(CPPGameEngine PRIVATE /arch:AVX2)
     endif()
@@ -123,7 +127,7 @@ if(MSVC)
         target_compile_options(CPPGameEngine PRIVATE /WX)
     endif()
 else()
-    target_compile_options(CPPGameEngine PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(CPPGameEngine PRIVATE -Wall -Wextra -Wpedantic -Wno-unused-parameter -Wno-unused-variable)
     if(CPP_GAME_ENGINE_ENABLE_AVX2)
         target_compile_options(CPPGameEngine PRIVATE -mavx2)
     endif()
@@ -135,3 +139,59 @@ endif()
 set_target_properties(CPPGameEngine PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
+
+if(CPP_GAME_ENGINE_BUILD_TESTS)
+    add_executable(CPPGameEngineEcsTests
+            src/test/ecs_tests.cpp
+            src/ecs/ecs.cpp
+            src/ecs/ecs.h
+            src/ecs/processor.cpp
+            src/ecs/processor.h
+            src/ecs/component_alias.h
+            src/ecs/component_alias_basic.h
+            src/ecs/component_alias_buffered.h
+            src/ecs/component_alias_ops.h
+            src/ecs/component_alias_traits.h
+            src/ecs/component_pool.h
+            src/ecs/component_pool_dirty.h
+            src/ecs/component_pool_storage.h
+            src/ecs/component_type_id.h
+            src/ecs/view.h
+            src/ecs/ecs_sim_detail.h
+            src/ecs/ecs_sim_access.h
+            src/ecs/ecs_sim_arg_traits.h
+            src/ecs/ecs_sim_execution.h
+            src/ecs/ecs_sim_invocation.h
+            src/ecs/ecs_sim_types.h
+            src/async/threadpool.cpp
+            src/async/threadpool.h
+            src/async/promise.h
+            src/functional/result.cpp
+            src/functional/result.h
+            src/logging/logger.cpp
+            src/logging/logger.h
+            src/logging/text_colour.cpp
+            src/logging/text_colour.h
+            src/structs/smartstring.cpp
+            src/structs/smartstring.h
+            src/util/string_search.cpp
+            src/util/string_search.h
+    )
+
+    target_include_directories(CPPGameEngineEcsTests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+
+    set_target_properties(CPPGameEngineEcsTests PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    )
+
+    if(MSVC)
+        target_compile_options(CPPGameEngineEcsTests PRIVATE /W4 /permissive- /EHsc /wd4100 /wd4189)
+    else()
+        target_compile_options(CPPGameEngineEcsTests PRIVATE -Wall -Wextra -Wpedantic -Wno-unused-parameter -Wno-unused-variable)
+    endif()
+endif()

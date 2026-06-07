@@ -13,7 +13,7 @@ void movementSystem(Engine& engine, ECSProcessor& sim)
 {
     sim.queue_into_sim<Velocity3D, Position3D>(
         "MOVEMENT_SYSTEM_3D",
-        [&engine](Velocity3D& velocity, Position3D& position)
+        [&engine](const Velocity3D& velocity, Position3D& position)
         {
             const float deltaTime = engine.upsMs();
             position = position + (velocity * deltaTime);
