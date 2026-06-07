@@ -17,12 +17,43 @@
 
 #include "../functional/result.h"
 #include "../structs/arraylist.h"
-#include "../structs/queue.h"
+#include "../structs/LinkedQueue.h"
 
 template <typename T>
 class Promise;
 
 size_t get_num_processors();
+
+class ThreadTask
+{
+public:
+    virtual ~ThreadTask() = default;
+    virtual void invoke() = 0;
+};
+
+namespace threadpool_detail
+{
+    template <typename Callable>
+    class TaskModel final : public ThreadTask
+    {
+        Callable callable;
+
+    public:
+        explicit TaskModel(Callable&& callable)
+            : callable(std::move(callable))
+        {}
+
+        void invoke() override
+        { callable(); }
+    };
+
+    template <typename Callable>
+    std::shared_ptr<ThreadTask> make_task(Callable&& callable)
+    {
+        using Model = TaskModel<std::decay_t<Callable>>;
+        return std::make_shared<Model>(std::forward<Callable>(callable));
+    }
+}
 
 class Threadpool {
 
@@ -31,7 +62,7 @@ class Threadpool {
     ArrayList<std::thread> m_pool;
     std::string m_name;
 
-    Queue<std::function<void()>> m_queue;
+    LinkedQueue<std::shared_ptr<ThreadTask>> m_queue;
 
     std::mutex m_mutex;
     std::condition_variable m_cv;
@@ -65,7 +96,7 @@ public:
         auto promise = Promise<T>(this);
 
         {
-            std::function<void()> task(
+            auto task = threadpool_detail::make_task(
                 [promise, fn = std::forward<F>(fn)]() mutable
                 {
                     try
@@ -130,7 +161,7 @@ public:
             const size_t begin = batch * batch_size;
             const size_t end = std::min(n, begin + batch_size);
 
-            std::function<void()> task([promise, results, remaining_batches, failed, fn, data, begin, end]()
+            auto task = threadpool_detail::make_task([promise, results, remaining_batches, failed, fn, data, begin, end]()
             {
                 if (failed->load(std::memory_order_acquire))
                     return;

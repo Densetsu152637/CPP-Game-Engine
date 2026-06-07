@@ -38,7 +38,7 @@ add_executable(CPPGameEngine
         src/async/threadpool.cpp
         src/async/threadpool.h
         src/async/promise.h
-        src/structs/queue.h
+        src/structs/LinkedQueue.h
         src/async/thread_timer.h
         src/util/fader.h
         src/util/toolbox.cpp

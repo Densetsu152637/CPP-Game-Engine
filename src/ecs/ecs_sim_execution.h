@@ -61,7 +61,7 @@ namespace ecs_sim
     inline void run_jobs_on_caller(Threadpool& pool, ECS& ecs, ArrayList<Job*>& jobs)
     {
         for (Job* job : jobs)
-            job->run(ecs, pool);
+            job->execute(ecs, pool);
     }
 
     inline void submit_jobs(Threadpool& pool, ECS& ecs, ArrayList<Job*>& jobs, ArrayList<Promise<bool>>& promises)
@@ -72,7 +72,7 @@ namespace ecs_sim
         {
             promises.append(pool.submit([&ecs, &pool, job]()
             {
-                job->run(ecs, pool);
+                job->execute(ecs, pool);
                 return true;
             }));
         }

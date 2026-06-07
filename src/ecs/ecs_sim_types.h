@@ -5,7 +5,7 @@
 #pragma once
 
 #include <cstddef>
-#include <functional>
+#include <memory>
 #include <string>
 
 #include "component_type_id.h"
@@ -31,9 +31,18 @@ namespace ecs_sim
 
     struct Job
     {
-        std::function<void(ECS&, Threadpool&)> run;
+        using RunFn = void(*)(void*, ECS&, Threadpool&);
+
+        std::shared_ptr<void> context;
+        RunFn run = nullptr;
         AccessSpec access;
         bool usesInternalParallelism = false;
+
+        void execute(ECS& ecs, Threadpool& pool) const
+        {
+            if (nullptr != run)
+                run(context.get(), ecs, pool);
+        }
     };
 
     using SimulationJob = Job;

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <stdexcept>
 #include <tuple>
 #include <type_traits>
@@ -272,6 +273,34 @@ namespace ecs_sim
         has_entity_arg_pack_v<Args...> ||
         type_list_size_v<component_list_t<Args...>> > 0;
 
+    template <typename Callable>
+    struct JobContext
+    {
+        Callable callable;
+
+        explicit JobContext(Callable&& callable)
+            : callable(std::move(callable))
+        {}
+    };
+
+    template <typename Callable, typename DirtyComponents, typename... Args>
+    void execute_sim_job_context(void* rawContext, ECS& ecs, Threadpool& pool)
+    {
+        auto& context = *static_cast<JobContext<Callable>*>(rawContext);
+        run_job<Callable, DirtyComponents, Args...>(ecs, pool, context.callable);
+    }
+
+    template <typename Callable, typename... Components>
+    void execute_render_job_context(void* rawContext, ECS& ecs, Threadpool& pool)
+    {
+        auto& context = *static_cast<JobContext<Callable>*>(rawContext);
+        auto view = ecs.render_view<Components...>();
+        view.each_mt([&](const ecs::component_value_t<Components>&... components)
+        {
+            std::invoke(context.callable, components...);
+        }, pool);
+    }
+
     template <typename DirtyComponents, typename... Args, typename Callable>
     Job make_job_from_args(type_list<Args...>, Callable&& callable)
     {
@@ -304,10 +333,10 @@ namespace ecs_sim
         Job job;
         job.access = build_callable_access_spec<DecayedCallable, DirtyComponents>();
         job.usesInternalParallelism = job_uses_internal_parallelism_v<Args...>;
-        job.run = [callable = DecayedCallable(std::forward<Callable>(callable))](ECS& ecs, Threadpool& pool) mutable
-        {
-            run_job<DecayedCallable, DirtyComponents, Args...>(ecs, pool, callable);
-        };
+        job.context = std::make_shared<JobContext<DecayedCallable>>(
+            DecayedCallable(std::forward<Callable>(callable))
+        );
+        job.run = &execute_sim_job_context<DecayedCallable, DirtyComponents, Args...>;
         return job;
     }
 
@@ -349,14 +378,10 @@ namespace ecs_sim
 
         RenderJob job;
         job.usesInternalParallelism = true;
-        job.run = [callable = DecayedCallable(std::forward<Callable>(callable))](ECS& ecs, Threadpool& pool) mutable
-        {
-            auto view = ecs.render_view<Components...>();
-            view.each_mt([&](const ecs::component_value_t<Components>&... components)
-            {
-                std::invoke(callable, components...);
-            }, pool);
-        };
+        job.context = std::make_shared<JobContext<DecayedCallable>>(
+            DecayedCallable(std::forward<Callable>(callable))
+        );
+        job.run = &execute_render_job_context<DecayedCallable, Components...>;
         return job;
     }
 }
