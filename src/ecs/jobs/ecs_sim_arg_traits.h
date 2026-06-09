@@ -24,15 +24,15 @@ namespace ecs_sim
     inline constexpr bool is_entity_arg_v = is_entity_arg<T>::value;
 
     template <typename T>
-    struct is_array_for : std::false_type
+    struct is_view_of : std::false_type
     {};
 
     template <typename T>
-    struct is_array_for<ArrayFor<T>> : std::true_type
+    struct is_view_of<ecs::ViewOf<T>> : std::true_type
     {};
 
     template <typename T>
-    inline constexpr bool is_array_for_v = is_array_for<std::remove_cvref_t<T>>::value;
+    inline constexpr bool is_view_of_v = is_view_of<std::remove_cvref_t<T>>::value;
 
     template <typename T>
     struct is_dirty_component_arg : std::false_type
@@ -53,7 +53,7 @@ namespace ecs_sim
     template <typename T>
     inline constexpr bool is_plain_component_arg_v =
         !is_entity_arg_v<T> &&
-        !is_array_for_v<T> &&
+        !is_view_of_v<T> &&
         !is_wrapped_component_arg_v<T>;
 
     template <typename T>
@@ -69,7 +69,7 @@ namespace ecs_sim
     template <typename T>
     inline constexpr bool is_supported_submit_arg_v =
         is_entity_arg_v<T> ||
-        is_array_for_v<T> ||
+        is_view_of_v<T> ||
         is_component_submit_arg_v<T>;
 
     template <typename T>
@@ -83,7 +83,7 @@ namespace ecs_sim
     };
 
     template <typename T>
-    struct component_for_arg<ArrayFor<T>>
+    struct component_for_arg<ecs::ViewOf<T>>
     {
         using type = void;
     };
@@ -98,19 +98,19 @@ namespace ecs_sim
     using component_for_arg_t = typename component_for_arg<std::remove_cvref_t<T>>::type;
 
     template <typename T>
-    struct array_component_for_arg
+    struct view_component_for_arg
     {
         using type = void;
     };
 
     template <typename T>
-    struct array_component_for_arg<ArrayFor<T>>
+    struct view_component_for_arg<ecs::ViewOf<T>>
     {
         using type = std::remove_cvref_t<T>;
     };
 
     template <typename T>
-    using array_component_for_arg_t = typename array_component_for_arg<std::remove_cvref_t<T>>::type;
+    using view_component_for_arg_t = typename view_component_for_arg<std::remove_cvref_t<T>>::type;
 
     template <typename Arg, typename Decayed = std::remove_cvref_t<Arg>>
     struct call_arg
@@ -129,9 +129,9 @@ namespace ecs_sim
     };
 
     template <typename Arg, typename T>
-    struct call_arg<Arg, ArrayFor<T>>
+    struct call_arg<Arg, ecs::ViewOf<T>>
     {
-        using type = const ArrayList<ecs::component_value_t<T>>&;
+        using type = ecs::ViewOf<ecs::component_value_t<T>>;
     };
 
     template <typename Arg, typename T>
@@ -205,23 +205,23 @@ namespace ecs_sim
     inline constexpr size_t callable_arity_v = callable_object_traits<T>::arity;
 
     template <typename T>
-    struct array_list_param_component
+    struct view_of_param_component
     {
         using type = void;
     };
 
     template <typename T>
-    struct array_list_param_component<ArrayList<T>>
+    struct view_of_param_component<ecs::ViewOf<T>>
     {
         using type = std::remove_cvref_t<T>;
     };
 
     template <typename T>
-    using array_list_param_component_t = typename array_list_param_component<std::remove_cvref_t<T>>::type;
+    using view_of_param_component_t = typename view_of_param_component<std::remove_cvref_t<T>>::type;
 
     template <typename T>
-    inline constexpr bool is_array_list_param_v =
-        !std::is_void_v<array_list_param_component_t<T>>;
+    inline constexpr bool is_view_of_param_v =
+        !std::is_void_v<view_of_param_component_t<T>>;
 
     template <typename T>
     inline constexpr bool is_const_lvalue_ref_v =
@@ -232,11 +232,11 @@ namespace ecs_sim
     inline constexpr bool is_valid_callable_param_v =
         is_entity_arg_v<T> ||
         (
-            is_array_list_param_v<T> &&
+            is_view_of_param_v<T> &&
             is_const_lvalue_ref_v<T>
         ) ||
         (
-            !is_array_list_param_v<T> &&
+            !is_view_of_param_v<T> &&
             is_plain_component_arg_v<T> &&
             std::is_lvalue_reference_v<T>
         );

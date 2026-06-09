@@ -23,12 +23,12 @@ void movementSystem(Engine& engine, ECSProcessor& sim)
 
 void dirtyCollisionSystemExample(Engine& engine, ECSProcessor& sim)
 {
-    sim.queue_into_sim<ecs::Dirty<Position3D>, CollisionSurface, ArrayFor<CollisionSurface>>(
+    sim.queue_into_sim<ecs::Dirty<Position3D>, CollisionSurface, ecs::ViewOf<CollisionSurface>>(
         "COLLISION_SYSTEM_EXAMPLE",
         [](
             Position3D& position,
             const CollisionSurface& localSurface,
-            const ArrayList<CollisionSurface>& surfaces
+            const View<CollisionSurface>& surfaces
         )
         {
             // transform surface into position

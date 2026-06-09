@@ -44,6 +44,9 @@ class ComponentPoolDirtyTracker
     }
 
 public:
+    static size_t fullDirtyThreshold(const size_t poolSize)
+    { return full_dirty_threshold(poolSize); }
+
     bool dirty() const
     { return ComponentDirtyMode::None != m_mode; }
 
@@ -55,6 +58,17 @@ public:
 
     const ArrayList<size_t>& entities() const
     { return m_entities; }
+
+    bool wouldMarkFullAfterAddingEntities(const size_t poolSize, const size_t entityCount) const
+    {
+        if (ComponentDirtyMode::Full == m_mode)
+            return true;
+
+        if (0 == entityCount)
+            return false;
+
+        return m_entities.length() + entityCount >= full_dirty_threshold(poolSize);
+    }
 
     void markFull()
     {

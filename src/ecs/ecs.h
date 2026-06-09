@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -25,6 +26,8 @@ class ECS
 {
     template <typename...>
     friend class View;
+    template <typename>
+    friend class ecs::ViewOf;
     friend class ECSProcessor;
     friend class ECSRenderBridge;
 
@@ -131,13 +134,44 @@ public:
     template <typename T>
     void guarantee_component_pool()
     {
-        (void)storage<T>();
+        if (!isArchetypedComponent<T>())
+            (void)storage<T>();
     }
 
     template <typename T>
     void guarantee_render_component_pool()
     {
         (void)render_storage<T>();
+    }
+
+    template <typename... Components>
+    ecs::ArchetypePool<component_value_t<Components>...>& registerArchetype()
+    {
+        return m_components.template registerArchetype<Components...>();
+    }
+
+    template <typename T>
+    bool isArchetypedComponent() const
+    {
+        return m_components.template isArchetypedComponent<T>();
+    }
+
+    template <typename... Components>
+    ecs::ArchetypePool<component_value_t<Components>...>* archetypePoolIfExists()
+    {
+        return m_components.template archetypePoolIfExists<Components...>();
+    }
+
+    template <typename T>
+    ecs::IArchetypePool* archetypePoolForComponent()
+    {
+        return m_components.template archetypePoolForComponent<T>();
+    }
+
+    template <typename T>
+    const ecs::IArchetypePool* archetypePoolForComponent() const
+    {
+        return m_components.template archetypePoolForComponent<T>();
     }
 
     template <typename T>
@@ -150,6 +184,15 @@ public:
     void markComponentEntityDirty(const size_t entityIndex)
     {
         markComponentEntityDirty(ecs::component_type_id<component_key_t<T>>(), entityIndex);
+    }
+
+    template <typename T>
+    bool markComponentDirtyIfEntityCountReachesThreshold(const size_t entityCount)
+    {
+        return m_components.markDirtyIfEntityCountReachesThreshold(
+            ecs::component_type_id<component_key_t<T>>(),
+            entityCount
+        );
     }
 
     template <typename T>
@@ -200,6 +243,12 @@ public:
     template <typename T>
     const ArrayList<ecs::component_value_t<T>>& denseComponents() const;
 
+    template <typename T>
+    size_t componentViewSize() const;
+
+    template <typename T>
+    const ecs::component_value_t<T>* componentViewAt(size_t denseIndex) const;
+
     template <typename... Components>
     View<Components...> view();
 
@@ -222,6 +271,15 @@ bool ECS::hasComponent(const Entity& entity) const
     if (!is_valid_handle(entity))
         return false;
 
+    const ecs::IArchetypePool* archetypePool = archetypePoolForComponent<T>();
+    if (nullptr != archetypePool)
+    {
+        return archetypePool->hasComponent(
+            entity.index,
+            ecs::component_type_id<component_key_t<T>>()
+        );
+    }
+
     const pool_t<T>* pool = storage_if_exists<T>();
     return nullptr != pool && pool->contains(entity.index);
 }
@@ -229,6 +287,16 @@ bool ECS::hasComponent(const Entity& entity) const
 template <typename T>
 const ecs::component_value_t<T>* ECS::try_get_index(const size_t& index)
 {
+    const ecs::IArchetypePool* archetypePool = archetypePoolForComponent<T>();
+    if (nullptr != archetypePool)
+    {
+        const void* component = archetypePool->componentPointer(
+            index,
+            ecs::component_type_id<component_key_t<T>>()
+        );
+        return static_cast<const ecs::component_value_t<T>*>(component);
+    }
+
     const pool_t<T>* pool = storage_if_exists<T>();
     if (nullptr == pool) return nullptr;
     return pool->try_get(index);
@@ -237,6 +305,16 @@ const ecs::component_value_t<T>* ECS::try_get_index(const size_t& index)
 template <typename T>
 const ecs::component_value_t<T>* ECS::try_get_index(const size_t& index) const
 {
+    const ecs::IArchetypePool* archetypePool = archetypePoolForComponent<T>();
+    if (nullptr != archetypePool)
+    {
+        const void* component = archetypePool->componentPointer(
+            index,
+            ecs::component_type_id<component_key_t<T>>()
+        );
+        return static_cast<const ecs::component_value_t<T>*>(component);
+    }
+
     const pool_t<T>* pool = storage_if_exists<T>();
     if (nullptr == pool) return nullptr;
     return pool->try_get(index);
@@ -245,6 +323,21 @@ const ecs::component_value_t<T>* ECS::try_get_index(const size_t& index) const
 template <typename T>
 ecs::component_value_t<T>* ECS::try_get_mut_index(const size_t& index)
 {
+    ecs::IArchetypePool* archetypePool = archetypePoolForComponent<T>();
+    if (nullptr != archetypePool)
+    {
+        void* component = archetypePool->componentPointer(
+            index,
+            ecs::component_type_id<component_key_t<T>>()
+        );
+        if (nullptr != component)
+            archetypePool->markComponentEntityDirty(
+                ecs::component_type_id<component_key_t<T>>(),
+                index
+            );
+        return static_cast<ecs::component_value_t<T>*>(component);
+    }
+
     pool_t<T>* pool = storage_if_exists<T>();
     if (nullptr == pool) return nullptr;
 
@@ -310,6 +403,25 @@ ecs::component_value_t<T>& ECS::emplaceComponentImmediate(const Entity& entity, 
     if (!is_valid_handle(entity))
         throw std::out_of_range("Entity is not valid");
 
+    using Component = ecs::component_value_t<T>;
+    if (ecs::IArchetypePool* archetypePool = archetypePoolForComponent<T>())
+    {
+        void* componentSlot = archetypePool->ensureComponentPointer(
+            entity.index,
+            ecs::component_type_id<component_key_t<T>>()
+        );
+        if (nullptr == componentSlot)
+            throw std::runtime_error("Archetype pool did not contain requested component");
+
+        Component& stored = *static_cast<Component*>(componentSlot);
+        stored = std::forward<U>(component);
+        archetypePool->markComponentEntityDirty(
+            ecs::component_type_id<component_key_t<T>>(),
+            entity.index
+        );
+        return stored;
+    }
+
     return storage<T>().emplace(entity.index, std::forward<U>(component));
 }
 
@@ -341,6 +453,25 @@ ecs::component_value_t<T>& ECS::setComponentImmediate(const Entity& entity, U&& 
     if (!is_valid_handle(entity))
         throw std::out_of_range("Entity is not valid");
 
+    using Component = ecs::component_value_t<T>;
+    if (ecs::IArchetypePool* archetypePool = archetypePoolForComponent<T>())
+    {
+        void* componentSlot = archetypePool->ensureComponentPointer(
+            entity.index,
+            ecs::component_type_id<component_key_t<T>>()
+        );
+        if (nullptr == componentSlot)
+            throw std::runtime_error("Archetype pool did not contain requested component");
+
+        Component& stored = *static_cast<Component*>(componentSlot);
+        stored = std::forward<U>(newComponent);
+        archetypePool->markComponentEntityDirty(
+            ecs::component_type_id<component_key_t<T>>(),
+            entity.index
+        );
+        return stored;
+    }
+
     return storage<T>().emplace(entity.index, std::forward<U>(newComponent));
 }
 
@@ -368,6 +499,14 @@ bool ECS::removeComponentImmediate(const Entity& entity)
     if (!is_valid_handle(entity))
         return false;
 
+    if (ecs::IArchetypePool* archetypePool = archetypePoolForComponent<T>())
+    {
+        return archetypePool->removeComponent(
+            entity.index,
+            ecs::component_type_id<component_key_t<T>>()
+        );
+    }
+
     pool_t<T>* pool = storage_if_exists<T>();
     if (nullptr == pool || !pool->contains(entity.index))
         return false;
@@ -385,6 +524,9 @@ ArrayList<ecs::component_value_t<T>>& ECS::denseComponents()
 template <typename T>
 ArrayList<ecs::component_value_t<T>>& ECS::denseComponentsMut()
 {
+    if (nullptr != archetypePoolForComponent<T>())
+        throw std::runtime_error("denseComponentsMut<T> is not supported for archetyped components");
+
     pool_t<T>& pool = storage<T>();
     pool.markDirty();
     return pool.dense();
@@ -393,11 +535,116 @@ ArrayList<ecs::component_value_t<T>>& ECS::denseComponentsMut()
 template <typename T>
 const ArrayList<ecs::component_value_t<T>>& ECS::denseComponents() const
 {
+    if (nullptr != archetypePoolForComponent<T>())
+        throw std::runtime_error("denseComponents<T> is not supported for archetyped components; use ecs::ViewOf<T>");
+
     const pool_t<T>* pool = storage_if_exists<T>();
     if (nullptr == pool)
         throw std::out_of_range("Component pool does not exist");
 
     return pool->dense();
+}
+
+template <typename T>
+size_t ECS::componentViewSize() const
+{
+    const ecs::ComponentTypeId componentTypeId = ecs::component_type_id<component_key_t<T>>();
+    if (const ecs::IArchetypePool* archetypePool = archetypePoolForComponent<T>())
+        return archetypePool->componentSize(componentTypeId);
+
+    const pool_t<T>* pool = storage_if_exists<T>();
+    return nullptr == pool ? 0 : pool->size();
+}
+
+template <typename T>
+const ecs::component_value_t<T>* ECS::componentViewAt(const size_t denseIndex) const
+{
+    using Component = ecs::component_value_t<T>;
+    const ecs::ComponentTypeId componentTypeId = ecs::component_type_id<component_key_t<T>>();
+
+    if (const ecs::IArchetypePool* archetypePool = archetypePoolForComponent<T>())
+    {
+        const void* component = archetypePool->componentPointerAt(componentTypeId, denseIndex);
+        return static_cast<const Component*>(component);
+    }
+
+    const pool_t<T>* pool = storage_if_exists<T>();
+    if (nullptr == pool || denseIndex >= pool->size())
+        return nullptr;
+
+    return &pool->dense_at(denseIndex);
+}
+
+namespace ecs
+{
+    template <typename T>
+    class ViewOf<T>::iterator
+    {
+    public:
+        using iterator_category = std::forward_iterator_tag;
+        using difference_type = std::ptrdiff_t;
+        using value_type = typename ViewOf<T>::value_type;
+        using reference = const value_type&;
+        using pointer = const value_type*;
+
+        iterator() = default;
+
+        iterator(const ::ECS* ecs, const size_t denseIndex)
+            : m_ecs(ecs),
+              m_denseIndex(denseIndex)
+        {}
+
+        reference operator*() const
+        {
+            const pointer component = m_ecs->template componentViewAt<value_type>(m_denseIndex);
+            if (nullptr == component)
+                throw std::out_of_range("ecs::ViewOf iterator dereferenced an invalid component index");
+
+            return *component;
+        }
+
+        pointer operator->() const
+        { return &operator*(); }
+
+        iterator& operator++()
+        {
+            ++m_denseIndex;
+            return *this;
+        }
+
+        iterator operator++(int)
+        {
+            iterator previous = *this;
+            ++(*this);
+            return previous;
+        }
+
+        bool operator==(const iterator& rhs) const
+        { return m_ecs == rhs.m_ecs && m_denseIndex == rhs.m_denseIndex; }
+
+        bool operator!=(const iterator& rhs) const
+        { return !(*this == rhs); }
+
+    private:
+        const ::ECS* m_ecs = nullptr;
+        size_t m_denseIndex = 0;
+    };
+
+    template <typename T>
+    typename ViewOf<T>::iterator ViewOf<T>::begin() const
+    { return iterator(m_ecs, 0); }
+
+    template <typename T>
+    typename ViewOf<T>::iterator ViewOf<T>::end() const
+    { return iterator(m_ecs, size()); }
+
+    template <typename T>
+    size_t ViewOf<T>::size() const
+    { return nullptr == m_ecs ? 0 : m_ecs->template componentViewSize<component_type>(); }
+
+    template <typename T>
+    bool ViewOf<T>::empty() const
+    { return 0 == size(); }
 }
 
 template <typename... Components>

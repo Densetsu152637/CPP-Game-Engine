@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <utility>
 
+#include "../core/archetype_storage_registry.h"
 #include "component_pool_simulation.h"
 
 enum class RenderPoolSyncMode
@@ -139,6 +140,23 @@ public:
         }
 
         throw std::invalid_argument("RenderComponentPool received incompatible source pool");
+    }
+
+    void writeFromArchetype(
+        ecs::IArchetypePool& archetypePool,
+        const ecs::ComponentTypeId componentTypeId
+    ) override {
+        if (componentTypeId != type_id() || !archetypePool.containsComponent(componentTypeId))
+            throw std::invalid_argument("RenderComponentPool received incompatible archetype source");
+
+        if (archetypePool.isComponentFullyDirty(componentTypeId))
+            writeFullFromArchetype(archetypePool, componentTypeId);
+        else
+            writeDirtyFromArchetype(
+                archetypePool,
+                componentTypeId,
+                archetypePool.componentDirtyEntities(componentTypeId)
+            );
     }
 
 private:
@@ -285,6 +303,44 @@ private:
                 storage.erase(entityIndex);
             else
                 emplaceInto(storage, entityIndex, component->read());
+        }
+
+        if (!dirtyEntities.empty())
+            markPendingEntitySync(dirtyEntities);
+    }
+
+    void writeFullFromArchetype(
+        const ecs::IArchetypePool& archetypePool,
+        const ecs::ComponentTypeId componentTypeId
+    ) {
+        SparseSet<T>& storage = writeSet();
+        storage.clear();
+
+        for (size_t denseIndex = 0; denseIndex < archetypePool.size(); ++denseIndex)
+        {
+            const size_t entityIndex = archetypePool.entityAt(denseIndex);
+            T component {};
+            if (archetypePool.copyComponentTo(entityIndex, componentTypeId, &component))
+                emplaceRenderCopy(storage, entityIndex, component);
+        }
+
+        markPendingFullSync();
+    }
+
+    void writeDirtyFromArchetype(
+        const ecs::IArchetypePool& archetypePool,
+        const ecs::ComponentTypeId componentTypeId,
+        const ArrayList<size_t>& dirtyEntities
+    ) {
+        SparseSet<T>& storage = writeSet();
+
+        for (const size_t entityIndex : dirtyEntities)
+        {
+            T component {};
+            if (archetypePool.copyComponentTo(entityIndex, componentTypeId, &component))
+                emplaceRenderCopy(storage, entityIndex, component);
+            else
+                storage.erase(entityIndex);
         }
 
         if (!dirtyEntities.empty())

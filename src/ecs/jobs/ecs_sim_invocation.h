@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <functional>
 #include <memory>
 #include <stdexcept>
@@ -20,14 +21,14 @@ namespace ecs_sim
     {
         using Decayed = std::remove_cvref_t<Arg>;
 
-        if constexpr (is_array_for_v<Decayed>)
+        if constexpr (is_view_of_v<Decayed>)
         {
             using Component = std::remove_cvref_t<typename Decayed::component_type>;
-            return std::as_const(ecs).template denseComponents<Component>();
+            return ecs::ViewOf<Component>(ecs);
         }
         else
         {
-            static_assert(sizeof(Arg) == 0, "Global ECSProcessor jobs only support ArrayFor<T> arguments");
+            static_assert(sizeof(Arg) == 0, "Global ECSProcessor jobs only support ecs::ViewOf<T> arguments");
         }
     }
 
@@ -35,44 +36,99 @@ namespace ecs_sim
     inline constexpr bool is_guaranteed_dirty_component_v =
         contains_type<DirtyComponents, std::remove_cvref_t<Component>>::value;
 
-    template <typename Component>
-    void mark_guaranteed_dirty_component(ECS& ecs)
+    template <typename DirtyComponents>
+    struct DirtyTrackingState;
+
+    template <typename... Components>
+    struct DirtyTrackingState<type_list<Components...>>
     {
-        ecs.template markComponentDirty<Component>();
+        std::array<bool, sizeof...(Components)> preMarkedFull {};
+
+        template <typename Component>
+        bool component_pre_marked_full() const
+        {
+            using CleanComponent = std::remove_cvref_t<Component>;
+
+            if constexpr (contains_type<type_list<Components...>, CleanComponent>::value)
+                return preMarkedFull[type_index<CleanComponent, Components...>::value];
+            else
+                return false;
+        }
+    };
+
+    template <typename Component>
+    bool begin_guaranteed_dirty_component(ECS& ecs, const size_t touchedEntityCount)
+    {
+        return ecs.template markComponentDirtyIfEntityCountReachesThreshold<Component>(touchedEntityCount);
     }
 
     template <typename... Components>
-    void mark_guaranteed_dirty_components(ECS& ecs, type_list<Components...>)
+    DirtyTrackingState<type_list<Components...>> begin_guaranteed_dirty_components(
+        ECS& ecs,
+        const size_t touchedEntityCount,
+        type_list<Components...>
+    ) {
+        DirtyTrackingState<type_list<Components...>> state;
+        state.preMarkedFull = {
+            begin_guaranteed_dirty_component<Components>(ecs, touchedEntityCount)...
+        };
+        return state;
+    }
+
+    template <typename Component>
+    void mark_guaranteed_dirty_entity_component(ECS& ecs, const size_t entityIndex, const auto& dirtyState)
     {
-        (mark_guaranteed_dirty_component<Components>(ecs), ...);
+        if (!dirtyState.template component_pre_marked_full<Component>())
+            ecs.template markComponentEntityDirty<Component>(entityIndex);
+    }
+
+    template <typename... Components>
+    void mark_guaranteed_dirty_entity_components(
+        ECS& ecs,
+        const size_t entityIndex,
+        type_list<Components...>,
+        const auto& dirtyState
+    ) {
+        (mark_guaranteed_dirty_entity_component<Components>(ecs, entityIndex, dirtyState), ...);
     }
 
     template <typename Param, typename DirtyComponents>
-    void mark_callable_param_entity_dirty(ECS& ecs, const size_t entityIndex)
+    void mark_callable_param_entity_dirty(ECS& ecs, const size_t entityIndex, const auto& dirtyState)
     {
         using Arg = std::remove_cvref_t<Param>;
 
         if constexpr (
             !is_entity_arg_v<Arg> &&
-            !is_array_list_param_v<Param> &&
+            !is_view_of_param_v<Param> &&
             is_plain_component_arg_v<Arg> &&
             !std::is_const_v<std::remove_reference_t<Param>> &&
             !is_guaranteed_dirty_component_v<Arg, DirtyComponents>
         ) {
-            ecs.template markComponentEntityDirty<Arg>(entityIndex);
+            if (!dirtyState.template component_pre_marked_full<Arg>())
+                ecs.template markComponentEntityDirty<Arg>(entityIndex);
         }
     }
 
     template <typename DirtyComponents, typename... Params>
-    void mark_entity_dirty_for_writes(ECS& ecs, const size_t entityIndex, type_list<Params...>)
-    {
-        (mark_callable_param_entity_dirty<Params, DirtyComponents>(ecs, entityIndex), ...);
+    void mark_entity_dirty_for_writes(
+        ECS& ecs,
+        const size_t entityIndex,
+        type_list<Params...>,
+        const auto& dirtyState
+    ) {
+        mark_guaranteed_dirty_entity_components(ecs, entityIndex, DirtyComponents{}, dirtyState);
+        (mark_callable_param_entity_dirty<Params, DirtyComponents>(ecs, entityIndex, dirtyState), ...);
     }
 
     template <typename Callable, typename DirtyComponents>
-    void mark_entity_dirty_for_writes(ECS& ecs, const size_t entityIndex)
+    void mark_entity_dirty_for_writes(ECS& ecs, const size_t entityIndex, const auto& dirtyState)
     {
-        mark_entity_dirty_for_writes<DirtyComponents>(ecs, entityIndex, callable_arg_list_t<Callable>{});
+        mark_entity_dirty_for_writes<DirtyComponents>(
+            ecs,
+            entityIndex,
+            callable_arg_list_t<Callable>{},
+            dirtyState
+        );
     }
 
     template <typename Arg>
@@ -84,7 +140,7 @@ namespace ecs_sim
         {
             return entity;
         }
-        else if constexpr (is_array_for_v<Decayed>)
+        else if constexpr (is_view_of_v<Decayed>)
         {
             return make_global_argument<Arg>(ecs);
         }
@@ -115,7 +171,7 @@ namespace ecs_sim
         {
             return entity;
         }
-        else if constexpr (is_array_for_v<Decayed>)
+        else if constexpr (is_view_of_v<Decayed>)
         {
             return make_global_argument<Arg>(ecs);
         }
@@ -135,7 +191,13 @@ namespace ecs_sim
     }
 
     template <typename Callable, typename DirtyComponents, typename... Args, size_t... Is>
-    void invoke_for_entity_impl(Callable& callable, ECS& ecs, const Entity& entity, std::index_sequence<Is...>)
+    void invoke_for_entity_impl(
+        Callable& callable,
+        ECS& ecs,
+        const Entity& entity,
+        const auto& dirtyState,
+        std::index_sequence<Is...>
+    )
     {
         using ArgTuple = std::tuple<Args...>;
         std::tuple<call_arg_t<std::tuple_element_t<Is, ArgTuple>>...> args(
@@ -150,16 +212,17 @@ namespace ecs_sim
             args
         );
 
-        mark_entity_dirty_for_writes<Callable, DirtyComponents>(ecs, entity.index);
+        mark_entity_dirty_for_writes<Callable, DirtyComponents>(ecs, entity.index, dirtyState);
     }
 
     template <typename Callable, typename DirtyComponents, typename... Args>
-    void invoke_for_entity(Callable& callable, ECS& ecs, const Entity& entity)
+    void invoke_for_entity(Callable& callable, ECS& ecs, const Entity& entity, const auto& dirtyState)
     {
         invoke_for_entity_impl<Callable, DirtyComponents, Args...>(
             callable,
             ecs,
             entity,
+            dirtyState,
             std::make_index_sequence<sizeof...(Args)>{}
         );
     }
@@ -198,7 +261,8 @@ namespace ecs_sim
         type_list<Args...>,
         type_list<Components...>,
         const Entity& entity,
-        ComponentTuple& components
+        ComponentTuple& components,
+        const auto& dirtyState
     ) {
         std::tuple<call_arg_t<Args>...> args(
             make_argument_from_components<Args, Components...>(ecs, entity, components)...
@@ -212,7 +276,7 @@ namespace ecs_sim
             args
         );
 
-        mark_entity_dirty_for_writes<Callable, DirtyComponents>(ecs, entity.index);
+        mark_entity_dirty_for_writes<Callable, DirtyComponents>(ecs, entity.index, dirtyState);
     }
 
     template <typename Callable, typename DirtyComponents, typename... Args>
@@ -225,9 +289,11 @@ namespace ecs_sim
         else if constexpr (has_entity_arg_pack_v<Args...>)
         {
             auto view = ecs.view<>();
+            const size_t touchedEntityCount = view.size();
+            auto dirtyState = begin_guaranteed_dirty_components(ecs, touchedEntityCount, DirtyComponents{});
             view.each_mt([&](const Entity& entity)
             {
-                invoke_for_entity<Callable, DirtyComponents, Args...>(callable, ecs, entity);
+                invoke_for_entity<Callable, DirtyComponents, Args...>(callable, ecs, entity, dirtyState);
             }, pool);
         }
         else
@@ -246,6 +312,8 @@ namespace ecs_sim
     void run_component_job(ECS& ecs, Threadpool& pool, Callable& callable, type_list<Components...>)
     {
         auto view = ecs.view<Components...>();
+        const size_t touchedEntityCount = view.size();
+        auto dirtyState = begin_guaranteed_dirty_components(ecs, touchedEntityCount, DirtyComponents{});
         view.each_mt([&](const Entity& entity, ecs::component_value_t<Components>&... components)
         {
             auto componentTuple = std::forward_as_tuple(components...);
@@ -255,7 +323,8 @@ namespace ecs_sim
                 type_list<Args...>{},
                 type_list<Components...>{},
                 entity,
-                componentTuple
+                componentTuple,
+                dirtyState
             );
         }, pool);
     }
@@ -265,7 +334,6 @@ namespace ecs_sim
     {
         using Components = component_list_t<Args...>;
         run_component_job<Callable, DirtyComponents, Args...>(ecs, pool, callable, Components{});
-        mark_guaranteed_dirty_components(ecs, DirtyComponents{});
     }
 
 }

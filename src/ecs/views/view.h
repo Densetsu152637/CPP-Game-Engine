@@ -9,10 +9,12 @@
 #include <exception>
 #include <iterator>
 #include <functional>
+#include <cstddef>
 #include <tuple>
 #include <type_traits>
 #include <utility>
 
+#include "../core/archetype_storage_registry.h"
 #include "../pools/component_pool.h"
 #include "view_cache.h"
 #include "view_execution.h"
@@ -34,6 +36,9 @@ class View
     ECS* m_ecs = nullptr;
     sim_pool_tuple m_pools {};
     render_pool_tuple m_renderPools {};
+    std::array<ecs::IArchetypePool*, sizeof...(Components)> m_archetypePools {};
+    std::array<ecs::ComponentTypeId, sizeof...(Components)> m_componentTypeIds {};
+    bool m_usesArchetypeSources = false;
     size_t m_primaryIndex = Entity::N_POS;
     bool m_cacheResolved = false;
     ViewStorage m_storage = ViewStorage::Simulation;
@@ -77,12 +82,30 @@ class View
         return ecs_view_detail::pool_generations(pools, std::index_sequence<Is...>{});
     }
 
+    template <size_t I>
+    size_t current_sim_source_generation() const
+    {
+        if (nullptr != m_archetypePools[I])
+            return m_archetypePools[I]->generation();
+
+        auto* pool = std::get<I>(m_pools);
+        return nullptr == pool ? 0 : pool->generation();
+    }
+
+    template <size_t... Is>
+    std::array<size_t, sizeof...(Components)> current_sim_source_generations(std::index_sequence<Is...>) const
+    {
+        return { current_sim_source_generation<Is>()... };
+    }
+
     std::array<size_t, sizeof...(Components)> current_pool_generations() const
     {
         if constexpr (0 == sizeof...(Components))
             return {};
         else if (is_rendering_storage())
             return current_pool_generations(m_renderPools, std::make_index_sequence<sizeof...(Components)>{});
+        else if (m_usesArchetypeSources)
+            return current_sim_source_generations(std::make_index_sequence<sizeof...(Components)>{});
         else
             return current_pool_generations(m_pools, std::make_index_sequence<sizeof...(Components)>{});
     }
@@ -110,6 +133,42 @@ class View
         return ecs_view_detail::select_primary_storage<sizeof...(Components)>(pools);
     }
 
+    template <size_t I>
+    bool sim_source_available() const
+    {
+        return nullptr != m_archetypePools[I] || nullptr != std::get<I>(m_pools);
+    }
+
+    template <size_t I>
+    size_t sim_source_size() const
+    {
+        if (nullptr != m_archetypePools[I])
+            return m_archetypePools[I]->componentSize(m_componentTypeIds[I]);
+
+        auto* pool = std::get<I>(m_pools);
+        return nullptr == pool ? 0 : pool->size();
+    }
+
+    template <size_t... Is>
+    size_t select_primary_sim_source(std::index_sequence<Is...>) const
+    {
+        std::array<size_t, sizeof...(Components)> sizes { sim_source_size<Is>()... };
+        if (std::any_of(sizes.begin(), sizes.end(), [](const size_t size) { return 0 == size; }))
+            return Entity::N_POS;
+
+        const auto smallest = std::min_element(sizes.begin(), sizes.end());
+        return static_cast<size_t>(std::distance(sizes.begin(), smallest));
+    }
+
+    template <size_t I, size_t PrimaryI>
+    bool same_sim_source_as_primary() const
+    {
+        if (nullptr != m_archetypePools[I] || nullptr != m_archetypePools[PrimaryI])
+            return nullptr != m_archetypePools[I] && m_archetypePools[I] == m_archetypePools[PrimaryI];
+
+        return I == PrimaryI;
+    }
+
     template <size_t I, size_t PrimaryI, typename PoolTuple>
     bool fill_match_dense_index(
         PoolTuple& pools,
@@ -118,6 +177,34 @@ class View
         view_match& match
     ) const
     {
+        if (!is_rendering_storage() && m_usesArchetypeSources)
+        {
+            if (same_sim_source_as_primary<I, PrimaryI>())
+            {
+                if (nullptr != m_archetypePools[I]
+                    && !m_archetypePools[I]->hasComponent(entityIndex, m_componentTypeIds[I]))
+                {
+                    return false;
+                }
+
+                match.denseIndices[I] = primaryDenseIndex;
+                return true;
+            }
+
+            if (nullptr != m_archetypePools[I])
+            {
+                if (!m_archetypePools[I]->hasComponent(entityIndex, m_componentTypeIds[I]))
+                    return false;
+
+                const size_t denseIndex = m_archetypePools[I]->denseIndexOf(entityIndex);
+                if (SparseSet<value_at_t<I>>::N_POS == denseIndex)
+                    return false;
+
+                match.denseIndices[I] = denseIndex;
+                return true;
+            }
+        }
+
         if constexpr (I == PrimaryI)
         {
             match.denseIndices[I] = primaryDenseIndex;
@@ -205,21 +292,95 @@ class View
         (dispatch(std::integral_constant<size_t, Is>{}, std::get<Is>(pools)), ...);
     }
 
+    template <size_t PrimaryI, typename PoolT>
+    void append_sim_matches_from_primary(PoolT* primary)
+    {
+        append_matches_from_primary<PrimaryI>(m_pools, primary);
+    }
+
+    template <size_t PrimaryI>
+    void append_sim_matches_from_archetype_primary()
+    {
+        ecs::IArchetypePool* primary = m_archetypePools[PrimaryI];
+        if (nullptr == primary)
+            return;
+
+        const ecs::ComponentTypeId primaryTypeId = m_componentTypeIds[PrimaryI];
+        const size_t primarySize = primary->componentSize(primaryTypeId);
+        for (size_t componentDenseIndex = 0; componentDenseIndex < primarySize; ++componentDenseIndex)
+        {
+            const size_t entityIndex = primary->componentEntityAt(primaryTypeId, componentDenseIndex);
+            if (!m_ecs->is_alive_index(entityIndex))
+                continue;
+
+            const size_t rowDenseIndex = primary->denseIndexOf(entityIndex);
+            if (SparseSet<value_at_t<PrimaryI>>::N_POS == rowDenseIndex)
+                continue;
+
+            view_match match;
+            match.entityIndex = entityIndex;
+            if (fill_match<PrimaryI>(
+                m_pools,
+                entityIndex,
+                rowDenseIndex,
+                match,
+                std::make_index_sequence<sizeof...(Components)>{}
+            )) {
+                m_matches.append(std::move(match));
+            }
+        }
+    }
+
+    template <size_t... Is>
+    void resolve_matches_from_sim_sources(std::index_sequence<Is...>)
+    {
+        bool handled = false;
+        size_t currentIndex = 0;
+
+        auto dispatch = [&](auto index)
+        {
+            constexpr size_t I = decltype(index)::value;
+
+            if (handled || currentIndex != m_primaryIndex)
+            {
+                ++currentIndex;
+                return;
+            }
+
+            handled = true;
+            if (nullptr != m_archetypePools[I])
+                append_sim_matches_from_archetype_primary<I>();
+            else
+                append_sim_matches_from_primary<I>(std::get<I>(m_pools));
+
+            ++currentIndex;
+        };
+
+        (dispatch(std::integral_constant<size_t, Is>{}), ...);
+    }
+
     void resolve_matches()
     {
         m_matches.clear();
 
-        if constexpr (sizeof...(Components) > 1)
+        if constexpr (sizeof...(Components) > 0)
         {
-            if (Entity::N_POS != m_primaryIndex)
+            if (m_usesArchetypeSources && Entity::N_POS != m_primaryIndex)
             {
-                if (is_rendering_storage())
+                resolve_matches_from_sim_sources(std::make_index_sequence<sizeof...(Components)>{});
+            }
+            else if constexpr (sizeof...(Components) > 1)
+            {
+                if (Entity::N_POS != m_primaryIndex)
                 {
-                    resolve_matches_from_pools(m_renderPools, std::make_index_sequence<sizeof...(Components)>{});
-                }
-                else
-                {
-                    resolve_matches_from_pools(m_pools, std::make_index_sequence<sizeof...(Components)>{});
+                    if (is_rendering_storage())
+                    {
+                        resolve_matches_from_pools(m_renderPools, std::make_index_sequence<sizeof...(Components)>{});
+                    }
+                    else
+                    {
+                        resolve_matches_from_pools(m_pools, std::make_index_sequence<sizeof...(Components)>{});
+                    }
                 }
             }
         }
@@ -230,6 +391,8 @@ class View
     void resolve_cache()
     {
         m_matchesResolved = false;
+        m_usesArchetypeSources = false;
+        m_archetypePools = {};
 
         if constexpr (0 == sizeof...(Components))
         {
@@ -246,10 +409,23 @@ class View
             }
             else
             {
+                m_componentTypeIds = {
+                    ecs::component_type_id<ecs::component_key_t<Components>>()...
+                };
                 m_pools = sim_pool_tuple{
                     m_ecs->storage_if_exists<Components>()...
                 };
-                m_primaryIndex = select_primary_storage(m_pools);
+                m_archetypePools = {
+                    m_ecs->template archetypePoolForComponent<Components>()...
+                };
+                m_usesArchetypeSources = std::any_of(
+                    m_archetypePools.begin(),
+                    m_archetypePools.end(),
+                    [](const ecs::IArchetypePool* pool) { return nullptr != pool; }
+                );
+                m_primaryIndex = m_usesArchetypeSources
+                    ? select_primary_sim_source(std::make_index_sequence<sizeof...(Components)>{})
+                    : select_primary_storage(m_pools);
             }
         }
 
@@ -365,6 +541,12 @@ class View
 
     size_t iteration_size_runtime()
     {
+        if (m_usesArchetypeSources)
+        {
+            ensure_matches();
+            return m_matches.length();
+        }
+
         if constexpr (sizeof...(Components) <= 1)
             return primary_size_runtime();
         else
@@ -537,6 +719,170 @@ class View
         }
     }
 
+    void fill_archetype_raw_components(
+        const size_t entityIndex,
+        std::array<void*, sizeof...(Components)>& rawComponents
+    ) {
+        std::array<bool, sizeof...(Components)> handled {};
+
+        for (size_t i = 0; i < m_archetypePools.size(); ++i)
+        {
+            ecs::IArchetypePool* archetypePool = m_archetypePools[i];
+            if (nullptr == archetypePool || handled[i])
+                continue;
+
+            std::array<ecs::ComponentTypeId, sizeof...(Components)> componentTypeIds {};
+            std::array<void*, sizeof...(Components)> destinations {};
+            std::array<size_t, sizeof...(Components)> componentIndices {};
+            size_t count = 0;
+
+            for (size_t j = i; j < m_archetypePools.size(); ++j)
+            {
+                if (m_archetypePools[j] != archetypePool)
+                    continue;
+
+                handled[j] = true;
+                componentTypeIds[count] = m_componentTypeIds[j];
+                componentIndices[count] = j;
+                ++count;
+            }
+
+            if (!archetypePool->componentPointers(
+                entityIndex,
+                componentTypeIds.data(),
+                destinations.data(),
+                count
+            )) {
+                continue;
+            }
+
+            for (size_t componentIndex = 0; componentIndex < count; ++componentIndex)
+                rawComponents[componentIndices[componentIndex]] = destinations[componentIndex];
+        }
+    }
+
+    void fill_archetype_raw_components(
+        const view_match& match,
+        std::array<void*, sizeof...(Components)>& rawComponents
+    ) {
+        std::array<bool, sizeof...(Components)> handled {};
+
+        for (size_t i = 0; i < m_archetypePools.size(); ++i)
+        {
+            ecs::IArchetypePool* archetypePool = m_archetypePools[i];
+            if (nullptr == archetypePool || handled[i])
+                continue;
+
+            std::array<ecs::ComponentTypeId, sizeof...(Components)> componentTypeIds {};
+            std::array<void*, sizeof...(Components)> destinations {};
+            std::array<size_t, sizeof...(Components)> componentIndices {};
+            size_t count = 0;
+
+            for (size_t j = i; j < m_archetypePools.size(); ++j)
+            {
+                if (m_archetypePools[j] != archetypePool)
+                    continue;
+
+                handled[j] = true;
+                componentTypeIds[count] = m_componentTypeIds[j];
+                componentIndices[count] = j;
+                ++count;
+            }
+
+            if (!archetypePool->denseComponentPointers(
+                match.denseIndices[i],
+                componentTypeIds.data(),
+                destinations.data(),
+                count
+            )) {
+                continue;
+            }
+
+            for (size_t componentIndex = 0; componentIndex < count; ++componentIndex)
+                rawComponents[componentIndices[componentIndex]] = destinations[componentIndex];
+        }
+    }
+
+    template <size_t... Is>
+    void fill_standalone_raw_components(
+        const view_match& match,
+        std::array<void*, sizeof...(Components)>& rawComponents,
+        std::index_sequence<Is...>
+    ) {
+        auto fill = [&]<size_t I>()
+        {
+            if (nullptr == m_archetypePools[I])
+                rawComponents[I] = &std::get<I>(m_pools)->dense_at(match.denseIndices[I]);
+        };
+
+        (fill.template operator()<Is>(), ...);
+    }
+
+    template <size_t... Is>
+    bool raw_components_present(
+        const std::array<void*, sizeof...(Components)>& rawComponents,
+        std::index_sequence<Is...>
+    ) const {
+        return ((nullptr != rawComponents[Is]) && ...);
+    }
+
+    template <typename Func, size_t... Is>
+    void invoke_sim_raw_component_callback(
+        const size_t entityIndex,
+        Func& func,
+        std::array<void*, sizeof...(Components)>& rawComponents,
+        std::index_sequence<Is...>
+    ) {
+        if constexpr (std::is_invocable_v<Func&, Entity, value_at_t<Is>&...>)
+        {
+            func(
+                m_ecs->make_handle(entityIndex),
+                *static_cast<value_at_t<Is>*>(rawComponents[Is])...
+            );
+        }
+        else if constexpr (std::is_invocable_v<Func&, value_at_t<Is>&...>)
+        {
+            func(*static_cast<value_at_t<Is>*>(rawComponents[Is])...);
+        }
+        else
+        {
+            static_assert(
+                always_false_v<Func>,
+                "View::each callback must accept `(Entity, Component&...)` or `(Component&...)`."
+            );
+        }
+    }
+
+    template <typename Func>
+    void visit_sim_match(const view_match& match, Func& func)
+    {
+        std::array<void*, sizeof...(Components)> rawComponents {};
+        fill_archetype_raw_components(match, rawComponents);
+        fill_standalone_raw_components(
+            match,
+            rawComponents,
+            std::make_index_sequence<sizeof...(Components)>{}
+        );
+
+        if (!raw_components_present(rawComponents, std::make_index_sequence<sizeof...(Components)>{}))
+            return;
+
+        invoke_sim_raw_component_callback(
+            match.entityIndex,
+            func,
+            rawComponents,
+            std::make_index_sequence<sizeof...(Components)>{}
+        );
+    }
+
+    template <typename Func>
+    void each_sim_match_range(const size_t beginMatch, const size_t endMatch, Func& func)
+    {
+        const size_t boundedEnd = std::min(endMatch, m_matches.length());
+        for (size_t matchIndex = beginMatch; matchIndex < boundedEnd; ++matchIndex)
+            visit_sim_match(m_matches[matchIndex], func);
+    }
+
     template <typename Func>
     void each_range(const size_t beginDense, const size_t endDense, Func& func)
     {
@@ -568,7 +914,11 @@ class View
         {
             if constexpr (accepts_sim_refs<Func>())
             {
-                if constexpr (sizeof...(Components) > 1)
+                if (m_usesArchetypeSources)
+                {
+                    each_sim_match_range(beginDense, endDense, func);
+                }
+                else if constexpr (sizeof...(Components) > 1)
                 {
                     each_match_range(m_pools, beginDense, endDense, func);
                 }
@@ -633,6 +983,43 @@ class View
         invoke_component_callback(entityIndex, func, components, std::make_index_sequence<sizeof...(Components)>{});
     }
 
+    template <size_t... Is>
+    void fill_standalone_raw_components_for_entity(
+        const size_t entityIndex,
+        std::array<void*, sizeof...(Components)>& rawComponents,
+        std::index_sequence<Is...>
+    ) {
+        auto fill = [&]<size_t I>()
+        {
+            if (nullptr == m_archetypePools[I])
+                rawComponents[I] = std::get<I>(m_pools)->try_get(entityIndex);
+        };
+
+        (fill.template operator()<Is>(), ...);
+    }
+
+    template <typename Func>
+    void visit_entity_from_sim_sources(const size_t entityIndex, Func& func)
+    {
+        std::array<void*, sizeof...(Components)> rawComponents {};
+        fill_archetype_raw_components(entityIndex, rawComponents);
+        fill_standalone_raw_components_for_entity(
+            entityIndex,
+            rawComponents,
+            std::make_index_sequence<sizeof...(Components)>{}
+        );
+
+        if (!raw_components_present(rawComponents, std::make_index_sequence<sizeof...(Components)>{}))
+            return;
+
+        invoke_sim_raw_component_callback(
+            entityIndex,
+            func,
+            rawComponents,
+            std::make_index_sequence<sizeof...(Components)>{}
+        );
+    }
+
     template <typename Func, size_t... Is>
     void visit_entity_from_render_pools(const size_t entityIndex, Func& func, std::index_sequence<Is...>)
     {
@@ -661,7 +1048,10 @@ class View
         {
             if constexpr (accepts_sim_refs<Func>())
             {
-                visit_entity_from_sim_pools(entityIndex, func, std::make_index_sequence<sizeof...(Components)>{});
+                if (m_usesArchetypeSources)
+                    visit_entity_from_sim_sources(entityIndex, func);
+                else
+                    visit_entity_from_sim_pools(entityIndex, func, std::make_index_sequence<sizeof...(Components)>{});
             }
             else
             {
@@ -758,6 +1148,8 @@ public:
 
         if constexpr (0 == sizeof...(Components))
             return alive_entity_count();
+        else if (m_usesArchetypeSources)
+            return m_matches.length();
         else if constexpr (1 == sizeof...(Components))
             return primary_size_runtime();
         else

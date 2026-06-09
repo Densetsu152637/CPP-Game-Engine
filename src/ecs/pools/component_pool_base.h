@@ -13,6 +13,11 @@
 #include "component_pool_storage.h"
 #include "../core/component_type_id.h"
 
+namespace ecs
+{
+    class IArchetypePool;
+}
+
 template <typename T>
 class ComponentPool;
 
@@ -42,6 +47,8 @@ public:
     virtual void swapBuffers() = 0;
     virtual void writeFrom(IComponentPool&)
     { throw std::runtime_error("writeFrom is only supported by render component pools"); }
+    virtual void writeFromArchetype(ecs::IArchetypePool&, ecs::ComponentTypeId)
+    { throw std::runtime_error("writeFromArchetype is only supported by render component pools"); }
 
     size_t generation() const
     { return m_generation; }
@@ -65,6 +72,16 @@ public:
     {
         std::lock_guard lock(m_dirtyMutex);
         m_dirty.markEntity(entityIndex, size());
+    }
+
+    bool markFullIfEntityDirtyCountReachesThreshold(const size_t entityCount)
+    {
+        std::lock_guard lock(m_dirtyMutex);
+        if (!m_dirty.wouldMarkFullAfterAddingEntities(size(), entityCount))
+            return false;
+
+        m_dirty.markFull();
+        return true;
     }
 
     virtual void clearDirty()
@@ -94,29 +111,28 @@ public:
     { return ecs::component_type_name<T>(); }
 
     size_t size() const override
-    { return sourceSet().size(); }
+    { return m_storage.size(); }
 
     bool contains(const size_t entityIndex) const
-    { return sourceSet().contains(entityIndex); }
+    { return m_storage.contains(entityIndex); }
 
     T* try_get(const size_t entityIndex)
-    { return sourceSet().try_get(entityIndex); }
+    { return m_storage.try_get(entityIndex); }
 
     const T* try_get(const size_t entityIndex) const
-    { return sourceSet().try_get(entityIndex); }
+    { return m_storage.try_get(entityIndex); }
 
     T& at(const size_t entityIndex)
-    { return sourceSet().at(entityIndex); }
+    { return m_storage.at(entityIndex); }
 
     const T& at(const size_t entityIndex) const
-    { return sourceSet().at(entityIndex); }
+    { return m_storage.at(entityIndex); }
 
     template <typename... Args>
     T& emplace(const size_t entityIndex, Args&&... args)
     {
         const bool existed = contains(entityIndex);
-        T& component = sourceSet().emplace(entityIndex, std::forward<Args>(args)...);
-        m_storage.bind(component);
+        T& component = m_storage.emplace(entityIndex, std::forward<Args>(args)...);
         noteEntityMutation(entityIndex, !existed);
         return component;
     }
@@ -124,8 +140,7 @@ public:
     T& insert_or_assign(const size_t entityIndex, T value)
     {
         const bool existed = contains(entityIndex);
-        T& component = sourceSet().insert_or_assign(entityIndex, std::move(value));
-        m_storage.bind(component);
+        T& component = m_storage.insert_or_assign(entityIndex, std::move(value));
         noteEntityMutation(entityIndex, !existed);
         return component;
     }
@@ -137,35 +152,35 @@ public:
 
         this->markEntityDirty(entityIndex);
         this->bumpGeneration();
-        sourceSet().erase(entityIndex);
+        m_storage.erase(entityIndex);
     }
 
     void clear() override
     {
-        if (!sourceSet().empty())
+        if (!m_storage.empty())
             this->bumpGeneration();
 
         this->markDirty();
-        sourceSet().clear();
+        m_storage.clear();
     }
 
     size_t entity_at(const size_t denseIndex) const
-    { return sourceSet().key_at(denseIndex); }
+    { return m_storage.entity_at(denseIndex); }
 
     T& dense_at(const size_t denseIndex)
-    { return sourceSet().dense_at(denseIndex); }
+    { return m_storage.dense_at(denseIndex); }
 
     const T& dense_at(const size_t denseIndex) const
-    { return sourceSet().dense_at(denseIndex); }
+    { return m_storage.dense_at(denseIndex); }
 
     ArrayList<T>& dense()
-    { return sourceSet().dense_values(); }
+    { return m_storage.dense(); }
 
     const ArrayList<T>& dense() const
-    { return sourceSet().dense_values(); }
+    { return m_storage.dense(); }
 
     size_t dense_index_of(const size_t entityIndex) const
-    { return sourceSet().index_of(entityIndex); }
+    { return m_storage.dense_index_of(entityIndex); }
 
     void swapBuffers() override
     { m_storage.swapBuffers(); }

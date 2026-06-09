@@ -18,16 +18,16 @@ namespace ecs_processor_detail
     void guarantee_sim_pool(ECS& ecs)
     {
         using Component = ecs_sim::component_for_arg_t<Arg>;
-        using ArrayComponent = ecs_sim::array_component_for_arg_t<Arg>;
+        using ViewComponent = ecs_sim::view_component_for_arg_t<Arg>;
 
         if constexpr (!std::is_void_v<Component>)
         {
             ecs.template guarantee_component_pool<Component>();
         }
 
-        if constexpr (!std::is_void_v<ArrayComponent>)
+        if constexpr (!std::is_void_v<ViewComponent>)
         {
-            ecs.template guarantee_component_pool<ArrayComponent>();
+            ecs.template guarantee_component_pool<ViewComponent>();
         }
     }
 
@@ -82,6 +82,13 @@ public:
     void render();
 
     ArrayList<std::string> getWallOrdering() const;
+
+    template <typename... Components>
+    ECSProcessor& registerArchetype()
+    {
+        m_ecs.template registerArchetype<Components...>();
+        return *this;
+    }
 
     template <typename... Args, typename Callable>
     ECSProcessor& queue_into_sim(std::string name, Callable&& callable)

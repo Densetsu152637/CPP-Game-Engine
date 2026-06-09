@@ -64,7 +64,7 @@ namespace ecs_sim
 
         static_assert(
             valid_callable_params_v<CallableArgs>,
-            "ECSProcessor simulation callable parameters must be Entity, component lvalue references, or const ArrayList<T>& for ArrayFor<T>"
+            "ECSProcessor simulation callable parameters must be Entity, component lvalue references, or const ecs::ViewOf<T>&"
         );
 
         static_assert(
@@ -90,7 +90,7 @@ namespace ecs_sim
     {
         static_assert(
             (... && is_supported_submit_arg_v<Args>),
-            "ECSProcessor submit arguments must be component types, Dirty<T>, ecs::Dirty<T>, ArrayFor<T>, or Entity"
+            "ECSProcessor submit arguments must be component types, Dirty<T>, ecs::Dirty<T>, ecs::ViewOf<T>, or Entity"
         );
 
         using CallableArgs = callable_submit_arg_list_t<Args...>;

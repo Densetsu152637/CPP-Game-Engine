@@ -70,6 +70,7 @@ add_executable(CPPGameEngine
         src/ecs/pools/component_pool_simulation.h
         src/ecs/pools/component_pool_render.h
         src/ecs/pools/component_pool_storage.h
+        src/ecs/core/archetype_storage_registry.h
         src/ecs/core/component_storage_registry.h
         src/ecs/core/component_type_id.h
         src/ecs/core/structural_command_buffer.h
@@ -174,6 +175,7 @@ if(CPP_GAME_ENGINE_BUILD_TESTS)
             src/ecs/pools/component_pool_simulation.h
             src/ecs/pools/component_pool_render.h
             src/ecs/pools/component_pool_storage.h
+            src/ecs/core/archetype_storage_registry.h
             src/ecs/core/component_storage_registry.h
             src/ecs/core/component_type_id.h
             src/ecs/core/structural_command_buffer.h

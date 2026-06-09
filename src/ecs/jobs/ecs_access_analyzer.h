@@ -126,7 +126,7 @@ namespace ecs_sim
     {
         using Arg = std::remove_cvref_t<T>;
 
-        if constexpr (is_array_for_v<Arg>)
+        if constexpr (is_view_of_v<Arg>)
         {
             using Component = std::remove_cvref_t<typename Arg::component_type>;
             append_read<Component>(spec);
@@ -159,9 +159,9 @@ namespace ecs_sim
         {
             return;
         }
-        else if constexpr (is_array_list_param_v<Param>)
+        else if constexpr (is_view_of_param_v<Param>)
         {
-            using Component = array_list_param_component_t<Param>;
+            using Component = view_of_param_component_t<Param>;
             append_read<Component>(spec);
         }
         else
