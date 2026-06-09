@@ -9,19 +9,14 @@
 #include <exception>
 #include <iterator>
 #include <functional>
-#include <memory>
 #include <tuple>
 #include <type_traits>
 #include <utility>
 
-#include "component_pool.h"
-#include "../async/threadpool.h"
-
-enum class ViewStorage
-{
-    Simulation,
-    Rendering
-};
+#include "../pools/component_pool.h"
+#include "view_cache.h"
+#include "view_execution.h"
+#include "view_matcher.h"
 
 template <typename... Components>
 class View
@@ -54,19 +49,8 @@ class View
     template <size_t I>
     using value_at_t = ecs::component_value_t<component_at_t<I>>;
 
-    struct dense_range
-    {
-        size_t begin = 0;
-        size_t end = 0;
-    };
-
-    using dense_index_array = std::array<size_t, sizeof...(Components)>;
-
-    struct view_match
-    {
-        size_t entityIndex = Entity::N_POS;
-        dense_index_array denseIndices {};
-    };
+    using dense_range = ecs_view_detail::DenseRange;
+    using view_match = ecs_view_detail::ViewMatch<sizeof...(Components)>;
 
     ArrayList<view_match> m_matches;
     bool m_matchesResolved = false;
@@ -74,15 +58,6 @@ class View
     std::array<size_t, sizeof...(Components)> m_observedPoolGenerations {};
     size_t m_observedEntityGeneration = UNOBSERVED_GENERATION;
     size_t m_observedStorageGeneration = UNOBSERVED_GENERATION;
-
-    static size_t chunk_count(const size_t total, const size_t chunkSize)
-    { return (total + chunkSize - 1) / chunkSize; }
-
-    static dense_range make_chunk_range(const size_t chunk, const size_t chunkSize, const size_t total)
-    {
-        const size_t begin = chunk * chunkSize;
-        return { begin, std::min(total, begin + chunkSize) };
-    }
 
     bool is_rendering_storage() const
     { return ViewStorage::Rendering == m_storage; }
@@ -99,9 +74,7 @@ class View
         const PoolTuple& pools,
         std::index_sequence<Is...>
     ) const {
-        return {
-            (nullptr == std::get<Is>(pools) ? 0 : std::get<Is>(pools)->generation())...
-        };
+        return ecs_view_detail::pool_generations(pools, std::index_sequence<Is...>{});
     }
 
     std::array<size_t, sizeof...(Components)> current_pool_generations() const
@@ -131,23 +104,10 @@ class View
         m_observedPoolGenerations = current_pool_generations();
     }
 
-    template <typename PoolTuple, size_t... Is>
-    std::array<size_t, sizeof...(Components)> storage_sizes(const PoolTuple& pools, std::index_sequence<Is...>) const
-    {
-        return {
-            (nullptr == std::get<Is>(pools) ? 0 : std::get<Is>(pools)->size())...
-        };
-    }
-
     template <typename PoolTuple>
     size_t select_primary_storage(const PoolTuple& pools) const
     {
-        const auto sizes = storage_sizes(pools, std::make_index_sequence<sizeof...(Components)>{});
-        if (std::any_of(sizes.begin(), sizes.end(), [](const size_t size) { return 0 == size; }))
-            return Entity::N_POS;
-
-        const auto smallest = std::min_element(sizes.begin(), sizes.end());
-        return static_cast<size_t>(std::distance(sizes.begin(), smallest));
+        return ecs_view_detail::select_primary_storage<sizeof...(Components)>(pools);
     }
 
     template <size_t I, size_t PrimaryI, typename PoolTuple>
@@ -323,15 +283,7 @@ class View
     }
 
     size_t alive_entity_count() const
-    {
-        size_t alive = 0;
-        for (const auto& record : m_ecs->m_entities)
-        {
-            if (record.alive)
-                ++alive;
-        }
-        return alive;
-    }
+    { return m_ecs->alive_entity_count(); }
 
     template <typename Func>
     void invoke_entity_only_callback(const Entity& entity, Func& func)
@@ -356,9 +308,10 @@ class View
     template <typename Func>
     void iterate_all_entities(Func& func)
     {
-        for (size_t i = 0; i < m_ecs->m_entities.length(); ++i)
+        const ArrayList<EntityRecord>& records = m_ecs->entity_records();
+        for (size_t i = 0; i < records.length(); ++i)
         {
-            const EntityRecord& record = m_ecs->m_entities[i];
+            const EntityRecord& record = records[i];
             if (!record.alive)
                 continue;
 
@@ -419,16 +372,6 @@ class View
             ensure_matches();
             return m_matches.length();
         }
-    }
-
-    size_t dense_chunk_size(const size_t total, Threadpool& pool, const size_t minChunk) const
-    {
-        const size_t numThreads = std::max<size_t>(1, pool.size());
-        const size_t defaultChunk = std::max<size_t>(1, total / numThreads);
-        return std::max<size_t>(
-            1,
-            minChunk == 0 ? defaultChunk : minChunk
-        );
     }
 
     template <typename Func, size_t... Is>
@@ -743,23 +686,12 @@ class View
 
         for (size_t chunk = 0; chunk < chunks; ++chunk)
         {
-            const dense_range range = make_chunk_range(chunk, chunkSize, total);
-            auto chunkCallable = std::make_shared<Callable>(callable);
-            promises.append(pool.submit([this, range, chunkCallable]() mutable
+            const dense_range range = ecs_view_detail::make_chunk_range(chunk, chunkSize, total);
+            promises.append(pool.submit([this, range, callable]() mutable
             {
-                each_range(range.begin, range.end, *chunkCallable);
+                each_range(range.begin, range.end, callable);
                 return true;
             }));
-        }
-    }
-
-    void await_all(ArrayList<Promise<bool>>& promises)
-    {
-        for (auto& promise : promises)
-        {
-            auto& result = promise.await();
-            if (result.is_failure())
-                std::rethrow_exception(result.exception());
         }
     }
 
@@ -770,14 +702,14 @@ class View
         if (0 == total)
             return;
 
-        const size_t chunkSize = dense_chunk_size(total, pool, minChunk);
-        const size_t chunks = chunk_count(total, chunkSize);
+        const size_t chunkSize = ecs_view_detail::dense_chunk_size(total, pool, minChunk);
+        const size_t chunks = ecs_view_detail::chunk_count(total, chunkSize);
         using DecayedCallable = std::decay_t<Callable>;
         DecayedCallable callableSeed(std::forward<Callable>(callable));
 
         ArrayList<Promise<bool>> promises;
         append_dense_range_jobs(pool, total, chunkSize, chunks, callableSeed, promises);
-        await_all(promises);
+        ecs_view_detail::await_all(promises);
     }
 
     template <typename Callable>

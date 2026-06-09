@@ -48,10 +48,10 @@ namespace threadpool_detail
     };
 
     template <typename Callable>
-    std::shared_ptr<ThreadTask> make_task(Callable&& callable)
+    std::unique_ptr<ThreadTask> make_task(Callable&& callable)
     {
         using Model = TaskModel<std::decay_t<Callable>>;
-        return std::make_shared<Model>(std::forward<Callable>(callable));
+        return std::make_unique<Model>(std::forward<Callable>(callable));
     }
 }
 
@@ -62,7 +62,7 @@ class Threadpool {
     ArrayList<std::thread> m_pool;
     std::string m_name;
 
-    LinkedQueue<std::shared_ptr<ThreadTask>> m_queue;
+    LinkedQueue<std::unique_ptr<ThreadTask>> m_queue;
 
     std::mutex m_mutex;
     std::condition_variable m_cv;

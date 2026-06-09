@@ -5,42 +5,28 @@
 #pragma once
 
 #include <cstdint>
-#include <memory>
 #include <stdexcept>
-#include <type_traits>
-#include <unordered_map>
 #include <utility>
 
-#include "component_alias.h"
-#include "component_pool.h"
-#include "component_type_id.h"
-#include "entity.h"
+#include "aliases/component_alias.h"
+#include "core/component_storage_registry.h"
+#include "core/entity.h"
+#include "core/entity_registry.h"
 #include "../structs/arraylist.h"
 
 template <typename... Components>
 class View;
+class ECSRenderBridge;
 
 class ECS
 {
     template <typename...>
     friend class View;
     friend class ECSProcessor;
+    friend class ECSRenderBridge;
 
-    std::unordered_map<
-        ecs::ComponentTypeId,
-        std::unique_ptr<IComponentPool>
-    > m_componentPools;
-
-    std::unordered_map<
-        ecs::ComponentTypeId,
-        std::unique_ptr<IComponentPool>
-    > m_renderComponentPools;
-
-    ArrayList<EntityRecord> m_entities;
-    ArrayList<size_t> m_freeList;
-    size_t m_entityGeneration = 0;
-    size_t m_componentStorageGeneration = 0;
-    size_t m_renderStorageGeneration = 0;
+    EntityRegistry m_entities;
+    ComponentStorageRegistry m_components;
 
     static Entity make_handle(const EntityRecord& record, const size_t& index);
     Entity make_handle(const size_t& index);
@@ -54,84 +40,49 @@ class ECS
     using component_value_t = ecs::component_value_t<T>;
 
     template <typename T>
-    using pool_t = std::conditional_t<
-        ecs::is_buffered_component_v<component_value_t<T>>,
-        BufferedComponentPool<component_value_t<T>>,
-        ComponentPool<component_value_t<T>>
-    >;
+    using pool_t = ComponentStorageRegistry::pool_t<T>;
 
     template <typename T>
-    using render_pool_t = RenderComponentPool<component_value_t<T>>;
+    using render_pool_t = ComponentStorageRegistry::render_pool_t<T>;
 
     template <typename T>
     pool_t<T>* storage_if_exists()
     {
-        const auto it = m_componentPools.find(ecs::component_type_id<component_key_t<T>>());
-        if (it == m_componentPools.end())
-            return nullptr;
-
-        return static_cast<pool_t<T>*>(it->second.get());
+        return m_components.storageIfExists<T>();
     }
 
     template <typename T>
     const pool_t<T>* storage_if_exists() const
     {
-        const auto it = m_componentPools.find(ecs::component_type_id<component_key_t<T>>());
-        if (it == m_componentPools.end())
-            return nullptr;
-
-        return static_cast<const pool_t<T>*>(it->second.get());
+        return m_components.storageIfExists<T>();
     }
 
     template <typename T>
     pool_t<T>& storage()
     {
-        const ecs::ComponentTypeId key = ecs::component_type_id<component_key_t<T>>();
-        auto it = m_componentPools.find(key);
-        if (it == m_componentPools.end())
-        {
-            auto inserted = m_componentPools.emplace(key, std::make_unique<pool_t<T>>());
-            it = inserted.first;
-            ++m_componentStorageGeneration;
-        }
-
-        return *static_cast<pool_t<T>*>(it->second.get());
+        return m_components.storage<T>();
     }
 
     template <typename T>
     render_pool_t<T>* render_storage_if_exists()
     {
-        const auto it = m_renderComponentPools.find(ecs::component_type_id<component_key_t<T>>());
-        if (it == m_renderComponentPools.end())
-            return nullptr;
-
-        return static_cast<render_pool_t<T>*>(it->second.get());
+        return m_components.renderStorageIfExists<T>();
     }
 
     template <typename T>
     const render_pool_t<T>* render_storage_if_exists() const
     {
-        const auto it = m_renderComponentPools.find(ecs::component_type_id<component_key_t<T>>());
-        if (it == m_renderComponentPools.end())
-            return nullptr;
-
-        return static_cast<const render_pool_t<T>*>(it->second.get());
+        return m_components.renderStorageIfExists<T>();
     }
 
     template <typename T>
     render_pool_t<T>& render_storage()
     {
-        const ecs::ComponentTypeId key = ecs::component_type_id<component_key_t<T>>();
-        auto it = m_renderComponentPools.find(key);
-        if (it == m_renderComponentPools.end())
-        {
-            auto inserted = m_renderComponentPools.emplace(key, std::make_unique<render_pool_t<T>>());
-            it = inserted.first;
-            ++m_renderStorageGeneration;
-        }
-
-        return *static_cast<render_pool_t<T>*>(it->second.get());
+        return m_components.renderStorage<T>();
     }
+
+    size_t alive_entity_count() const;
+    const ArrayList<EntityRecord>& entity_records() const;
 
 public:
 
@@ -151,13 +102,13 @@ public:
     void markComponentEntityDirty(ecs::ComponentTypeId componentTypeId, size_t entityIndex);
 
     size_t entity_generation() const
-    { return m_entityGeneration; }
+    { return m_entities.generation(); }
 
     size_t component_storage_generation() const
-    { return m_componentStorageGeneration; }
+    { return m_components.componentStorageGeneration(); }
 
     size_t render_storage_generation() const
-    { return m_renderStorageGeneration; }
+    { return m_components.renderStorageGeneration(); }
 
     template <typename T>
     void guarantee_component_pool()
@@ -187,7 +138,7 @@ public:
     bool hasComponent(const Entity& entity) const;
 
     template <typename T>
-    ecs::component_value_t<T>* try_get_index(const size_t& index);
+    const ecs::component_value_t<T>* try_get_index(const size_t& index);
 
     template <typename T>
     const ecs::component_value_t<T>* try_get_index(const size_t& index) const;
@@ -196,7 +147,7 @@ public:
     ecs::component_value_t<T>* try_get_mut_index(const size_t& index);
 
     template <typename T>
-    ecs::component_value_t<T>* try_get(const Entity& entity);
+    const ecs::component_value_t<T>* try_get(const Entity& entity);
 
     template <typename T>
     const ecs::component_value_t<T>* try_get(const Entity& entity) const;
@@ -236,7 +187,7 @@ public:
     void eachEntity(Func&& func);
 };
 
-#include "view.h"
+#include "views/view.h"
 
 template <typename T>
 bool ECS::hasComponent(const Entity& entity) const
@@ -249,9 +200,9 @@ bool ECS::hasComponent(const Entity& entity) const
 }
 
 template <typename T>
-ecs::component_value_t<T>* ECS::try_get_index(const size_t& index)
+const ecs::component_value_t<T>* ECS::try_get_index(const size_t& index)
 {
-    pool_t<T>* pool = storage_if_exists<T>();
+    const pool_t<T>* pool = storage_if_exists<T>();
     if (nullptr == pool) return nullptr;
     return pool->try_get(index);
 }
@@ -278,7 +229,7 @@ ecs::component_value_t<T>* ECS::try_get_mut_index(const size_t& index)
 }
 
 template <typename T>
-ecs::component_value_t<T>* ECS::try_get(const Entity& entity)
+const ecs::component_value_t<T>* ECS::try_get(const Entity& entity)
 {
     if (!is_valid_handle(entity))
         return nullptr;
@@ -339,7 +290,7 @@ bool ECS::removeComponent(const Entity& entity)
 template <typename T>
 ArrayList<ecs::component_value_t<T>>& ECS::denseComponents()
 {
-    return storage<T>().dense();
+    return denseComponentsMut<T>();
 }
 
 template <typename T>

@@ -16,7 +16,7 @@ void Threadpool::thread_global_entrance_point(Threadpool* pool)
 {
     while (true)
     {
-        std::shared_ptr<ThreadTask> task;
+        std::unique_ptr<ThreadTask> task;
 
         {
             std::unique_lock<std::mutex> lock(pool->m_mutex);
@@ -69,7 +69,6 @@ void Threadpool::shutdown()
             t.join();
     }
 }
-
 
 
 

@@ -4,88 +4,42 @@
 
 #include "processor.h"
 
-#include <format>
-#include <ranges>
 #include <string>
-
-void ECSProcessor::_append_default_walls()
-{
-    createWall(FIRST_WALL, 0);
-    createWall(DEFAULT_WALL, 1);
-    createWall(FINAL_WALL, 999);
-}
-
-void ECSProcessor::_remove_job_from_walls(const std::string& jobName)
-{
-    for (auto& arr : m_wall_jobs | std::views::values)
-        arr.remove(jobName);
-}
-
-size_t ECSProcessor::_find_wall_index(const std::string& wallName) const
-{ return m_wall_order.at(wallName); }
 
 void ECSProcessor::createWall(const std::string& wallName, const size_t position)
 {
-    if (wallName.empty())
-        throw std::invalid_argument("ECSProcessor wall name cannot be empty");
-
-    if (m_wall_order.contains(wallName))
-        throw std::runtime_error(std::format("Wall \"{}\" already exists in position {}", wallName, _find_wall_index(wallName)));
-
-    m_wall_order.insert({ wallName, position });
-    m_wall_jobs.insert({ wallName, ArrayList<std::string>() });
+    m_scheduler.createWall(wallName, position);
 }
 
 void ECSProcessor::clear()
 {
-    m_sim_jobs.clear();
-    m_render_jobs.clear();
-    m_wall_order.clear();
-    m_wall_jobs.clear();
-    _append_default_walls();
+    m_scheduler.clear();
 }
 
 void ECSProcessor::setSchedulerLogger(Logger* logger)
 {
-    m_schedulerLogger = logger;
+    m_scheduler.setLogger(logger);
 }
 
 void ECSProcessor::clearSchedulerLogger()
 {
-    m_schedulerLogger = nullptr;
+    m_scheduler.clearLogger();
 }
 
 ArrayList<std::string> ECSProcessor::getWallOrdering() const
 {
-    ArrayList<std::pair<std::string, size_t>> wall_ordering{m_wall_order.size()};
-    for (const auto& wall_order_pair : m_wall_order)
-    {
-        wall_ordering.append(wall_order_pair);
-    }
-
-    wall_ordering.sort(
-        [](auto& p1, auto& p2)
-        { return p1.second < p2.second; }
-    );
-
-    return wall_ordering.map([](auto& p) { return p.first; });
+    return m_scheduler.getWallOrdering();
 }
 
 void ECSProcessor::simulate()
 {
-    for (const auto& wallName : getWallOrdering())
+    for (const auto& wallName : m_scheduler.simulationWallOrdering())
     {
-        ecs_processor_detail::log_scheduler_event(
-            m_schedulerLogger,
+        ArrayList<ecs_sim::Job*>& sim_jobs = m_scheduler.simulationJobsForWall(wallName);
+        m_scheduler.log(
             "running simulation wall \"" + wallName + "\" with " +
-                std::to_string(m_wall_jobs[wallName].length()) + " jobs"
+                std::to_string(sim_jobs.length()) + " jobs"
         );
-
-        ArrayList<ecs_sim::Job*> sim_jobs{m_wall_jobs[wallName].length()};
-        for (const std::string& name : m_wall_jobs[wallName])
-        {
-            sim_jobs.append(&m_sim_jobs.at(name));
-        }
 
         ecs_sim::execute_jobs_concurrently(
             m_pool,
@@ -95,56 +49,14 @@ void ECSProcessor::simulate()
         );
     }
 
-    // copy read data into rendering pipeline
-
-    ArrayList<Promise<bool>> transfer_promises{ m_ecs.m_renderComponentPools.size() };
-    ArrayList<IComponentPool*> transferred_sources{ m_ecs.m_renderComponentPools.size() };
-
-    for (auto& [type, renderPool] : m_ecs.m_renderComponentPools)
-    {
-        const auto simPoolHit = m_ecs.m_componentPools.find(type);
-        if (simPoolHit == m_ecs.m_componentPools.end())
-            continue;
-
-        IComponentPool* renderPoolPtr = renderPool.get();
-        IComponentPool* simPoolPtr = simPoolHit->second.get();
-
-        if (!simPoolPtr->isDirty())
-            continue;
-
-        ecs_processor_detail::log_scheduler_event(
-            m_schedulerLogger,
-            std::string("transferring dirty render component pool type=") +
-                renderPoolPtr->type_name() +
-                (simPoolPtr->isFullyDirty()
-                    ? std::string(" mode=full")
-                    : std::string(" mode=entities count=") + std::to_string(simPoolPtr->dirtyEntities().length()))
-        );
-
-        transferred_sources.append(simPoolPtr);
-        transfer_promises.append(m_pool.submit([renderPoolPtr, simPoolPtr]()
-        {
-            renderPoolPtr->writeFrom(*simPoolPtr);
-            return true;
-        }));
-    }
-
-    ecs_sim::await_promises(transfer_promises);
-
-    for (IComponentPool* pool : transferred_sources)
-        pool->clearDirty();
+    m_renderBridge.transferDirtyPools(m_ecs, m_pool, m_scheduler);
 }
 
 void ECSProcessor::render()
 {
-    ArrayList<ecs_sim::Job*> render_jobs{m_render_jobs.size()};
-    for (auto& [name, job] : m_render_jobs)
-    {
-        render_jobs.append(&job);
-    }
+    ArrayList<ecs_sim::Job*>& render_jobs = m_scheduler.renderJobs();
 
-    ecs_processor_detail::log_scheduler_event(
-        m_schedulerLogger,
+    m_scheduler.log(
         "running rendering batch with " + std::to_string(render_jobs.length()) + " jobs"
     );
 

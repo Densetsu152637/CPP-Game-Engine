@@ -7,7 +7,7 @@
 #include <exception>
 
 #include "ecs_sim_invocation.h"
-#include "../async/threadpool.h"
+#include "../../async/threadpool.h"
 
 namespace ecs_sim
 {

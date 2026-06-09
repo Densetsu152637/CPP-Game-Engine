@@ -48,8 +48,8 @@ add_executable(CPPGameEngine
         src/logging/text_colour.h
         src/logging/text_colour.cpp
         src/logging/logger.cpp
-        src/ecs/uniform.h
-        src/ecs/component_pool.h
+        src/rendering/uniform.h
+        src/ecs/pools/component_pool.h
         src/interaction/keyboard.cpp
         src/interaction/keyboard.h
         src/interaction/mouse.cpp
@@ -57,18 +57,28 @@ add_executable(CPPGameEngine
         src/interaction/window_event.h
         src/core/engine.cpp
         src/core/engine.h
-        src/ecs/entity.h
+        src/ecs/core/entity.h
         src/ecs/ecs.cpp
         src/ecs/ecs.h
-        src/ecs/component_alias.h
-        src/ecs/component_alias_basic.h
-        src/ecs/component_alias_buffered.h
-        src/ecs/component_alias_ops.h
-        src/ecs/component_alias_traits.h
-        src/ecs/component_pool_dirty.h
-        src/ecs/component_pool_storage.h
-        src/ecs/component_type_id.h
-        src/ecs/view.h
+        src/ecs/aliases/component_alias.h
+        src/ecs/aliases/component_alias_basic.h
+        src/ecs/aliases/component_alias_buffered.h
+        src/ecs/aliases/component_alias_ops.h
+        src/ecs/aliases/component_alias_traits.h
+        src/ecs/pools/component_pool_dirty.h
+        src/ecs/pools/component_pool_base.h
+        src/ecs/pools/component_pool_simulation.h
+        src/ecs/pools/component_pool_render.h
+        src/ecs/pools/component_pool_storage.h
+        src/ecs/core/component_storage_registry.h
+        src/ecs/core/component_type_id.h
+        src/ecs/core/entity_registry.cpp
+        src/ecs/core/entity_registry.h
+        src/ecs/views/view.h
+        src/ecs/views/view_cache.h
+        src/ecs/views/view_execution.h
+        src/ecs/views/view_matcher.h
+        src/ecs/jobs/ecs_access_analyzer.h
         src/core/interfaces.h
         src/async/buffer.h
         src/async/lock.h
@@ -79,12 +89,17 @@ add_executable(CPPGameEngine
         src/structs/sparse_set.h
         src/structs/page_set.h
         src/structs/templates.h
-        src/ecs/ecs_sim_detail.h
-        src/ecs/ecs_sim_access.h
-        src/ecs/ecs_sim_arg_traits.h
-        src/ecs/ecs_sim_execution.h
-        src/ecs/ecs_sim_invocation.h
-        src/ecs/ecs_sim_types.h
+        src/ecs/jobs/ecs_sim_detail.h
+        src/ecs/jobs/ecs_sim_access.h
+        src/ecs/jobs/ecs_sim_arg_traits.h
+        src/ecs/jobs/ecs_sim_execution.h
+        src/ecs/jobs/ecs_sim_invocation.h
+        src/ecs/jobs/ecs_sim_types.h
+        src/ecs/jobs/ecs_job_scheduler.cpp
+        src/ecs/jobs/ecs_job_scheduler.h
+        src/ecs/jobs/ecs_job_factory.h
+        src/ecs/rendering/ecs_render_bridge.cpp
+        src/ecs/rendering/ecs_render_bridge.h
         src/components/alias.h
         src/components/systems.cpp
         src/components/systems.h
@@ -147,22 +162,37 @@ if(CPP_GAME_ENGINE_BUILD_TESTS)
             src/ecs/ecs.h
             src/ecs/processor.cpp
             src/ecs/processor.h
-            src/ecs/component_alias.h
-            src/ecs/component_alias_basic.h
-            src/ecs/component_alias_buffered.h
-            src/ecs/component_alias_ops.h
-            src/ecs/component_alias_traits.h
-            src/ecs/component_pool.h
-            src/ecs/component_pool_dirty.h
-            src/ecs/component_pool_storage.h
-            src/ecs/component_type_id.h
-            src/ecs/view.h
-            src/ecs/ecs_sim_detail.h
-            src/ecs/ecs_sim_access.h
-            src/ecs/ecs_sim_arg_traits.h
-            src/ecs/ecs_sim_execution.h
-            src/ecs/ecs_sim_invocation.h
-            src/ecs/ecs_sim_types.h
+            src/ecs/aliases/component_alias.h
+            src/ecs/aliases/component_alias_basic.h
+            src/ecs/aliases/component_alias_buffered.h
+            src/ecs/aliases/component_alias_ops.h
+            src/ecs/aliases/component_alias_traits.h
+            src/ecs/pools/component_pool.h
+            src/ecs/pools/component_pool_dirty.h
+            src/ecs/pools/component_pool_base.h
+            src/ecs/pools/component_pool_simulation.h
+            src/ecs/pools/component_pool_render.h
+            src/ecs/pools/component_pool_storage.h
+            src/ecs/core/component_storage_registry.h
+            src/ecs/core/component_type_id.h
+            src/ecs/core/entity_registry.cpp
+            src/ecs/core/entity_registry.h
+            src/ecs/views/view.h
+            src/ecs/views/view_cache.h
+            src/ecs/views/view_execution.h
+            src/ecs/views/view_matcher.h
+            src/ecs/jobs/ecs_access_analyzer.h
+            src/ecs/jobs/ecs_sim_detail.h
+            src/ecs/jobs/ecs_sim_access.h
+            src/ecs/jobs/ecs_sim_arg_traits.h
+            src/ecs/jobs/ecs_sim_execution.h
+            src/ecs/jobs/ecs_sim_invocation.h
+            src/ecs/jobs/ecs_sim_types.h
+            src/ecs/jobs/ecs_job_scheduler.cpp
+            src/ecs/jobs/ecs_job_scheduler.h
+            src/ecs/jobs/ecs_job_factory.h
+            src/ecs/rendering/ecs_render_bridge.cpp
+            src/ecs/rendering/ecs_render_bridge.h
             src/async/threadpool.cpp
             src/async/threadpool.h
             src/async/promise.h

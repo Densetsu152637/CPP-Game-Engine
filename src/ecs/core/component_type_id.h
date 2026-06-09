@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <typeinfo>
 
-#include "component_alias_traits.h"
+#include "../aliases/component_alias_traits.h"
 
 namespace ecs
 {

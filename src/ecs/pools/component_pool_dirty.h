@@ -8,7 +8,7 @@
 #include <cstddef>
 #include <unordered_set>
 
-#include "../structs/arraylist.h"
+#include "../../structs/arraylist.h"
 
 enum class ComponentDirtyMode
 {

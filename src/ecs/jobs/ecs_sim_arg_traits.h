@@ -7,7 +7,7 @@
 #include <functional>
 #include <type_traits>
 
-#include "ecs.h"
+#include "../ecs.h"
 #include "ecs_sim_types.h"
 
 namespace ecs_sim

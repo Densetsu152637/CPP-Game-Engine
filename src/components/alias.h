@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "../ecs/component_alias.h"
+#include "../ecs/aliases/component_alias.h"
 #include "../structs/vector.h"
 
 // structs

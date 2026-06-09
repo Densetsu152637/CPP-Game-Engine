@@ -8,9 +8,9 @@
 #include <memory>
 #include <string>
 
-#include "component_type_id.h"
-#include "../structs/templates.h"
-#include "../structs/arraylist.h"
+#include "../core/component_type_id.h"
+#include "../../structs/templates.h"
+#include "../../structs/arraylist.h"
 
 class ECS;
 class Threadpool;

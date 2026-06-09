@@ -8,8 +8,8 @@
 #include <cstddef>
 #include <utility>
 
-#include "../structs/sparse_set.h"
-#include "component_alias.h"
+#include "../../structs/sparse_set.h"
+#include "../aliases/component_alias.h"
 
 constexpr int READ_INDEX = 0;
 constexpr int WRITE_INDEX = 1;

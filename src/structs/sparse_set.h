@@ -107,13 +107,11 @@ public:
         }
 
         const size_t denseIndex = m_dense.length();
-        m_dense.appendGhost();
-        m_denseKeys.appendGhost();
+        T& component = m_dense.emplace(denseIndex, std::forward<Args>(args)...);
+        m_denseKeys.emplace(denseIndex, key);
 
         m_sparse.set(key, denseIndex);
-        m_dense[denseIndex] = T(std::forward<Args>(args)...);
-        m_denseKeys[denseIndex] = key;
-        return m_dense[denseIndex];
+        return component;
     }
 
     T& insert_or_assign(const size_t key, T value)

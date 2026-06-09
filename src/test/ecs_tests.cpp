@@ -4,7 +4,7 @@
 #include <stdexcept>
 #include <string>
 
-#include "ecs/component_alias.h"
+#include "ecs/aliases/component_alias.h"
 #include "ecs/processor.h"
 
 namespace
