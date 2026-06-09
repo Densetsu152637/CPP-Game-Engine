@@ -27,6 +27,13 @@ bool EntityRegistry::isValidHandle(const Entity& entity) const
         m_records[entity.index].version == entity.version;
 }
 
+bool EntityRegistry::isKnownHandle(const Entity& entity) const
+{
+    return entity.valid() &&
+        entity.index < m_records.length() &&
+        m_records[entity.index].version == entity.version;
+}
+
 Entity EntityRegistry::create()
 {
     size_t index = 0;
@@ -46,6 +53,31 @@ Entity EntityRegistry::create()
     ++m_generation;
 
     return Entity{ index, version };
+}
+
+Entity EntityRegistry::reserve()
+{
+    const size_t index = m_records.length();
+    m_records.append(EntityRecord {});
+    const EntityRecord& record = m_records[index];
+    return Entity{ index, record.version };
+}
+
+bool EntityRegistry::activateReserved(const Entity& entity)
+{
+    if (!entity.valid())
+        return false;
+
+    while (entity.index >= m_records.length())
+        m_records.append(EntityRecord {});
+
+    auto& [version, alive] = m_records[entity.index];
+    if (alive || version != entity.version)
+        return false;
+
+    alive = true;
+    ++m_generation;
+    return true;
 }
 
 bool EntityRegistry::destroy(const Entity& entity)
@@ -82,6 +114,11 @@ size_t EntityRegistry::aliveCount() const
             ++alive;
     }
     return alive;
+}
+
+size_t EntityRegistry::nextIndex() const
+{
+    return m_records.length();
 }
 
 const ArrayList<EntityRecord>& EntityRegistry::records() const

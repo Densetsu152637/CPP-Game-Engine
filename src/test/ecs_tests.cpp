@@ -362,6 +362,79 @@ namespace
         );
     }
 
+    void test_structural_changes_are_deferred_until_wall_finishes()
+    {
+        Threadpool pool(1, std::string("ecs-test"));
+        ECSProcessor processor(pool);
+        ECS& ecs = processor.ecs();
+        processor.createWall("AFTER_CREATE", 2);
+
+        Entity created;
+        int sameWallHealthCount = 0;
+        int nextWallHealthCount = 0;
+
+        processor.queue_into_sim<>("create-entity", [&]()
+        {
+            created = ecs.createEntity();
+            Health& staged = ecs.emplaceComponent<Health>(created, 1);
+            staged = 7;
+            require(!ecs.hasEntity(created), "deferred entity became visible inside the creating wall");
+            require(!ecs.hasComponent<Health>(created), "deferred component became visible inside the creating wall");
+        });
+
+        processor.queue_into_sim<Health>("same-wall-reader", [&](const Health& health)
+        {
+            (void)health;
+            ++sameWallHealthCount;
+        });
+
+        processor.queue_into_sim<Health>("next-wall-reader", "AFTER_CREATE", [&](const Health& health)
+        {
+            (void)health;
+            ++nextWallHealthCount;
+        });
+
+        processor.simulate();
+
+        require(sameWallHealthCount == 0, "deferred component was observed by another job in the same wall");
+        require(nextWallHealthCount == 1, "deferred component was not visible to the next wall");
+        require(ecs.hasEntity(created), "deferred entity was not created after wall flush");
+        require(ecs.hasComponent<Health>(created), "deferred component was not created after wall flush");
+        require(static_cast<int>(*ecs.try_get<Health>(created)) == 7, "deferred component did not flush staged value");
+    }
+
+    void test_deferred_destroy_and_component_removal_are_invisible_until_wall_finishes()
+    {
+        Threadpool pool(1, std::string("ecs-test"));
+        ECSProcessor processor(pool);
+        ECS& ecs = processor.ecs();
+
+        const Entity entity = ecs.createEntity();
+        ecs.emplaceComponent<Velocity>(entity, 3);
+        ecs.emplaceComponent<Health>(entity, 9);
+
+        int sameWallVelocityCount = 0;
+        processor.queue_into_sim<>("destroy-and-remove", [&]()
+        {
+            ecs.removeComponent<Health>(entity);
+            ecs.destroyEntity(entity);
+            require(ecs.hasEntity(entity), "deferred destroy became visible inside the destroying wall");
+            require(ecs.hasComponent<Health>(entity), "deferred component removal became visible inside the destroying wall");
+        });
+
+        processor.queue_into_sim<Velocity>("same-wall-velocity-reader", [&](const Velocity& velocity)
+        {
+            (void)velocity;
+            ++sameWallVelocityCount;
+        });
+
+        processor.simulate();
+
+        require(sameWallVelocityCount == 1, "deferred destroy hid the entity from another job in the same wall");
+        require(!ecs.hasEntity(entity), "deferred destroy did not flush after wall");
+        require(!ecs.hasComponent<Velocity>(entity), "deferred destroy did not remove component storage after wall");
+    }
+
     void test_scheduler_logging()
     {
         Threadpool pool(1, std::string("ecs-test"));
@@ -403,6 +476,8 @@ int main()
         test_dirty_threshold_promotes_to_full_transfer();
         test_dirty_wrapper_forces_full_transfer();
         test_global_dirty_wrapper_matches_namespaced_dirty_wrapper();
+        test_structural_changes_are_deferred_until_wall_finishes();
+        test_deferred_destroy_and_component_removal_are_invisible_until_wall_finishes();
         test_scheduler_logging();
     }
     catch (const std::exception& exception)

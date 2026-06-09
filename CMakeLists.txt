@@ -72,6 +72,7 @@ add_executable(CPPGameEngine
         src/ecs/pools/component_pool_storage.h
         src/ecs/core/component_storage_registry.h
         src/ecs/core/component_type_id.h
+        src/ecs/core/structural_command_buffer.h
         src/ecs/core/entity_registry.cpp
         src/ecs/core/entity_registry.h
         src/ecs/views/view.h
@@ -175,6 +176,7 @@ if(CPP_GAME_ENGINE_BUILD_TESTS)
             src/ecs/pools/component_pool_storage.h
             src/ecs/core/component_storage_registry.h
             src/ecs/core/component_type_id.h
+            src/ecs/core/structural_command_buffer.h
             src/ecs/core/entity_registry.cpp
             src/ecs/core/entity_registry.h
             src/ecs/views/view.h

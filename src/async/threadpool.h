@@ -161,7 +161,7 @@ public:
             const size_t begin = batch * batch_size;
             const size_t end = std::min(n, begin + batch_size);
 
-            auto task = threadpool_detail::make_task([promise, results, remaining_batches, failed, fn, data, begin, end]()
+            auto task = threadpool_detail::make_task([promise, results, remaining_batches, failed, fn, data, begin, end]() mutable
             {
                 if (failed->load(std::memory_order_acquire))
                     return;

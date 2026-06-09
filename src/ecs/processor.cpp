@@ -41,12 +41,25 @@ void ECSProcessor::simulate()
                 std::to_string(sim_jobs.length()) + " jobs"
         );
 
-        ecs_sim::execute_jobs_concurrently(
-            m_pool,
-            m_ecs,
-            sim_jobs,
-            ecs_sim::BufferSwap::Simulation
-        );
+        m_ecs.beginStructuralDeferral();
+        try
+        {
+            ecs_sim::execute_jobs_concurrently(
+                m_pool,
+                m_ecs,
+                sim_jobs,
+                ecs_sim::BufferSwap::Simulation
+            );
+            m_ecs.endStructuralDeferral();
+        }
+        catch (...)
+        {
+            m_ecs.endStructuralDeferral();
+            m_ecs.discardDeferredStructuralChanges();
+            throw;
+        }
+
+        m_ecs.flushDeferredStructuralChanges();
     }
 
     m_renderBridge.transferDirtyPools(m_ecs, m_pool, m_scheduler);
@@ -60,10 +73,23 @@ void ECSProcessor::render()
         "running rendering batch with " + std::to_string(render_jobs.length()) + " jobs"
     );
 
-    ecs_sim::execute_jobs_concurrently(
-        m_pool,
-        m_ecs,
-        render_jobs,
-        ecs_sim::BufferSwap::Rendering
-    );
+    m_ecs.beginStructuralDeferral();
+    try
+    {
+        ecs_sim::execute_jobs_concurrently(
+            m_pool,
+            m_ecs,
+            render_jobs,
+            ecs_sim::BufferSwap::Rendering
+        );
+        m_ecs.endStructuralDeferral();
+    }
+    catch (...)
+    {
+        m_ecs.endStructuralDeferral();
+        m_ecs.discardDeferredStructuralChanges();
+        throw;
+    }
+
+    m_ecs.flushDeferredStructuralChanges();
 }

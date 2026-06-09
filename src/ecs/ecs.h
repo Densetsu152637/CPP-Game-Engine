@@ -5,6 +5,8 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <utility>
 
@@ -12,6 +14,7 @@
 #include "core/component_storage_registry.h"
 #include "core/entity.h"
 #include "core/entity_registry.h"
+#include "core/structural_command_buffer.h"
 #include "../structs/arraylist.h"
 
 template <typename... Components>
@@ -27,10 +30,15 @@ class ECS
 
     EntityRegistry m_entities;
     ComponentStorageRegistry m_components;
+    StructuralCommandBuffer m_deferredStructuralCommands;
+    mutable std::mutex m_structuralMutex;
+    size_t m_structuralDeferralDepth = 0;
+    size_t m_nextDeferredEntityIndex = 0;
 
     static Entity make_handle(const EntityRecord& record, const size_t& index);
     Entity make_handle(const size_t& index);
     bool is_alive_index(size_t index) const;
+    bool is_known_handle(const Entity& entity) const;
     bool is_valid_handle(const Entity& entity) const;
 
     template <typename T>
@@ -83,6 +91,12 @@ class ECS
 
     size_t alive_entity_count() const;
     const ArrayList<EntityRecord>& entity_records() const;
+    bool structural_changes_deferred() const;
+    Entity createEntityImmediate();
+    Entity reserveEntityForDeferredCreate();
+    bool activateDeferredEntity(const Entity& entity);
+    void destroyEntityImmediate(const Entity& entity);
+    void clearImmediate();
 
 public:
 
@@ -100,6 +114,10 @@ public:
     void swapRenderBuffers();
     void markComponentDirty(ecs::ComponentTypeId componentTypeId);
     void markComponentEntityDirty(ecs::ComponentTypeId componentTypeId, size_t entityIndex);
+    void beginStructuralDeferral();
+    void endStructuralDeferral();
+    void flushDeferredStructuralChanges();
+    void discardDeferredStructuralChanges();
 
     size_t entity_generation() const
     { return m_entities.generation(); }
@@ -159,10 +177,19 @@ public:
     ecs::component_value_t<T>& emplaceComponent(const Entity& entity, Args&&... args);
 
     template <typename T, typename U>
+    ecs::component_value_t<T>& emplaceComponentImmediate(const Entity& entity, U&& component);
+
+    template <typename T, typename U>
     ecs::component_value_t<T>& setComponent(const Entity& entity, U&& newComponent);
+
+    template <typename T, typename U>
+    ecs::component_value_t<T>& setComponentImmediate(const Entity& entity, U&& newComponent);
 
     template <typename T>
     bool removeComponent(const Entity& entity);
+
+    template <typename T>
+    bool removeComponentImmediate(const Entity& entity);
 
     template <typename T>
     ArrayList<ecs::component_value_t<T>>& denseComponents();
@@ -258,14 +285,58 @@ ecs::component_value_t<T>* ECS::try_get_mut(const Entity& entity)
 template <typename T, typename... Args>
 ecs::component_value_t<T>& ECS::emplaceComponent(const Entity& entity, Args&&... args)
 {
+    using Component = ecs::component_value_t<T>;
+    auto staged = std::make_shared<Component>(std::forward<Args>(args)...);
+
+    if (structural_changes_deferred())
+    {
+        if (!is_known_handle(entity))
+            throw std::out_of_range("Entity is not valid");
+
+        m_deferredStructuralCommands.enqueue([this, entity, staged]()
+        {
+            if (is_valid_handle(entity))
+                emplaceComponentImmediate<T>(entity, std::move(*staged));
+        });
+        return *staged;
+    }
+
+    return emplaceComponentImmediate<T>(entity, std::move(*staged));
+}
+
+template <typename T, typename U>
+ecs::component_value_t<T>& ECS::emplaceComponentImmediate(const Entity& entity, U&& component)
+{
     if (!is_valid_handle(entity))
         throw std::out_of_range("Entity is not valid");
 
-    return storage<T>().emplace(entity.index, std::forward<Args>(args)...);
+    return storage<T>().emplace(entity.index, std::forward<U>(component));
 }
 
 template <typename T, typename U>
 ecs::component_value_t<T>& ECS::setComponent(const Entity& entity, U&& newComponent)
+{
+    using Component = ecs::component_value_t<T>;
+    auto staged = std::make_shared<Component>(std::forward<U>(newComponent));
+
+    if (structural_changes_deferred())
+    {
+        if (!is_known_handle(entity))
+            throw std::out_of_range("Entity is not valid");
+
+        m_deferredStructuralCommands.enqueue([this, entity, staged]()
+        {
+            if (is_valid_handle(entity))
+                setComponentImmediate<T>(entity, std::move(*staged));
+        });
+        return *staged;
+    }
+
+    return setComponentImmediate<T>(entity, std::move(*staged));
+}
+
+template <typename T, typename U>
+ecs::component_value_t<T>& ECS::setComponentImmediate(const Entity& entity, U&& newComponent)
 {
     if (!is_valid_handle(entity))
         throw std::out_of_range("Entity is not valid");
@@ -275,6 +346,24 @@ ecs::component_value_t<T>& ECS::setComponent(const Entity& entity, U&& newCompon
 
 template <typename T>
 bool ECS::removeComponent(const Entity& entity)
+{
+    if (structural_changes_deferred())
+    {
+        if (!is_known_handle(entity))
+            return false;
+
+        m_deferredStructuralCommands.enqueue([this, entity]()
+        {
+            removeComponentImmediate<T>(entity);
+        });
+        return true;
+    }
+
+    return removeComponentImmediate<T>(entity);
+}
+
+template <typename T>
+bool ECS::removeComponentImmediate(const Entity& entity)
 {
     if (!is_valid_handle(entity))
         return false;
