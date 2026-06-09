@@ -83,6 +83,7 @@ namespace ecs
         virtual void ensureEntity(size_t entityIndex) = 0;
         virtual void* ensureComponentPointer(size_t entityIndex, ComponentTypeId componentTypeId) = 0;
         virtual bool removeComponent(size_t entityIndex, ComponentTypeId componentTypeId) = 0;
+        virtual void clearComponentStorage(ComponentTypeId componentTypeId) = 0;
         virtual void eraseEntity(size_t entityIndex) = 0;
         virtual void clear() = 0;
         virtual void* componentPointer(size_t entityIndex, ComponentTypeId componentTypeId) = 0;
@@ -380,6 +381,17 @@ namespace ecs
             return true;
         }
 
+        void clearComponentStorage(const ComponentTypeId componentTypeId) override
+        {
+            const size_t index = componentIndex(componentTypeId);
+            if (N_POS == index || 0 == m_presentCounts[index])
+                return;
+
+            ArrayList<size_t> entities = m_presentEntities[index];
+            for (const size_t entityIndex : entities)
+                removeComponent(entityIndex, componentTypeId);
+        }
+
         void eraseEntity(const size_t entityIndex) override
         {
             Row* row = m_storage.try_get(entityIndex);
@@ -624,6 +636,12 @@ namespace ecs
 
         size_t poolCount() const
         { return m_pools.size(); }
+
+        IArchetypePool* poolAt(const size_t poolIndex)
+        { return m_pools[poolIndex].get(); }
+
+        const IArchetypePool* poolAt(const size_t poolIndex) const
+        { return m_pools[poolIndex].get(); }
 
         template <typename Component>
         bool containsComponent() const

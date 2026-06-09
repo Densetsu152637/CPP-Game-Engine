@@ -289,7 +289,7 @@ namespace
         int sum = 0;
         processor.queue_into_sim<ecs::ViewOf<Velocity>>(
             "archetype-view-of",
-            [&](const ecs::ViewOf<Velocity>& velocities)
+            [&](const View<Velocity>& velocities)
         {
             for (const Velocity& velocity : velocities)
                 sum += static_cast<int>(velocity);
@@ -307,7 +307,7 @@ namespace
 
         processor.queue_into_sim<ecs::ViewOf<Velocity>>(
             "read-velocity-view",
-            [](const ecs::ViewOf<Velocity>& velocities)
+            [](const View<Velocity>& velocities)
         {
             (void)velocities;
         });
@@ -341,7 +341,7 @@ namespace
 
         processor.queue_into_sim<Health, ecs::ViewOf<Velocity>>(
             "component-job-with-view-of",
-            [](Health& health, const ecs::ViewOf<Velocity>& velocities)
+            [](Health& health, const View<Velocity>& velocities)
         {
             int sum = 0;
             for (const Velocity& velocity : velocities)
@@ -400,6 +400,107 @@ namespace
         sum = 0;
         processor.render();
         require(sum.load() == 10, "archetype render transfer did not remove deleted component");
+    }
+
+    void test_sim_archetype_does_not_create_render_archetype()
+    {
+        Threadpool pool(1, std::string("ecs-test"));
+        ECSProcessor processor(pool);
+        ECS& ecs = processor.ecs();
+
+        processor.registerArchetype<Velocity, Health>();
+
+        const Entity entity = ecs.createEntity();
+        ecs.emplaceComponent<Velocity>(entity, 3);
+        ecs.emplaceComponent<Health>(entity, 7);
+
+        std::atomic<int> sum = 0;
+        processor.queue_into_rendering<Velocity>("sum-render-sparse", [&](const Velocity& velocity)
+        {
+            sum.fetch_add(static_cast<int>(velocity), std::memory_order_relaxed);
+        });
+
+        require(
+            !ecs.isRenderArchetypedComponent<Velocity>(),
+            "simulation archetype implicitly registered Velocity as a render archetype"
+        );
+
+        processor.simulate();
+        sum = 0;
+        processor.render();
+        sum = 0;
+        processor.render();
+        require(sum.load() == 3, "sparse render pool did not receive sim archetype component transfer");
+    }
+
+    void test_explicit_render_archetype_transfers_and_renders()
+    {
+        Threadpool pool(1, std::string("ecs-test"));
+        ECSProcessor processor(pool);
+        ECS& ecs = processor.ecs();
+
+        processor.registerArchetype<Velocity, Health>();
+        processor.registerRenderArchetype<Velocity, Health>();
+
+        const Entity entity = ecs.createEntity();
+        ecs.emplaceComponent<Velocity>(entity, 3);
+        ecs.emplaceComponent<Health>(entity, 7);
+
+        require(ecs.isRenderArchetypedComponent<Velocity>(), "Velocity render archetype was not explicit");
+        require(ecs.isRenderArchetypedComponent<Health>(), "Health render archetype was not explicit");
+        require(
+            nullptr != ecs.renderArchetypePoolIfExists<Velocity, Health>(),
+            "explicit render archetype pool was not registered"
+        );
+
+        std::atomic<int> sum = 0;
+        processor.queue_into_rendering<Velocity, Health>(
+            "sum-render-archetype",
+            [&](const Velocity& velocity, const Health& health)
+        {
+            sum.fetch_add(static_cast<int>(velocity) + static_cast<int>(health), std::memory_order_relaxed);
+        });
+
+        processor.simulate();
+        sum = 0;
+        processor.render();
+        require(sum.load() == 10, "explicit render archetype did not render transferred components");
+
+        *ecs.try_get_mut<Velocity>(entity) = 5;
+        processor.simulate();
+        sum = 0;
+        processor.render();
+        require(sum.load() == 12, "explicit render archetype did not receive dirty component updates");
+    }
+
+    void test_render_archetype_registration_migrates_existing_render_sparse_pool()
+    {
+        Threadpool pool(1, std::string("ecs-test"));
+        ECSProcessor processor(pool);
+        ECS& ecs = processor.ecs();
+
+        const Entity entity = ecs.createEntity();
+        ecs.emplaceComponent<Velocity>(entity, 4);
+
+        std::atomic<int> sum = 0;
+        processor.queue_into_rendering<Velocity>("sum-migrated-render", [&](const Velocity& velocity)
+        {
+            sum.fetch_add(static_cast<int>(velocity), std::memory_order_relaxed);
+        });
+
+        processor.simulate();
+        sum = 0;
+        processor.render();
+        sum = 0;
+        processor.render();
+        require(sum.load() == 4, "initial sparse render transfer failed before render archetype migration");
+
+        processor.registerRenderArchetype<Velocity, Health>();
+        require(ecs.isRenderArchetypedComponent<Velocity>(), "render archetype registration did not track Velocity");
+
+        sum = 0;
+        processor.render();
+        require(sum.load() == 4, "render archetype registration did not migrate existing render sparse data");
     }
 
     void test_component_type_ids_are_stable_and_distinct()
@@ -920,6 +1021,9 @@ int main()
         test_view_of_read_conflicts_with_nonbuffered_writer();
         test_view_of_can_be_used_in_component_job();
         test_archetype_render_transfer_uses_tuple_pool_dirty_state();
+        test_sim_archetype_does_not_create_render_archetype();
+        test_explicit_render_archetype_transfers_and_renders();
+        test_render_archetype_registration_migrates_existing_render_sparse_pool();
         test_component_type_ids_are_stable_and_distinct();
         test_buffered_write_write_conflict();
         test_buffered_read_write_is_allowed();

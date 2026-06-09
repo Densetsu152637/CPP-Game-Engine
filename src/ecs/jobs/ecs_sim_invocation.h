@@ -17,14 +17,25 @@
 namespace ecs_sim
 {
     template <typename Arg>
+    struct ViewOfArgumentFactory;
+
+    template <typename... Components>
+    struct ViewOfArgumentFactory<ecs::ViewOf<Components...>>
+    {
+        static auto make(ECS& ecs)
+        {
+            return ecs.template view<ecs::component_value_t<Components>...>();
+        }
+    };
+
+    template <typename Arg>
     decltype(auto) make_global_argument(ECS& ecs)
     {
         using Decayed = std::remove_cvref_t<Arg>;
 
         if constexpr (is_view_of_v<Decayed>)
         {
-            using Component = std::remove_cvref_t<typename Decayed::component_type>;
-            return ecs::ViewOf<Component>(ecs);
+            return ViewOfArgumentFactory<Decayed>::make(ecs);
         }
         else
         {
@@ -99,7 +110,7 @@ namespace ecs_sim
 
         if constexpr (
             !is_entity_arg_v<Arg> &&
-            !is_view_of_param_v<Param> &&
+            !is_view_param_v<Param> &&
             is_plain_component_arg_v<Arg> &&
             !std::is_const_v<std::remove_reference_t<Param>> &&
             !is_guaranteed_dirty_component_v<Arg, DirtyComponents>

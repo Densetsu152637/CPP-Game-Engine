@@ -38,6 +38,7 @@ private:
     PoolMap m_componentPools;
     PoolMap m_renderComponentPools;
     ecs::ArchetypeStorageRegistry m_archetypes;
+    ecs::ArchetypeStorageRegistry m_renderArchetypes;
     size_t m_componentStorageGeneration = 0;
     size_t m_renderStorageGeneration = 0;
 
@@ -71,6 +72,36 @@ private:
         return migrated;
     }
 
+    template <typename Component, typename ArchetypePoolT>
+    bool migrateRenderComponentIntoArchetype(ArchetypePoolT& archetypePool)
+    {
+        using ComponentValue = component_value_t<Component>;
+        const ecs::ComponentTypeId key = ecs::component_type_id<component_key_t<ComponentValue>>();
+        const auto it = m_renderComponentPools.find(key);
+        if (it == m_renderComponentPools.end())
+            return false;
+
+        auto* pool = static_cast<render_pool_t<ComponentValue>*>(it->second.get());
+        for (size_t denseIndex = 0; denseIndex < pool->size(); ++denseIndex)
+        {
+            archetypePool.template assignComponent<ComponentValue>(
+                pool->entity_at(denseIndex),
+                pool->dense_at(denseIndex)
+            );
+        }
+
+        m_renderComponentPools.erase(it);
+        return true;
+    }
+
+    template <typename ArchetypePoolT, typename... Components>
+    bool migrateRenderComponentsIntoArchetype(ArchetypePoolT& archetypePool)
+    {
+        bool migrated = false;
+        ((migrated = migrateRenderComponentIntoArchetype<Components>(archetypePool) || migrated), ...);
+        return migrated;
+    }
+
 public:
     size_t componentStorageGeneration() const
     { return m_componentStorageGeneration; }
@@ -96,6 +127,12 @@ public:
     const ecs::ArchetypeStorageRegistry& archetypes() const
     { return m_archetypes; }
 
+    ecs::ArchetypeStorageRegistry& renderArchetypes()
+    { return m_renderArchetypes; }
+
+    const ecs::ArchetypeStorageRegistry& renderArchetypes() const
+    { return m_renderArchetypes; }
+
     template <typename... Components>
     ecs::ArchetypePool<component_value_t<Components>...>& registerArchetype()
     {
@@ -116,6 +153,26 @@ public:
     bool isArchetypedComponent() const
     { return m_archetypes.template containsComponent<component_value_t<Component>>(); }
 
+    template <typename... Components>
+    ecs::ArchetypePool<component_value_t<Components>...>& registerRenderArchetype()
+    {
+        const size_t archetypeGeneration = m_renderArchetypes.generation();
+        auto& pool = m_renderArchetypes.template registerArchetype<component_value_t<Components>...>();
+        const bool migrated = migrateRenderComponentsIntoArchetype<
+            decltype(pool),
+            component_value_t<Components>...
+        >(pool);
+
+        if (archetypeGeneration != m_renderArchetypes.generation() || migrated)
+            ++m_renderStorageGeneration;
+
+        return pool;
+    }
+
+    template <typename Component>
+    bool isRenderArchetypedComponent() const
+    { return m_renderArchetypes.template containsComponent<component_value_t<Component>>(); }
+
     template <typename Component>
     ecs::IArchetypePool* archetypePoolForComponent()
     { return m_archetypes.template poolForComponent<component_value_t<Component>>(); }
@@ -124,16 +181,36 @@ public:
     const ecs::IArchetypePool* archetypePoolForComponent() const
     { return m_archetypes.template poolForComponent<component_value_t<Component>>(); }
 
+    template <typename Component>
+    ecs::IArchetypePool* renderArchetypePoolForComponent()
+    { return m_renderArchetypes.template poolForComponent<component_value_t<Component>>(); }
+
+    template <typename Component>
+    const ecs::IArchetypePool* renderArchetypePoolForComponent() const
+    { return m_renderArchetypes.template poolForComponent<component_value_t<Component>>(); }
+
     ecs::IArchetypePool* archetypePoolForComponent(const ecs::ComponentTypeId componentTypeId)
     { return m_archetypes.poolForComponent(componentTypeId); }
 
     const ecs::IArchetypePool* archetypePoolForComponent(const ecs::ComponentTypeId componentTypeId) const
     { return m_archetypes.poolForComponent(componentTypeId); }
 
+    ecs::IArchetypePool* renderArchetypePoolForComponent(const ecs::ComponentTypeId componentTypeId)
+    { return m_renderArchetypes.poolForComponent(componentTypeId); }
+
+    const ecs::IArchetypePool* renderArchetypePoolForComponent(const ecs::ComponentTypeId componentTypeId) const
+    { return m_renderArchetypes.poolForComponent(componentTypeId); }
+
     template <typename... Components>
     ecs::ArchetypePool<component_value_t<Components>...>* archetypePoolIfExists()
     {
         return m_archetypes.template poolIfExists<component_value_t<Components>...>();
+    }
+
+    template <typename... Components>
+    ecs::ArchetypePool<component_value_t<Components>...>* renderArchetypePoolIfExists()
+    {
+        return m_renderArchetypes.template poolIfExists<component_value_t<Components>...>();
     }
 
     template <typename T>
@@ -215,6 +292,8 @@ public:
 
         for (const auto& pool : m_renderComponentPools | std::views::values)
             pool->erase(entityIndex);
+
+        m_renderArchetypes.eraseEntityFromAll(entityIndex);
     }
 
     void clearPools()
@@ -226,6 +305,8 @@ public:
 
         for (auto& pool : m_renderComponentPools | std::views::values)
             pool->clear();
+
+        m_renderArchetypes.clearPools();
     }
 
     void swapSimulationBuffers()

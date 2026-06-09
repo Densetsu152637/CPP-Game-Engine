@@ -5,11 +5,8 @@
 #pragma once
 
 #include <array>
-#include <cstddef>
 #include <type_traits>
 #include <utility>
-
-class ECS;
 
 template <typename T>
 struct Pair
@@ -41,27 +38,10 @@ struct Pair
 
 namespace ecs
 {
-    template <typename T>
-    class ViewOf
+    template <typename... Components>
+    struct ViewOf
     {
-    public:
-        using component_type = std::remove_cvref_t<T>;
-        using value_type = component_type;
-
-        class iterator;
-
-        ViewOf() = default;
-        explicit ViewOf(const ::ECS& ecs)
-            : m_ecs(&ecs)
-        {}
-
-        iterator begin() const;
-        iterator end() const;
-        size_t size() const;
-        bool empty() const;
-
-    private:
-        const ::ECS* m_ecs = nullptr;
+        static constexpr size_t component_count = sizeof...(Components);
     };
 
     template <typename T>

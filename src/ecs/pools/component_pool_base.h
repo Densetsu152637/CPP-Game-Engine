@@ -44,6 +44,9 @@ public:
     virtual void erase(size_t entityIndex) = 0;
     virtual void clear() = 0;
     virtual size_t size() const = 0;
+    virtual bool containsEntity(size_t entityIndex) const = 0;
+    virtual size_t entityAt(size_t denseIndex) const = 0;
+    virtual bool copyComponentTo(size_t entityIndex, void* destination) const = 0;
     virtual void swapBuffers() = 0;
     virtual void writeFrom(IComponentPool&)
     { throw std::runtime_error("writeFrom is only supported by render component pools"); }
@@ -116,6 +119,9 @@ public:
     bool contains(const size_t entityIndex) const
     { return m_storage.contains(entityIndex); }
 
+    bool containsEntity(const size_t entityIndex) const override
+    { return contains(entityIndex); }
+
     T* try_get(const size_t entityIndex)
     { return m_storage.try_get(entityIndex); }
 
@@ -165,6 +171,9 @@ public:
     }
 
     size_t entity_at(const size_t denseIndex) const
+    { return entityAt(denseIndex); }
+
+    size_t entityAt(const size_t denseIndex) const override
     { return m_storage.entity_at(denseIndex); }
 
     T& dense_at(const size_t denseIndex)
@@ -172,6 +181,19 @@ public:
 
     const T& dense_at(const size_t denseIndex) const
     { return m_storage.dense_at(denseIndex); }
+
+    bool copyComponentTo(const size_t entityIndex, void* destination) const override
+    {
+        if (nullptr == destination)
+            return false;
+
+        const T* component = try_get(entityIndex);
+        if (nullptr == component)
+            return false;
+
+        *static_cast<T*>(destination) = *component;
+        return true;
+    }
 
     ArrayList<T>& dense()
     { return m_storage.dense(); }

@@ -64,7 +64,7 @@ namespace ecs_sim
 
         static_assert(
             valid_callable_params_v<CallableArgs>,
-            "ECSProcessor simulation callable parameters must be Entity, component lvalue references, or const ecs::ViewOf<T>&"
+            "ECSProcessor simulation callable parameters must be Entity, component lvalue references, or const View<T...>& for ecs::ViewOf<T...>"
         );
 
         static_assert(

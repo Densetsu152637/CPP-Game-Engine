@@ -121,6 +121,12 @@ namespace ecs_sim
         (append_guaranteed_dirty_access<Components>(spec), ...);
     }
 
+    template <typename... Components>
+    void append_read_access(AccessSpec& spec, type_list<Components...>)
+    {
+        (append_read<Components>(spec), ...);
+    }
+
     template <typename T>
     void append_access(AccessSpec& spec)
     {
@@ -128,8 +134,7 @@ namespace ecs_sim
 
         if constexpr (is_view_of_v<Arg>)
         {
-            using Component = std::remove_cvref_t<typename Arg::component_type>;
-            append_read<Component>(spec);
+            append_read_access(spec, view_component_list_for_arg_t<Arg>{});
         }
         else if constexpr (is_plain_component_arg_v<T>)
         {
@@ -159,10 +164,9 @@ namespace ecs_sim
         {
             return;
         }
-        else if constexpr (is_view_of_param_v<Param>)
+        else if constexpr (is_view_param_v<Param>)
         {
-            using Component = view_of_param_component_t<Param>;
-            append_read<Component>(spec);
+            append_read_access(spec, view_param_component_list_t<Param>{});
         }
         else
         {

@@ -44,8 +44,14 @@ public:
     size_t size() const override
     { return readSet().size(); }
 
+    size_t entityAt(const size_t denseIndex) const override
+    { return entity_at(denseIndex); }
+
     bool contains(const size_t entityIndex) const
     { return readSet().contains(entityIndex); }
+
+    bool containsEntity(const size_t entityIndex) const override
+    { return contains(entityIndex); }
 
     const T* try_get(const size_t entityIndex) const
     { return readSet().try_get(entityIndex); }
@@ -91,6 +97,19 @@ public:
 
     const T& dense_at(const size_t denseIndex) const
     { return readSet().dense_at(denseIndex); }
+
+    bool copyComponentTo(const size_t entityIndex, void* destination) const override
+    {
+        if (nullptr == destination)
+            return false;
+
+        const T* component = try_get(entityIndex);
+        if (nullptr == component)
+            return false;
+
+        *static_cast<T*>(destination) = *component;
+        return true;
+    }
 
     size_t dense_index_of(const size_t entityIndex) const
     { return readSet().index_of(entityIndex); }

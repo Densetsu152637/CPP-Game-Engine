@@ -14,21 +14,24 @@
 
 namespace ecs_processor_detail
 {
+    template <typename... Components>
+    void guarantee_view_components(ECS& ecs, ecs_sim::type_list<Components...>)
+    {
+        (ecs.template guarantee_component_pool<Components>(), ...);
+    }
+
     template <typename Arg>
     void guarantee_sim_pool(ECS& ecs)
     {
         using Component = ecs_sim::component_for_arg_t<Arg>;
-        using ViewComponent = ecs_sim::view_component_for_arg_t<Arg>;
+        using ViewComponents = ecs_sim::view_component_list_for_arg_t<Arg>;
 
         if constexpr (!std::is_void_v<Component>)
         {
             ecs.template guarantee_component_pool<Component>();
         }
 
-        if constexpr (!std::is_void_v<ViewComponent>)
-        {
-            ecs.template guarantee_component_pool<ViewComponent>();
-        }
+        guarantee_view_components(ecs, ViewComponents{});
     }
 
     template <typename... Args>
@@ -87,6 +90,13 @@ public:
     ECSProcessor& registerArchetype()
     {
         m_ecs.template registerArchetype<Components...>();
+        return *this;
+    }
+
+    template <typename... Components>
+    ECSProcessor& registerRenderArchetype()
+    {
+        m_ecs.template registerRenderArchetype<Components...>();
         return *this;
     }
 
