@@ -3,6 +3,8 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
+#include <utility>
 
 #include "ecs/aliases/component_alias.h"
 #include "ecs/processor.h"
@@ -18,6 +20,23 @@ namespace
     using Velocity = ecs::Alias<int, VelocityTag>;
     using Health = ecs::Alias<int, HealthTag>;
     using Mana = ecs::Alias<int, ManaTag>;
+
+    static_assert(
+        std::is_same_v<
+            decltype(std::declval<ECS&>().registerRenderArchetype<Velocity, Health>()),
+            void
+        >,
+        "render archetype registration should not expose mutable render storage"
+    );
+
+    static_assert(
+        std::is_const_v<
+            std::remove_pointer_t<
+                decltype(std::declval<ECS&>().renderArchetypePoolIfExists<Velocity, Health>())
+            >
+        >,
+        "render archetype lookup should expose read-only storage only"
+    );
 
     class CapturingLogger final : public Logger
     {
@@ -358,6 +377,39 @@ namespace
         );
     }
 
+    void test_view_of_const_multi_component_each()
+    {
+        Threadpool pool(1, std::string("ecs-test"));
+        ECSProcessor processor(pool);
+        ECS& ecs = processor.ecs();
+
+        processor.registerArchetype<Velocity, Health>();
+
+        const Entity first = ecs.createEntity();
+        ecs.emplaceComponent<Velocity>(first, 3);
+        ecs.emplaceComponent<Health>(first, 7);
+
+        const Entity second = ecs.createEntity();
+        ecs.emplaceComponent<Velocity>(second, 5);
+        ecs.emplaceComponent<Health>(second, 11);
+
+        int sum = 0;
+        processor.queue_into_sim<ecs::ViewOf<Velocity, Health>>(
+            "const-multi-view-of",
+            [&](const View<Velocity, Health>& pairs)
+        {
+            pairs.each([&](const Velocity& velocity, const Health& health)
+            {
+                sum += static_cast<int>(velocity);
+                sum += static_cast<int>(health);
+            });
+        });
+
+        processor.simulate();
+
+        require(sum == 26, "const multi-component ecs::ViewOf<T...> did not iterate read-only components");
+    }
+
     void test_archetype_render_transfer_uses_tuple_pool_dirty_state()
     {
         Threadpool pool(1, std::string("ecs-test"));
@@ -464,13 +516,64 @@ namespace
         processor.simulate();
         sum = 0;
         processor.render();
-        require(sum.load() == 10, "explicit render archetype did not render transferred components");
+        require(sum.load() == 0, "explicit render archetype exposed write-buffer data before publish");
+        sum = 0;
+        processor.render();
+        require(sum.load() == 10, "explicit render archetype did not render transferred components after publish");
 
         *ecs.try_get_mut<Velocity>(entity) = 5;
         processor.simulate();
         sum = 0;
         processor.render();
-        require(sum.load() == 12, "explicit render archetype did not receive dirty component updates");
+        require(sum.load() == 10, "explicit render archetype did not preserve the previous read snapshot");
+        sum = 0;
+        processor.render();
+        require(sum.load() == 12, "explicit render archetype did not receive dirty component updates after publish");
+
+        ecs.removeComponent<Velocity>(entity);
+        processor.simulate();
+        sum = 0;
+        processor.render();
+        require(sum.load() == 12, "explicit render archetype removal did not preserve the previous read snapshot");
+        sum = 0;
+        processor.render();
+        require(sum.load() == 0, "explicit render archetype did not publish dirty component removal");
+    }
+
+    void test_direct_mutable_view_marks_components_dirty()
+    {
+        Threadpool pool(1, std::string("ecs-test"));
+        ECSProcessor processor(pool);
+        ECS& ecs = processor.ecs();
+
+        const Entity entity = ecs.createEntity();
+        ecs.emplaceComponent<Velocity>(entity, 3);
+
+        std::atomic<int> sum = 0;
+        processor.queue_into_rendering<Velocity>("sum-direct-view-write", [&](const Velocity& velocity)
+        {
+            sum.fetch_add(static_cast<int>(velocity), std::memory_order_relaxed);
+        });
+
+        processor.simulate();
+        sum = 0;
+        processor.render();
+        sum = 0;
+        processor.render();
+        require(sum.load() == 3, "initial direct view dirty test render transfer failed");
+
+        auto view = ecs.view<Velocity>();
+        view.each([](Velocity& velocity)
+        {
+            velocity = 9;
+        });
+
+        processor.simulate();
+        sum = 0;
+        processor.render();
+        sum = 0;
+        processor.render();
+        require(sum.load() == 9, "direct mutable View::each did not mark the component dirty");
     }
 
     void test_render_archetype_registration_migrates_existing_render_sparse_pool()
@@ -501,6 +604,33 @@ namespace
         sum = 0;
         processor.render();
         require(sum.load() == 4, "render archetype registration did not migrate existing render sparse data");
+    }
+
+    void test_render_archetype_registration_preserves_pending_sparse_publish()
+    {
+        Threadpool pool(1, std::string("ecs-test"));
+        ECSProcessor processor(pool);
+        ECS& ecs = processor.ecs();
+
+        const Entity entity = ecs.createEntity();
+        ecs.emplaceComponent<Velocity>(entity, 4);
+
+        std::atomic<int> sum = 0;
+        processor.queue_into_rendering<Velocity>("sum-pending-migrated-render", [&](const Velocity& velocity)
+        {
+            sum.fetch_add(static_cast<int>(velocity), std::memory_order_relaxed);
+        });
+
+        processor.simulate();
+        processor.registerRenderArchetype<Velocity, Health>();
+
+        sum = 0;
+        processor.render();
+        require(sum.load() == 0, "pending sparse-to-archetype migration exposed unpublished write data");
+
+        sum = 0;
+        processor.render();
+        require(sum.load() == 4, "pending sparse-to-archetype migration lost the pending publish");
     }
 
     void test_component_type_ids_are_stable_and_distinct()
@@ -1020,10 +1150,13 @@ int main()
         test_archetype_view_of_iterates_requested_components();
         test_view_of_read_conflicts_with_nonbuffered_writer();
         test_view_of_can_be_used_in_component_job();
+        test_view_of_const_multi_component_each();
         test_archetype_render_transfer_uses_tuple_pool_dirty_state();
         test_sim_archetype_does_not_create_render_archetype();
         test_explicit_render_archetype_transfers_and_renders();
+        test_direct_mutable_view_marks_components_dirty();
         test_render_archetype_registration_migrates_existing_render_sparse_pool();
+        test_render_archetype_registration_preserves_pending_sparse_publish();
         test_component_type_ids_are_stable_and_distinct();
         test_buffered_write_write_conflict();
         test_buffered_read_write_is_allowed();

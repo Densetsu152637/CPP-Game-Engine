@@ -89,6 +89,12 @@ class ECS
         return m_components.renderStorage<T>();
     }
 
+    template <typename T>
+    ecs::IArchetypePool* mutable_render_archetype_pool_for_component()
+    {
+        return m_components.template renderArchetypePoolForComponent<T>();
+    }
+
     size_t alive_entity_count() const;
     const ArrayList<EntityRecord>& entity_records() const;
     bool structural_changes_deferred() const;
@@ -149,9 +155,9 @@ public:
     }
 
     template <typename... Components>
-    ecs::ArchetypePool<component_value_t<Components>...>& registerRenderArchetype()
+    void registerRenderArchetype()
     {
-        return m_components.template registerRenderArchetype<Components...>();
+        (void)m_components.template registerRenderArchetype<Components...>();
     }
 
     template <typename T>
@@ -173,7 +179,7 @@ public:
     }
 
     template <typename... Components>
-    ecs::ArchetypePool<component_value_t<Components>...>* renderArchetypePoolIfExists()
+    const ecs::ArchetypePool<component_value_t<Components>...>* renderArchetypePoolIfExists()
     {
         return m_components.template renderArchetypePoolIfExists<Components...>();
     }
@@ -191,7 +197,7 @@ public:
     }
 
     template <typename T>
-    ecs::IArchetypePool* renderArchetypePoolForComponent()
+    const ecs::IArchetypePool* renderArchetypePoolForComponent()
     {
         return m_components.template renderArchetypePoolForComponent<T>();
     }

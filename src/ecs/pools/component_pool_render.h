@@ -56,16 +56,22 @@ public:
     const T* try_get(const size_t entityIndex) const
     { return readSet().try_get(entityIndex); }
 
+    bool hasPendingPublish() const
+    { return m_shouldSwap.load(std::memory_order_acquire); }
+
     void erase(const size_t entityIndex) override
     {
         const bool changed = m_storage.at(READ_INDEX).contains(entityIndex)
             || m_storage.at(WRITE_INDEX).contains(entityIndex);
 
-        m_storage.at(READ_INDEX).erase(entityIndex);
-        m_storage.at(WRITE_INDEX).erase(entityIndex);
+        writeSet().erase(entityIndex);
 
         if (changed)
-            this->bumpGeneration();
+        {
+            ArrayList<size_t> entity;
+            entity.append(entityIndex);
+            markPendingEntitySync(entity);
+        }
     }
 
     void clear() override
@@ -232,7 +238,15 @@ private:
 
     void markPendingEntitySync(const ArrayList<size_t>& dirtyEntities)
     {
-        m_pendingSyncEntities = dirtyEntities;
+        if (RenderPoolSyncMode::Full == m_pendingSyncMode)
+            return;
+
+        for (const size_t entityIndex : dirtyEntities)
+        {
+            if (!m_pendingSyncEntities.contains(entityIndex))
+                m_pendingSyncEntities.append(entityIndex);
+        }
+
         m_pendingSyncMode = RenderPoolSyncMode::Entities;
         m_shouldSwap.store(true, std::memory_order_release);
     }

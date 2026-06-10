@@ -16,6 +16,8 @@
 
 namespace ecs_sim
 {
+    struct NoGlobalArgument {};
+
     template <typename Arg>
     struct ViewOfArgumentFactory;
 
@@ -41,6 +43,37 @@ namespace ecs_sim
         {
             static_assert(sizeof(Arg) == 0, "Global ECSProcessor jobs only support ecs::ViewOf<T> arguments");
         }
+    }
+
+    template <typename Arg>
+    using global_argument_storage_t = std::conditional_t<
+        is_view_of_v<std::remove_cvref_t<Arg>>,
+        call_arg_t<Arg>,
+        NoGlobalArgument
+    >;
+
+    template <typename Arg>
+    global_argument_storage_t<Arg> make_global_argument_storage(ECS& ecs)
+    {
+        if constexpr (is_view_of_v<std::remove_cvref_t<Arg>>)
+            return make_global_argument<Arg>(ecs);
+        else
+            return {};
+    }
+
+    template <typename... Args, size_t... Is>
+    auto make_global_arguments_impl(ECS& ecs, std::index_sequence<Is...>)
+    {
+        using ArgTuple = std::tuple<Args...>;
+        return std::tuple<global_argument_storage_t<std::tuple_element_t<Is, ArgTuple>>...>(
+            make_global_argument_storage<std::tuple_element_t<Is, ArgTuple>>(ecs)...
+        );
+    }
+
+    template <typename... Args>
+    auto make_global_arguments(ECS& ecs)
+    {
+        return make_global_arguments_impl<Args...>(ecs, std::make_index_sequence<sizeof...(Args)>{});
     }
 
     template <typename Component, typename DirtyComponents>
@@ -142,8 +175,8 @@ namespace ecs_sim
         );
     }
 
-    template <typename Arg>
-    decltype(auto) make_argument(ECS& ecs, const Entity& entity)
+    template <size_t ArgIndex, typename Arg, typename GlobalArguments>
+    decltype(auto) make_argument(ECS& ecs, const Entity& entity, GlobalArguments& globalArguments)
     {
         using Decayed = std::remove_cvref_t<Arg>;
 
@@ -153,7 +186,8 @@ namespace ecs_sim
         }
         else if constexpr (is_view_of_v<Decayed>)
         {
-            return make_global_argument<Arg>(ecs);
+            (void)ecs;
+            return std::get<ArgIndex>(globalArguments);
         }
         else if constexpr (is_component_submit_arg_v<Arg>)
         {
@@ -173,8 +207,19 @@ namespace ecs_sim
         }
     }
 
-    template <typename Arg, typename... Components, typename ComponentTuple>
-    decltype(auto) make_argument_from_components(ECS& ecs, const Entity& entity, ComponentTuple& components)
+    template <
+        size_t ArgIndex,
+        typename Arg,
+        typename... Components,
+        typename ComponentTuple,
+        typename GlobalArguments
+    >
+    decltype(auto) make_argument_from_components(
+        ECS& ecs,
+        const Entity& entity,
+        ComponentTuple& components,
+        GlobalArguments& globalArguments
+    )
     {
         using Decayed = std::remove_cvref_t<Arg>;
 
@@ -184,7 +229,8 @@ namespace ecs_sim
         }
         else if constexpr (is_view_of_v<Decayed>)
         {
-            return make_global_argument<Arg>(ecs);
+            (void)ecs;
+            return std::get<ArgIndex>(globalArguments);
         }
         else
         {
@@ -201,18 +247,19 @@ namespace ecs_sim
         }
     }
 
-    template <typename Callable, typename DirtyComponents, typename... Args, size_t... Is>
+    template <typename Callable, typename DirtyComponents, typename... Args, typename GlobalArguments, size_t... Is>
     void invoke_for_entity_impl(
         Callable& callable,
         ECS& ecs,
         const Entity& entity,
         const auto& dirtyState,
+        GlobalArguments& globalArguments,
         std::index_sequence<Is...>
     )
     {
         using ArgTuple = std::tuple<Args...>;
         std::tuple<call_arg_t<std::tuple_element_t<Is, ArgTuple>>...> args(
-            make_argument<std::tuple_element_t<Is, ArgTuple>>(ecs, entity)...
+            make_argument<Is, std::tuple_element_t<Is, ArgTuple>>(ecs, entity, globalArguments)...
         );
 
         std::apply(
@@ -226,14 +273,21 @@ namespace ecs_sim
         mark_entity_dirty_for_writes<Callable, DirtyComponents>(ecs, entity.index, dirtyState);
     }
 
-    template <typename Callable, typename DirtyComponents, typename... Args>
-    void invoke_for_entity(Callable& callable, ECS& ecs, const Entity& entity, const auto& dirtyState)
+    template <typename Callable, typename DirtyComponents, typename... Args, typename GlobalArguments>
+    void invoke_for_entity(
+        Callable& callable,
+        ECS& ecs,
+        const Entity& entity,
+        const auto& dirtyState,
+        GlobalArguments& globalArguments
+    )
     {
         invoke_for_entity_impl<Callable, DirtyComponents, Args...>(
             callable,
             ecs,
             entity,
             dirtyState,
+            globalArguments,
             std::make_index_sequence<sizeof...(Args)>{}
         );
     }
@@ -265,18 +319,34 @@ namespace ecs_sim
         );
     }
 
-    template <typename Callable, typename DirtyComponents, typename... Args, typename... Components, typename ComponentTuple>
-    void invoke_for_entity_with_components(
+    template <
+        typename Callable,
+        typename DirtyComponents,
+        typename... Args,
+        typename... Components,
+        typename ComponentTuple,
+        typename GlobalArguments,
+        size_t... Is
+    >
+    void invoke_for_entity_with_components_impl(
         ECS& ecs,
         Callable& callable,
         type_list<Args...>,
         type_list<Components...>,
         const Entity& entity,
         ComponentTuple& components,
-        const auto& dirtyState
+        const auto& dirtyState,
+        GlobalArguments& globalArguments,
+        std::index_sequence<Is...>
     ) {
-        std::tuple<call_arg_t<Args>...> args(
-            make_argument_from_components<Args, Components...>(ecs, entity, components)...
+        using ArgTuple = std::tuple<Args...>;
+        std::tuple<call_arg_t<std::tuple_element_t<Is, ArgTuple>>...> args(
+            make_argument_from_components<Is, std::tuple_element_t<Is, ArgTuple>, Components...>(
+                ecs,
+                entity,
+                components,
+                globalArguments
+            )...
         );
 
         std::apply(
@@ -290,6 +360,37 @@ namespace ecs_sim
         mark_entity_dirty_for_writes<Callable, DirtyComponents>(ecs, entity.index, dirtyState);
     }
 
+    template <
+        typename Callable,
+        typename DirtyComponents,
+        typename... Args,
+        typename... Components,
+        typename ComponentTuple,
+        typename GlobalArguments
+    >
+    void invoke_for_entity_with_components(
+        ECS& ecs,
+        Callable& callable,
+        type_list<Args...>,
+        type_list<Components...>,
+        const Entity& entity,
+        ComponentTuple& components,
+        const auto& dirtyState,
+        GlobalArguments& globalArguments
+    ) {
+        invoke_for_entity_with_components_impl<Callable, DirtyComponents>(
+            ecs,
+            callable,
+            type_list<Args...>{},
+            type_list<Components...>{},
+            entity,
+            components,
+            dirtyState,
+            globalArguments,
+            std::make_index_sequence<sizeof...(Args)>{}
+        );
+    }
+
     template <typename Callable, typename DirtyComponents, typename... Args>
     void run_no_component_job(ECS& ecs, Threadpool& pool, Callable& callable)
     {
@@ -300,11 +401,19 @@ namespace ecs_sim
         else if constexpr (has_entity_arg_pack_v<Args...>)
         {
             auto view = ecs.view<>();
+            view.set_dirty_tracking(false);
             const size_t touchedEntityCount = view.size();
             auto dirtyState = begin_guaranteed_dirty_components(ecs, touchedEntityCount, DirtyComponents{});
+            auto globalArguments = make_global_arguments<Args...>(ecs);
             view.each_mt([&](const Entity& entity)
             {
-                invoke_for_entity<Callable, DirtyComponents, Args...>(callable, ecs, entity, dirtyState);
+                invoke_for_entity<Callable, DirtyComponents, Args...>(
+                    callable,
+                    ecs,
+                    entity,
+                    dirtyState,
+                    globalArguments
+                );
             }, pool);
         }
         else
@@ -323,8 +432,10 @@ namespace ecs_sim
     void run_component_job(ECS& ecs, Threadpool& pool, Callable& callable, type_list<Components...>)
     {
         auto view = ecs.view<Components...>();
+        view.set_dirty_tracking(false);
         const size_t touchedEntityCount = view.size();
         auto dirtyState = begin_guaranteed_dirty_components(ecs, touchedEntityCount, DirtyComponents{});
+        auto globalArguments = make_global_arguments<Args...>(ecs);
         view.each_mt([&](const Entity& entity, ecs::component_value_t<Components>&... components)
         {
             auto componentTuple = std::forward_as_tuple(components...);
@@ -335,7 +446,8 @@ namespace ecs_sim
                 type_list<Components...>{},
                 entity,
                 componentTuple,
-                dirtyState
+                dirtyState,
+                globalArguments
             );
         }, pool);
     }

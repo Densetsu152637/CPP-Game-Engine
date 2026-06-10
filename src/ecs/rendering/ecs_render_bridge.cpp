@@ -97,7 +97,7 @@ void ECSRenderBridge::transferDirtyPools(ECS& ecs, Threadpool& pool, ECSJobSched
 
     auto& renderPools = ecs.m_components.renderComponentPools();
     auto& componentPools = ecs.m_components.componentPools();
-    auto& renderArchetypes = ecs.m_components.renderArchetypes();
+    auto& renderArchetypes = ecs.m_components.writableRenderArchetypes();
 
     ArrayList<Promise<bool>> transferPromises{ renderPools.size() };
     ArrayList<IComponentPool*> transferredSources{ renderPools.size() };
@@ -174,9 +174,15 @@ void ECSRenderBridge::transferDirtyPools(ECS& ecs, Threadpool& pool, ECSJobSched
 
                 transferredSources.append(simPoolPtr);
                 if (simPoolPtr->isFullyDirty())
+                {
                     copyFullStandaloneToRenderArchetype(*simPoolPtr, *renderArchetype, type);
+                    ecs.m_components.markRenderArchetypeComponentFullSync(type);
+                }
                 else
+                {
                     copyDirtyStandaloneToRenderArchetype(*simPoolPtr, *renderArchetype, type);
+                    ecs.m_components.markRenderArchetypeComponentEntitySync(type, simPoolPtr->dirtyEntities());
+                }
                 continue;
             }
 
@@ -195,9 +201,18 @@ void ECSRenderBridge::transferDirtyPools(ECS& ecs, Threadpool& pool, ECSJobSched
 
             transferredArchetypeSources.append(ArchetypeTransferSource{ simArchetype, type });
             if (simArchetype->isComponentFullyDirty(type))
+            {
                 copyFullArchetypeToRenderArchetype(*simArchetype, *renderArchetype, type);
+                ecs.m_components.markRenderArchetypeComponentFullSync(type);
+            }
             else
+            {
                 copyDirtyArchetypeToRenderArchetype(*simArchetype, *renderArchetype, type);
+                ecs.m_components.markRenderArchetypeComponentEntitySync(
+                    type,
+                    simArchetype->componentDirtyEntities(type)
+                );
+            }
         }
     }
 
