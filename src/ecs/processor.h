@@ -16,7 +16,8 @@
 class ECSProcessor
 {
     ECS m_ecs;
-    Threadpool& m_pool;
+    Threadpool& m_simulationPool;
+    Threadpool& m_renderPool;
     ECSJobScheduler m_scheduler;
     ECSRenderBridge m_renderBridge;
 
@@ -26,7 +27,12 @@ public:
     static constexpr const char* FINAL_WALL = ECSJobScheduler::FINAL_WALL;
 
     explicit ECSProcessor(Threadpool& pool)
-        : m_pool(pool)
+        : ECSProcessor(pool, pool)
+    {}
+
+    ECSProcessor(Threadpool& simulationPool, Threadpool& renderPool)
+        : m_simulationPool(simulationPool),
+          m_renderPool(renderPool)
     {}
 
     ECS& ecs()

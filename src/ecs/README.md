@@ -109,11 +109,13 @@ from the smallest include set to reduce matching work.
 ## ECSProcessor
 
 Most game systems should use `ECSProcessor` rather than operating on `ECS`
-directly. It owns the ECS instance and a reference to a `Threadpool`.
+directly. It owns the ECS instance and references the thread pools used for
+simulation and render-side work.
 
 ```cpp
-Threadpool pool;
-ECSProcessor sim(pool);
+Threadpool simulationPool;
+Threadpool renderPool;
+ECSProcessor sim(simulationPool, renderPool);
 
 sim.queue_into_sim<Velocity, ecs::Dirty<Position>>(
     "movement",
@@ -125,6 +127,11 @@ sim.queue_into_sim<Velocity, ecs::Dirty<Position>>(
 
 sim.simulate();
 ```
+
+Use `ECSProcessor sim(pool);` when simulation and rendering should share one
+unified pool. Use `ECSProcessor sim(simulationPool, renderPool);` when simulation
+jobs should dispatch to one pool and render transfer/render jobs should dispatch
+to another.
 
 Public processor API:
 
@@ -263,8 +270,8 @@ components, those structural changes are not visible to other jobs in the same
 wall. They become visible after the wall finishes.
 
 After all simulation walls finish, `ECSRenderBridge` transfers dirty simulation
-components into render storage. Render jobs then read from render storage during
-`render()`.
+components into render storage using the processor's render thread pool. Render
+jobs then read from render storage during `render()`.
 
 ## Internal Parallelism
 

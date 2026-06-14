@@ -180,7 +180,14 @@ set_target_properties(CPPGameEngine PROPERTIES
 if(CPP_GAME_ENGINE_BUILD_TESTS)
     add_executable(CPPGameEngineEcsTests
             src/test/ecs_tests.cpp
+            src/test/ecs/archetype_tests.cpp
+            src/test/ecs/ecs_test_fixtures.h
+            src/test/ecs/entity_tag_query_tests.cpp
+            src/test/ecs/job_filter_tests.cpp
+            src/test/ecs/rendering_compat_tests.cpp
+            src/test/ecs/scheduler_dirty_tests.cpp
             src/test/ecs/shared_rendering_tests.cpp
+            src/test/ecs/utility_tests.cpp
             src/test/rendering/shader_tests.cpp
             src/test/rendering/render_system_integration_tests.cpp
             src/test/rendering/rendering_test_fakes.h

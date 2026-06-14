@@ -45,7 +45,7 @@ void ECSProcessor::simulate()
         try
         {
             ecs_sim::execute_jobs_concurrently(
-                m_pool,
+                m_simulationPool,
                 m_ecs,
                 sim_jobs,
                 ecs_sim::BufferSwap::Simulation
@@ -62,7 +62,7 @@ void ECSProcessor::simulate()
         m_ecs.flushDeferredStructuralChanges();
     }
 
-    m_renderBridge.transferDirtyPools(m_ecs, m_pool, m_scheduler);
+    m_renderBridge.transferDirtyPools(m_ecs, m_renderPool, m_scheduler);
 }
 
 void ECSProcessor::render()
@@ -77,7 +77,7 @@ void ECSProcessor::render()
     try
     {
         ecs_sim::execute_jobs_concurrently(
-            m_pool,
+            m_renderPool,
             m_ecs,
             render_jobs,
             ecs_sim::BufferSwap::Rendering
