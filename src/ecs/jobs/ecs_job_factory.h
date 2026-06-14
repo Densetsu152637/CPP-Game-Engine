@@ -16,6 +16,7 @@ namespace ecs_sim
     template <typename... Args>
     inline constexpr bool job_uses_internal_parallelism_v =
         has_entity_arg_pack_v<Args...> ||
+        has_tag_arg_pack_v<Args...> ||
         type_list_size_v<component_list_t<Args...>> > 0;
 
     template <typename Callable>
@@ -35,22 +36,63 @@ namespace ecs_sim
         run_job<Callable, DirtyComponents, Args...>(ecs, pool, context.callable);
     }
 
-    template <typename Callable, typename... Components>
-    void execute_render_job_context(void* rawContext, ECS& ecs, Threadpool& pool)
-    {
-        auto& context = *static_cast<JobContext<Callable>*>(rawContext);
-        auto view = ecs.render_view<Components...>();
-        view.each_mt([&](const ecs::component_value_t<Components>&... components)
-        {
-            std::invoke(context.callable, components...);
-        }, pool);
-    }
+    template <typename Callable, typename TagList, typename ComponentList>
+    struct RenderJobExecutor;
 
-    template <typename DirtyComponents, typename... Args, typename Callable>
-    Job make_job_from_args(type_list<Args...>, Callable&& callable)
+    template <typename Callable, typename... Tags, typename... Components>
+    struct RenderJobExecutor<Callable, type_list<Tags...>, type_list<Components...>>
+    {
+        static void execute(void* rawContext, ECS& ecs, Threadpool& pool)
+        {
+            auto& context = *static_cast<JobContext<Callable>*>(rawContext);
+            auto view = ecs.render_view<Components...>();
+            view.each_mt([&](const Entity& entity, const ecs::component_value_t<Components>&... components)
+            {
+                if (!entity_matches_tags(ecs, entity, type_list<Tags...>{}))
+                    return;
+
+                std::invoke(context.callable, components...);
+            }, pool);
+        }
+    };
+
+    template <typename Callable, typename ComponentList, typename TagList>
+    struct RenderJobFactory;
+
+    template <typename Callable, typename... Components, typename... Tags>
+    struct RenderJobFactory<Callable, type_list<Components...>, type_list<Tags...>>
+    {
+        template <typename SubmittedCallable>
+        static RenderJob make(SubmittedCallable&& callable)
+        {
+            static_assert(
+                std::is_invocable_v<
+                    Callable&,
+                    const ecs::component_value_t<Components>&...
+                >,
+                "ECSProcessor render callable is not invocable with const component references"
+            );
+
+            RenderJob job;
+            job.usesInternalParallelism = true;
+            job.context = std::make_shared<JobContext<Callable>>(
+                Callable(std::forward<SubmittedCallable>(callable))
+            );
+            job.run = &RenderJobExecutor<Callable, type_list<Tags...>, type_list<Components...>>::execute;
+            return job;
+        }
+    };
+
+    template <
+        typename DirtyComponents,
+        typename... SubmittedArgs,
+        typename... CallableArgs,
+        typename Callable
+    >
+    Job make_job_from_args(type_list<SubmittedArgs...>, type_list<CallableArgs...>, Callable&& callable)
     {
         using DecayedCallable = std::decay_t<Callable>;
-        using CallableArgs = callable_arg_list_t<DecayedCallable>;
+        using ActualCallableArgs = callable_arg_list_t<DecayedCallable>;
 
         static_assert(
             is_callable_inspectable_v<DecayedCallable>,
@@ -58,30 +100,30 @@ namespace ecs_sim
         );
 
         static_assert(
-            callable_arity_v<DecayedCallable> == type_list_size_v<type_list<Args...>>,
+            callable_arity_v<DecayedCallable> == type_list_size_v<type_list<CallableArgs...>>,
             "ECSProcessor simulation callable parameter count must match the submitted argument count"
         );
 
         static_assert(
-            valid_callable_params_v<CallableArgs>,
+            valid_callable_params_v<ActualCallableArgs>,
             "ECSProcessor simulation callable parameters must be Entity, component lvalue references, or const View<T...>& for ecs::ViewOf<T...>"
         );
 
         static_assert(
             std::is_invocable_v<
                 DecayedCallable&,
-                std::add_lvalue_reference_t<call_arg_t<Args>>...
+                std::add_lvalue_reference_t<call_arg_t<CallableArgs>>...
             >,
             "ECSProcessor submit callable is not invocable with the provided component parameters"
         );
 
         Job job;
         job.access = build_callable_access_spec<DecayedCallable, DirtyComponents>();
-        job.usesInternalParallelism = job_uses_internal_parallelism_v<Args...>;
+        job.usesInternalParallelism = job_uses_internal_parallelism_v<SubmittedArgs...>;
         job.context = std::make_shared<JobContext<DecayedCallable>>(
             DecayedCallable(std::forward<Callable>(callable))
         );
-        job.run = &execute_sim_job_context<DecayedCallable, DirtyComponents, Args...>;
+        job.run = &execute_sim_job_context<DecayedCallable, DirtyComponents, SubmittedArgs...>;
         return job;
     }
 
@@ -90,12 +132,17 @@ namespace ecs_sim
     {
         static_assert(
             (... && is_supported_submit_arg_v<Args>),
-            "ECSProcessor submit arguments must be component types, Dirty<T>, ecs::Dirty<T>, ecs::ViewOf<T>, or Entity"
+            "ECSProcessor submit arguments must be component types, Dirty<T>, ecs::Dirty<T>, ecs::ViewOf<T>, ecs::Tag<T>, or Entity"
         );
 
+        using SubmittedArgs = type_list<Args...>;
         using CallableArgs = callable_submit_arg_list_t<Args...>;
         using DirtyComponents = guaranteed_dirty_component_list_t<Args...>;
-        return make_job_from_args<DirtyComponents>(CallableArgs{}, std::forward<Callable>(callable));
+        return make_job_from_args<DirtyComponents>(
+            SubmittedArgs{},
+            CallableArgs{},
+            std::forward<Callable>(callable)
+        );
     }
 
     template <typename... Args, typename Callable>
@@ -104,29 +151,19 @@ namespace ecs_sim
         return make_job<Args...>(std::forward<Callable>(callable));
     }
 
-    template <typename... Components, typename Callable>
+    template <typename... Args, typename Callable>
     RenderJob make_render_job(Callable&& callable)
     {
         static_assert(
-            (... && is_plain_component_arg_v<Components>),
-            "ECSProcessor render arguments must be plain component types"
+            (... && (is_plain_component_arg_v<Args> || is_tag_arg_v<Args>)),
+            "ECSProcessor render arguments must be plain component types or ecs::Tag<T> filters"
         );
 
         using DecayedCallable = std::decay_t<Callable>;
-        static_assert(
-            std::is_invocable_v<
-                DecayedCallable&,
-                const ecs::component_value_t<Components>&...
-            >,
-            "ECSProcessor render callable is not invocable with const component references"
+        using Components = component_list_t<Args...>;
+        using Tags = tag_list_t<Args...>;
+        return RenderJobFactory<DecayedCallable, Components, Tags>::make(
+            std::forward<Callable>(callable)
         );
-
-        RenderJob job;
-        job.usesInternalParallelism = true;
-        job.context = std::make_shared<JobContext<DecayedCallable>>(
-            DecayedCallable(std::forward<Callable>(callable))
-        );
-        job.run = &execute_render_job_context<DecayedCallable, Components...>;
-        return job;
     }
 }

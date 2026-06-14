@@ -26,7 +26,7 @@ namespace ecs_processor_detail
         using Component = ecs_sim::component_for_arg_t<Arg>;
         using ViewComponents = ecs_sim::view_component_list_for_arg_t<Arg>;
 
-        if constexpr (!std::is_void_v<Component>)
+        if constexpr (!ecs_sim::is_tag_arg_v<Arg> && !std::is_void_v<Component>)
         {
             ecs.template guarantee_component_pool<Component>();
         }
@@ -40,11 +40,14 @@ namespace ecs_processor_detail
         (guarantee_sim_pool<Args>(ecs), ...);
     }
 
-    template <typename Component>
+    template <typename Arg>
     void guarantee_render_pool(ECS& ecs)
     {
-        ecs.template guarantee_component_pool<Component>();
-        ecs.template guarantee_render_component_pool<Component>();
+        if constexpr (!ecs_sim::is_tag_arg_v<Arg>)
+        {
+            ecs.template guarantee_component_pool<Arg>();
+            ecs.template guarantee_render_component_pool<Arg>();
+        }
     }
 
     template <typename... Components>

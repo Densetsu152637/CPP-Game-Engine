@@ -8,6 +8,7 @@
 
 #include "ecs/aliases/component_alias.h"
 #include "ecs/processor.h"
+#include "structs/sparse_bit_field.h"
 
 namespace
 {
@@ -15,6 +16,8 @@ namespace
     struct VelocityTag {};
     struct HealthTag {};
     struct ManaTag {};
+    struct RenderableTag {};
+    struct SelectedTag {};
 
     using Position = ecs::BufferedAlias<int, PositionTag>;
     using Velocity = ecs::Alias<int, VelocityTag>;
@@ -79,6 +82,226 @@ namespace
         }
 
         return false;
+    }
+
+    void test_sparse_bit_field_tracks_sparse_pages()
+    {
+        SparseBitField bits;
+        const size_t secondPageBit = SparseBitField::BITS_PER_PAGE + 1;
+
+        require(bits.empty(), "new sparse bit field should be empty");
+        require(!bits.at(secondPageBit), "missing sparse bit page should read false");
+
+        bits.set(5, true);
+        bits.set(secondPageBit, true);
+
+        require(bits.size() == 2, "sparse bit field did not count set bits");
+        require(bits.at(5), "sparse bit field missed bit on first page");
+        require(bits.at(secondPageBit), "sparse bit field missed bit on later page");
+        require(!bits.at(secondPageBit + 1), "sparse bit field reported unset bit as true");
+
+        bits.set(5, false);
+        require(bits.size() == 1, "sparse bit field did not clear first-page bit");
+
+        bits.set(secondPageBit, false);
+        require(bits.empty(), "sparse bit field did not release final set bit");
+        require(!bits.at(secondPageBit), "cleared sparse bit should read false");
+        require_throws(
+            [&]()
+            {
+                (void)bits.at_packed(0);
+            },
+            "sparse bit field kept an empty page initialised"
+        );
+    }
+
+    void test_sparse_bit_field_packed_and_bitwise_operations()
+    {
+        SparseBitField left;
+        SparseBitField right;
+        const size_t distantBit = SparseBitField::BITS_PER_PAGE * 3 + 2;
+
+        left.set(1, true);
+        left.set(distantBit, true);
+        right.set(7, true);
+        right.set(distantBit, true);
+
+        SparseBitField both = left & right;
+        require(both.size() == 1, "sparse bit field intersection had wrong size");
+        require(both.at(distantBit), "sparse bit field intersection missed shared bit");
+        require(!both.at(1), "sparse bit field intersection kept left-only bit");
+        require(!both.at(7), "sparse bit field intersection kept right-only bit");
+
+        SparseBitField either = left | right;
+        require(either.size() == 3, "sparse bit field union had wrong size");
+
+        ArrayList<size_t> indexes = either.trueIndexes();
+        require(indexes.length() == 3, "sparse bit field true index enumeration had wrong size");
+        require(indexes[0] == 1, "sparse bit field true index enumeration missed first bit");
+        require(indexes[1] == 7, "sparse bit field true index enumeration missed second bit");
+        require(indexes[2] == distantBit, "sparse bit field true index enumeration missed distant bit");
+
+        SparseBitField packed;
+        packed.setPacked(2, SparseBitField::PACKED_TYPE {0b101});
+        require(packed.at(SparseBitField::PACKED_SIZE * 2), "packed sparse bit write missed low bit");
+        require(packed.at(SparseBitField::PACKED_SIZE * 2 + 2), "packed sparse bit write missed high bit");
+        require(packed.size() == 2, "packed sparse bit write had wrong size");
+
+        packed.setPacked(2, 0);
+        require(packed.empty(), "zero packed sparse bit write did not clear bits");
+
+        packed.at_packed<true>(4) = SparseBitField::PACKED_TYPE {1} << 3;
+        require(packed.at(SparseBitField::PACKED_SIZE * 4 + 3), "guaranteed packed access did not create page");
+        packed.at_packed<true>(4) = 0;
+        require(packed.empty(), "sparse bit field size did not reflect direct packed clear");
+        packed.release_empty_pages();
+        require_throws(
+            [&]()
+            {
+                (void)packed.at_packed(4);
+            },
+            "sparse bit field did not release direct-zeroed page"
+        );
+    }
+
+    void test_ecs_tags_track_entities_and_cleanup()
+    {
+        ECS ecs;
+        const Entity first = ecs.createEntity();
+        const Entity second = ecs.createEntity();
+
+        require(ecs.addTag<RenderableTag>(first), "adding a tag returned false");
+        require(ecs.hasTag<RenderableTag>(first), "added tag was not visible");
+        require(ecs.hasTag<ecs::Tag<RenderableTag>>(first), "tag wrapper lookup did not unwrap tag name");
+        require(!ecs.hasTag<RenderableTag>(second), "untagged entity reported tag");
+        require(!ecs.addTag<RenderableTag>(first), "adding an existing tag should return false");
+
+        const TagPool* pool = ecs.tagPoolIfExists<RenderableTag>();
+        require(nullptr != pool, "tag pool was not created");
+        require(pool->size() == 1, "tag pool had wrong size after add");
+
+        require(ecs.removeTag<RenderableTag>(first), "removing existing tag returned false");
+        require(!ecs.hasTag<RenderableTag>(first), "removed tag was still visible");
+        require(!ecs.removeTag<RenderableTag>(first), "removing missing tag should return false");
+
+        ecs.addTag<SelectedTag>(second);
+        ecs.destroyEntity(second);
+        require(!ecs.hasTag<SelectedTag>(second), "destroyed entity retained tag");
+        require(ecs.tagPoolIfExists<SelectedTag>()->empty(), "tag pool retained destroyed entity");
+    }
+
+    void test_deferred_tag_changes_flush_after_wall()
+    {
+        ECS ecs;
+        const Entity entity = ecs.createEntity();
+
+        ecs.beginStructuralDeferral();
+        require(ecs.addTag<RenderableTag>(entity), "deferred add tag rejected known entity");
+        require(!ecs.hasTag<RenderableTag>(entity), "deferred add tag became visible before flush");
+        ecs.endStructuralDeferral();
+        ecs.flushDeferredStructuralChanges();
+        require(ecs.hasTag<RenderableTag>(entity), "deferred add tag did not flush");
+
+        ecs.beginStructuralDeferral();
+        require(ecs.removeTag<RenderableTag>(entity), "deferred remove tag rejected known entity");
+        require(ecs.hasTag<RenderableTag>(entity), "deferred remove tag became visible before flush");
+        ecs.endStructuralDeferral();
+        ecs.flushDeferredStructuralChanges();
+        require(!ecs.hasTag<RenderableTag>(entity), "deferred remove tag did not flush");
+    }
+
+    void test_tagged_sim_job_filters_component_iteration()
+    {
+        Threadpool pool(1, std::string("ecs-test"));
+        ECSProcessor processor(pool);
+        ECS& ecs = processor.ecs();
+
+        const Entity first = ecs.createEntity();
+        const Entity second = ecs.createEntity();
+        const Entity third = ecs.createEntity();
+        ecs.emplaceComponent<Velocity>(first, 1);
+        ecs.emplaceComponent<Velocity>(second, 2);
+        ecs.emplaceComponent<Velocity>(third, 3);
+        ecs.addTag<RenderableTag>(first);
+        ecs.addTag<RenderableTag>(third);
+
+        processor.queue_into_sim<ecs::Tag<RenderableTag>, Velocity>(
+            "tagged-velocity",
+            [](Velocity& velocity)
+        {
+            velocity = static_cast<int>(velocity) + 10;
+        });
+
+        processor.simulate();
+
+        require(static_cast<int>(*ecs.try_get<Velocity>(first)) == 11, "tagged sim job missed first tagged entity");
+        require(static_cast<int>(*ecs.try_get<Velocity>(second)) == 2, "tagged sim job touched untagged entity");
+        require(static_cast<int>(*ecs.try_get<Velocity>(third)) == 13, "tagged sim job missed later tagged entity");
+    }
+
+    void test_tag_only_sim_job_iterates_tagged_entities()
+    {
+        Threadpool pool(1, std::string("ecs-test"));
+        ECSProcessor processor(pool);
+        ECS& ecs = processor.ecs();
+
+        const Entity first = ecs.createEntity();
+        const Entity second = ecs.createEntity();
+        const Entity third = ecs.createEntity();
+        ecs.addTag<SelectedTag>(first);
+        ecs.addTag<SelectedTag>(third);
+
+        int count = 0;
+        size_t indexSum = 0;
+        processor.queue_into_sim<ecs::Tag<SelectedTag>, Entity>(
+            "tag-only-entities",
+            [&](const Entity entity)
+        {
+            ++count;
+            indexSum += entity.index;
+        });
+
+        processor.simulate();
+
+        require(count == 2, "tag-only sim job iterated wrong number of entities");
+        require(indexSum == first.index + third.index, "tag-only sim job iterated wrong entities");
+        require(!ecs.hasTag<SelectedTag>(second), "tag-only sim test accidentally tagged middle entity");
+    }
+
+    void test_tagged_render_job_filters_render_iteration()
+    {
+        Threadpool pool(1, std::string("ecs-test"));
+        ECSProcessor processor(pool);
+        ECS& ecs = processor.ecs();
+
+        const Entity first = ecs.createEntity();
+        const Entity second = ecs.createEntity();
+        const Entity third = ecs.createEntity();
+        ecs.emplaceComponent<Velocity>(first, 1);
+        ecs.emplaceComponent<Velocity>(second, 2);
+        ecs.emplaceComponent<Velocity>(third, 3);
+        ecs.addTag<RenderableTag>(first);
+        ecs.addTag<RenderableTag>(third);
+
+        std::atomic<int> sum = 0;
+        processor.queue_into_rendering<ecs::Tag<RenderableTag>, Velocity>(
+            "tagged-render",
+            [&](const Velocity& velocity)
+        {
+            sum.fetch_add(static_cast<int>(velocity), std::memory_order_relaxed);
+        });
+
+        processor.simulate();
+        sum = 0;
+        processor.render();
+        sum = 0;
+        processor.render();
+        require(sum.load() == 4, "tagged render job did not filter render entities");
+
+        ecs.removeTag<RenderableTag>(third);
+        sum = 0;
+        processor.render();
+        require(sum.load() == 1, "tagged render job did not observe removed tag");
     }
 
     void test_sparse_tuple_component_storage_accesses_components()
@@ -1138,6 +1361,13 @@ int main()
 {
     try
     {
+        test_sparse_bit_field_tracks_sparse_pages();
+        test_sparse_bit_field_packed_and_bitwise_operations();
+        test_ecs_tags_track_entities_and_cleanup();
+        test_deferred_tag_changes_flush_after_wall();
+        test_tagged_sim_job_filters_component_iteration();
+        test_tag_only_sim_job_iterates_tagged_entities();
+        test_tagged_render_job_filters_render_iteration();
         test_sparse_tuple_component_storage_accesses_components();
         test_archetype_registration_tracks_components();
         test_archetype_registration_merges_superset_groups();

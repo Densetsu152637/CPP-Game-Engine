@@ -70,6 +70,7 @@ add_executable(CPPGameEngine
         src/ecs/pools/component_pool_simulation.h
         src/ecs/pools/component_pool_render.h
         src/ecs/pools/component_pool_storage.h
+        src/ecs/pools/tag_pool.h
         src/ecs/core/archetype_storage_registry.h
         src/ecs/core/component_storage_registry.h
         src/ecs/core/component_type_id.h
@@ -111,6 +112,8 @@ add_executable(CPPGameEngine
         src/functional/result.cpp
         src/ecs/processor.cpp
         src/ecs/processor.h
+        src/structs/sparse_bit_field.cpp
+        src/structs/sparse_bit_field.h
 )
 
 if(Vulkan_FOUND)
@@ -175,6 +178,7 @@ if(CPP_GAME_ENGINE_BUILD_TESTS)
             src/ecs/pools/component_pool_simulation.h
             src/ecs/pools/component_pool_render.h
             src/ecs/pools/component_pool_storage.h
+            src/ecs/pools/tag_pool.h
             src/ecs/core/archetype_storage_registry.h
             src/ecs/core/component_storage_registry.h
             src/ecs/core/component_type_id.h
@@ -202,6 +206,8 @@ if(CPP_GAME_ENGINE_BUILD_TESTS)
             src/async/promise.h
             src/functional/result.cpp
             src/functional/result.h
+            src/structs/sparse_bit_field.cpp
+            src/structs/sparse_bit_field.h
             src/logging/logger.cpp
             src/logging/logger.h
             src/logging/text_colour.cpp

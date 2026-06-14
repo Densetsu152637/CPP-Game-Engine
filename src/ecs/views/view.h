@@ -624,9 +624,13 @@ private:
             resolve_cache();
 
         if constexpr (0 == sizeof...(Components))
+        {
             return true;
-
-        return m_primaryIndex != Entity::N_POS;
+        }
+        else
+        {
+            return m_primaryIndex != Entity::N_POS;
+        }
     }
 
     bool ensure_matches()

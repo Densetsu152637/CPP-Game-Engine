@@ -8,6 +8,7 @@
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <unordered_map>
 #include <utility>
 
 #include "aliases/component_alias.h"
@@ -15,6 +16,7 @@
 #include "core/entity.h"
 #include "core/entity_registry.h"
 #include "core/structural_command_buffer.h"
+#include "pools/tag_pool.h"
 #include "../structs/arraylist.h"
 
 template <typename... Components>
@@ -30,6 +32,7 @@ class ECS
 
     EntityRegistry m_entities;
     ComponentStorageRegistry m_components;
+    std::unordered_map<ecs::ComponentTypeId, TagPool> m_tags;
     StructuralCommandBuffer m_deferredStructuralCommands;
     mutable std::mutex m_structuralMutex;
     size_t m_structuralDeferralDepth = 0;
@@ -46,6 +49,9 @@ class ECS
 
     template <typename T>
     using component_value_t = ecs::component_value_t<T>;
+
+    template <typename T>
+    using tag_name_t = ecs::tag_name_t<T>;
 
     template <typename T>
     using pool_t = ComponentStorageRegistry::pool_t<T>;
@@ -103,6 +109,37 @@ class ECS
     bool activateDeferredEntity(const Entity& entity);
     void destroyEntityImmediate(const Entity& entity);
     void clearImmediate();
+    void remove_tags_for_entity(size_t entityIndex);
+
+    template <typename T>
+    static ecs::ComponentTypeId tag_type_id()
+    {
+        return ecs::component_type_id<ecs::Tag<tag_name_t<T>>>();
+    }
+
+    template <typename T>
+    TagPool* tag_pool_if_exists()
+    {
+        const auto it = m_tags.find(tag_type_id<T>());
+        if (it == m_tags.end())
+            return nullptr;
+
+        return &it->second;
+    }
+
+    template <typename T>
+    const TagPool* tag_pool_if_exists() const
+    {
+        const auto it = m_tags.find(tag_type_id<T>());
+        if (it == m_tags.end())
+            return nullptr;
+
+        return &it->second;
+    }
+
+    template <typename T>
+    TagPool& tag_pool()
+    { return m_tags[tag_type_id<T>()]; }
 
 public:
 
@@ -267,6 +304,25 @@ public:
 
     template <typename T>
     bool removeComponentImmediate(const Entity& entity);
+
+    template <typename T>
+    bool addTag(const Entity& entity);
+
+    template <typename T>
+    bool addTagImmediate(const Entity& entity);
+
+    template <typename T>
+    bool removeTag(const Entity& entity);
+
+    template <typename T>
+    bool removeTagImmediate(const Entity& entity);
+
+    template <typename T>
+    bool hasTag(const Entity& entity) const;
+
+    template <typename T>
+    const TagPool* tagPoolIfExists() const
+    { return tag_pool_if_exists<T>(); }
 
     template <typename T>
     ArrayList<ecs::component_value_t<T>>& denseComponents();
@@ -541,6 +597,71 @@ bool ECS::removeComponentImmediate(const Entity& entity)
 
     pool->erase(entity.index);
     return true;
+}
+
+template <typename T>
+bool ECS::addTag(const Entity& entity)
+{
+    if (structural_changes_deferred())
+    {
+        if (!is_known_handle(entity))
+            return false;
+
+        m_deferredStructuralCommands.enqueue([this, entity]()
+        {
+            addTagImmediate<T>(entity);
+        });
+        return true;
+    }
+
+    return addTagImmediate<T>(entity);
+}
+
+template <typename T>
+bool ECS::addTagImmediate(const Entity& entity)
+{
+    if (!is_valid_handle(entity))
+        return false;
+
+    return tag_pool<T>().add(entity.index);
+}
+
+template <typename T>
+bool ECS::removeTag(const Entity& entity)
+{
+    if (structural_changes_deferred())
+    {
+        if (!is_known_handle(entity))
+            return false;
+
+        m_deferredStructuralCommands.enqueue([this, entity]()
+        {
+            removeTagImmediate<T>(entity);
+        });
+        return true;
+    }
+
+    return removeTagImmediate<T>(entity);
+}
+
+template <typename T>
+bool ECS::removeTagImmediate(const Entity& entity)
+{
+    if (!is_valid_handle(entity))
+        return false;
+
+    TagPool* pool = tag_pool_if_exists<T>();
+    return nullptr != pool && pool->remove(entity.index);
+}
+
+template <typename T>
+bool ECS::hasTag(const Entity& entity) const
+{
+    if (!is_valid_handle(entity))
+        return false;
+
+    const TagPool* pool = tag_pool_if_exists<T>();
+    return nullptr != pool && pool->contains(entity.index);
 }
 
 template <typename T>

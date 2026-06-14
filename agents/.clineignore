@@ -1,0 +1,47 @@
+# --- Build & Output Directories ---
+build/
+Build/
+bin/
+obj/
+out/
+dist/
+x64/
+Win32/
+Release/
+Debug/
+
+# --- Package Managers & Dependencies ---
+vcpkg_installed/
+.cpm/
+conan/
+cmake-build-debug/
+cmake-build-release/
+
+# --- IDE & Editor Metadata ---
+.idea/
+.vscode/
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln
+*.vcxproj
+*.filters
+
+# --- Compiled Files & Artifacts ---
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.exe
+*.dll
+*.pdb
+*.ilk
+*.exp
+
+# --- Version Control & Logs ---
+.git/
+.gitignore
+*.log

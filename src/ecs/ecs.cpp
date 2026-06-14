@@ -91,6 +91,7 @@ void ECS::destroyEntityImmediate(const Entity& entity)
         return;
 
     m_components.eraseEntityFromAll(entity.index);
+    remove_tags_for_entity(entity.index);
     m_entities.destroy(entity);
 }
 
@@ -117,6 +118,16 @@ void ECS::clearImmediate()
 {
     m_entities.clear();
     m_components.clearPools();
+    m_tags.clear();
+}
+
+void ECS::remove_tags_for_entity(const size_t entityIndex)
+{
+    for (auto& [type, pool] : m_tags)
+    {
+        (void)type;
+        pool.remove(entityIndex);
+    }
 }
 
 void ECS::swapSimBuffers()

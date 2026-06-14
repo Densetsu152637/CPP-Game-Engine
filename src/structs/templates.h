@@ -38,6 +38,27 @@ struct Pair
 
 namespace ecs
 {
+    template <typename T>
+    struct Tag
+    {
+        using tag_type = std::remove_cvref_t<T>;
+    };
+
+    template <typename T>
+    struct tag_name
+    {
+        using type = std::remove_cvref_t<T>;
+    };
+
+    template <typename T>
+    struct tag_name<Tag<T>>
+    {
+        using type = std::remove_cvref_t<T>;
+    };
+
+    template <typename T>
+    using tag_name_t = typename tag_name<std::remove_cvref_t<T>>::type;
+
     template <typename... Components>
     struct ViewOf
     {

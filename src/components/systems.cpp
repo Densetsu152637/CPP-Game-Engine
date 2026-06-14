@@ -51,3 +51,15 @@ void entityRenderingExample(Engine&, ECSProcessor& sim)
         }
     );
 }
+
+struct ExampleTag{};
+void entityRenderingWithTagExample(Engine&, ECSProcessor& sim)
+{
+    sim.queue_into_rendering<Position3D, ecs::Tag<ExampleTag>>(
+        "ENTITY_RENDERING_WITH_TAG_EXAMPLE",
+        [](const Position3D& position)
+        {
+            // do some kind of per-entity rendering here
+        }
+    );
+}

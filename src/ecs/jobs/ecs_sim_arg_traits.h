@@ -47,6 +47,17 @@ namespace ecs_sim
         is_dirty_component_arg<std::remove_cvref_t<T>>::value;
 
     template <typename T>
+    struct is_tag_arg : std::false_type
+    {};
+
+    template <typename T>
+    struct is_tag_arg<ecs::Tag<T>> : std::true_type
+    {};
+
+    template <typename T>
+    inline constexpr bool is_tag_arg_v = is_tag_arg<std::remove_cvref_t<T>>::value;
+
+    template <typename T>
     inline constexpr bool is_wrapped_component_arg_v =
         is_dirty_component_arg_v<T>;
 
@@ -54,6 +65,7 @@ namespace ecs_sim
     inline constexpr bool is_plain_component_arg_v =
         !is_entity_arg_v<T> &&
         !is_view_of_v<T> &&
+        !is_tag_arg_v<T> &&
         !is_wrapped_component_arg_v<T>;
 
     template <typename T>
@@ -70,6 +82,7 @@ namespace ecs_sim
     inline constexpr bool is_supported_submit_arg_v =
         is_entity_arg_v<T> ||
         is_view_of_v<T> ||
+        is_tag_arg_v<T> ||
         is_component_submit_arg_v<T>;
 
     template <typename T>
@@ -111,6 +124,21 @@ namespace ecs_sim
 
     template <typename T>
     using view_component_list_for_arg_t = typename view_component_list_for_arg<std::remove_cvref_t<T>>::type;
+
+    template <typename T>
+    struct tag_for_arg
+    {
+        using type = void;
+    };
+
+    template <typename T>
+    struct tag_for_arg<ecs::Tag<T>>
+    {
+        using type = ecs::tag_name_t<T>;
+    };
+
+    template <typename T>
+    using tag_for_arg_t = typename tag_for_arg<std::remove_cvref_t<T>>::type;
 
     template <typename Arg, typename Decayed = std::remove_cvref_t<Arg>>
     struct call_arg
@@ -314,8 +342,52 @@ namespace ecs_sim
     template <typename... Args>
     using component_list_t = typename collect_components<type_list<>, Args...>::type;
 
+    template <typename List, typename... Args>
+    struct collect_callable_submit_args;
+
+    template <typename List>
+    struct collect_callable_submit_args<List>
+    {
+        using type = List;
+    };
+
+    template <typename List, typename Arg, typename... Rest>
+    struct collect_callable_submit_args<List, Arg, Rest...>
+    {
+        using next = std::conditional_t<
+            is_tag_arg_v<Arg>,
+            List,
+            typename push_type<List, Arg>::type
+        >;
+        using type = typename collect_callable_submit_args<next, Rest...>::type;
+    };
+
     template <typename... Args>
-    using callable_submit_arg_list_t = type_list<Args...>;
+    using callable_submit_arg_list_t = typename collect_callable_submit_args<type_list<>, Args...>::type;
+
+    template <typename List, typename... Args>
+    struct collect_tags;
+
+    template <typename List>
+    struct collect_tags<List>
+    {
+        using type = List;
+    };
+
+    template <typename List, typename Arg, typename... Rest>
+    struct collect_tags<List, Arg, Rest...>
+    {
+        using tag = tag_for_arg_t<Arg>;
+        using next = std::conditional_t<
+            std::is_void_v<tag>,
+            List,
+            typename push_unique_type<List, tag>::type
+        >;
+        using type = typename collect_tags<next, Rest...>::type;
+    };
+
+    template <typename... Args>
+    using tag_list_t = typename collect_tags<type_list<>, Args...>::type;
 
     template <typename List, typename Arg>
     struct append_guaranteed_dirty_component
@@ -373,4 +445,7 @@ namespace ecs_sim
 
     template <typename... Args>
     inline constexpr bool has_entity_arg_pack_v = (... || is_entity_arg_v<Args>);
+
+    template <typename... Args>
+    inline constexpr bool has_tag_arg_pack_v = (... || is_tag_arg_v<Args>);
 }
