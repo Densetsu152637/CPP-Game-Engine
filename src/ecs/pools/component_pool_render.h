@@ -11,6 +11,7 @@
 
 #include "../core/archetype_storage_registry.h"
 #include "component_pool_simulation.h"
+#include "component_pool_shared.h"
 
 enum class RenderPoolSyncMode
 {
@@ -24,6 +25,7 @@ class RenderComponentPool final : public IComponentPool
 {
     friend ComponentPool<T>;
     friend BufferedComponentPool<T>;
+    friend SharedComponentPool<T>;
     friend SparseSet<T>;
 
     Pair<SparseSet<T>> m_storage;
@@ -147,6 +149,14 @@ public:
             writeDirtyBufferedFromSet(componentPool.sourceSet(), componentPool.dirtyEntities());
     }
 
+    void writeFrom(SharedComponentPool<T>& componentPool)
+    {
+        if (componentPool.isFullyDirty())
+            writeFullSharedFromPool(componentPool);
+        else
+            writeDirtySharedFromPool(componentPool, componentPool.dirtyEntities());
+    }
+
     void writeFrom(IComponentPool& componentPool) override
     {
         if (auto* typedPool = dynamic_cast<ComponentPool<T>*>(&componentPool))
@@ -160,6 +170,15 @@ public:
             if (auto* bufferedPool = dynamic_cast<BufferedComponentPool<T>*>(&componentPool))
             {
                 writeFrom(*bufferedPool);
+                return;
+            }
+        }
+
+        if constexpr (ecs::is_shared_component_alias_v<T>)
+        {
+            if (auto* sharedPool = dynamic_cast<SharedComponentPool<T>*>(&componentPool))
+            {
+                writeFrom(*sharedPool);
                 return;
             }
         }
@@ -336,6 +355,36 @@ private:
                 storage.erase(entityIndex);
             else
                 emplaceInto(storage, entityIndex, component->read());
+        }
+
+        if (!dirtyEntities.empty())
+            markPendingEntitySync(dirtyEntities);
+    }
+
+    void writeFullSharedFromPool(const SharedComponentPool<T>& source)
+    {
+        SparseSet<T>& storage = writeSet();
+        storage.clear();
+
+        for (size_t denseIndex = 0; denseIndex < source.size(); ++denseIndex)
+            emplaceInto(storage, source.entity_at(denseIndex), source.dense_at(denseIndex));
+
+        markPendingFullSync();
+    }
+
+    void writeDirtySharedFromPool(
+        const SharedComponentPool<T>& source,
+        const ArrayList<size_t>& dirtyEntities
+    ) {
+        SparseSet<T>& storage = writeSet();
+
+        for (const size_t entityIndex : dirtyEntities)
+        {
+            const T* component = source.try_get(entityIndex);
+            if (nullptr == component)
+                storage.erase(entityIndex);
+            else
+                emplaceInto(storage, entityIndex, *component);
         }
 
         if (!dirtyEntities.empty())

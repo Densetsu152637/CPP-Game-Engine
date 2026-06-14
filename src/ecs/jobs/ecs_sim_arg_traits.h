@@ -69,6 +69,17 @@ namespace ecs_sim
     inline constexpr bool is_exclude_arg_v = is_exclude_arg<std::remove_cvref_t<T>>::value;
 
     template <typename T>
+    struct is_shared_arg : std::false_type
+    {};
+
+    template <typename T>
+    struct is_shared_arg<ecs::Shared<T>> : std::true_type
+    {};
+
+    template <typename T>
+    inline constexpr bool is_shared_arg_v = is_shared_arg<std::remove_cvref_t<T>>::value;
+
+    template <typename T>
     inline constexpr bool is_wrapped_component_arg_v =
         is_dirty_component_arg_v<T>;
 
@@ -78,6 +89,7 @@ namespace ecs_sim
         !is_view_of_v<T> &&
         !is_tag_arg_v<T> &&
         !is_exclude_arg_v<T> &&
+        !is_shared_arg_v<T> &&
         !is_wrapped_component_arg_v<T>;
 
     template <typename T>
@@ -96,6 +108,7 @@ namespace ecs_sim
         is_view_of_v<T> ||
         is_tag_arg_v<T> ||
         is_exclude_arg_v<T> ||
+        is_shared_arg_v<T> ||
         is_component_submit_arg_v<T>;
 
     template <typename T>
@@ -128,6 +141,60 @@ namespace ecs_sim
 
     template <typename T>
     using component_for_arg_t = typename component_for_arg<std::remove_cvref_t<T>>::type;
+
+    template <typename T>
+    struct shared_component_for_arg
+    {
+        using type = void;
+    };
+
+    template <typename T>
+    struct shared_component_for_arg<ecs::Shared<T>>
+    {
+        static_assert(
+            ecs::is_shared_component_alias_v<std::remove_cvref_t<T>>,
+            "ecs::Shared<T> can only wrap ecs::SharedAlias component types"
+        );
+
+        using type = std::remove_cvref_t<T>;
+    };
+
+    template <typename T>
+    using shared_component_for_arg_t =
+        typename shared_component_for_arg<std::remove_cvref_t<T>>::type;
+
+    template <typename T>
+    struct render_component_for_arg
+    {
+        using shared_component = shared_component_for_arg_t<T>;
+        using type = std::conditional_t<
+            std::is_void_v<shared_component>,
+            component_for_arg_t<T>,
+            shared_component
+        >;
+    };
+
+    template <typename T>
+    using render_component_for_arg_t =
+        typename render_component_for_arg<std::remove_cvref_t<T>>::type;
+
+    template <typename T>
+    struct simulation_match_component_for_arg
+    {
+        using shared_component = shared_component_for_arg_t<T>;
+        using type = std::conditional_t<
+            std::is_void_v<shared_component>,
+            component_for_arg_t<T>,
+            shared_component
+        >;
+    };
+
+    template <typename T>
+    using simulation_match_component_for_arg_t =
+        typename simulation_match_component_for_arg<std::remove_cvref_t<T>>::type;
+
+    template <typename T>
+    using simulation_component_for_arg_t = simulation_match_component_for_arg_t<T>;
 
     template <typename T>
     struct view_component_list_for_arg
@@ -362,6 +429,56 @@ namespace ecs_sim
     using component_list_t = typename collect_components<type_list<>, Args...>::type;
 
     template <typename List, typename... Args>
+    struct collect_simulation_match_components;
+
+    template <typename List>
+    struct collect_simulation_match_components<List>
+    {
+        using type = List;
+    };
+
+    template <typename List, typename Arg, typename... Rest>
+    struct collect_simulation_match_components<List, Arg, Rest...>
+    {
+        using component = simulation_match_component_for_arg_t<Arg>;
+        using next = std::conditional_t<
+            std::is_void_v<component>,
+            List,
+            typename push_unique_type<List, component>::type
+        >;
+        using type = typename collect_simulation_match_components<next, Rest...>::type;
+    };
+
+    template <typename... Args>
+    using simulation_match_component_list_t =
+        typename collect_simulation_match_components<type_list<>, Args...>::type;
+
+    template <typename List, typename... Args>
+    struct collect_render_match_components;
+
+    template <typename List>
+    struct collect_render_match_components<List>
+    {
+        using type = List;
+    };
+
+    template <typename List, typename Arg, typename... Rest>
+    struct collect_render_match_components<List, Arg, Rest...>
+    {
+        using component = render_component_for_arg_t<Arg>;
+        using next = std::conditional_t<
+            std::is_void_v<component>,
+            List,
+            typename push_unique_type<List, component>::type
+        >;
+        using type = typename collect_render_match_components<next, Rest...>::type;
+    };
+
+    template <typename... Args>
+    using render_match_component_list_t =
+        typename collect_render_match_components<type_list<>, Args...>::type;
+
+    template <typename List, typename... Args>
     struct collect_callable_submit_args;
 
     template <typename List>
@@ -373,10 +490,16 @@ namespace ecs_sim
     template <typename List, typename Arg, typename... Rest>
     struct collect_callable_submit_args<List, Arg, Rest...>
     {
+        using shared_component = shared_component_for_arg_t<Arg>;
+        using callable_arg = std::conditional_t<
+            std::is_void_v<shared_component>,
+            Arg,
+            shared_component
+        >;
         using next = std::conditional_t<
             is_tag_arg_v<Arg> || is_exclude_arg_v<Arg>,
             List,
-            typename push_type<List, Arg>::type
+            typename push_type<List, callable_arg>::type
         >;
         using type = typename collect_callable_submit_args<next, Rest...>::type;
     };
@@ -407,6 +530,31 @@ namespace ecs_sim
 
     template <typename... Args>
     using tag_list_t = typename collect_tags<type_list<>, Args...>::type;
+
+    template <typename List, typename... Args>
+    struct collect_shared_components;
+
+    template <typename List>
+    struct collect_shared_components<List>
+    {
+        using type = List;
+    };
+
+    template <typename List, typename Arg, typename... Rest>
+    struct collect_shared_components<List, Arg, Rest...>
+    {
+        using component = shared_component_for_arg_t<Arg>;
+        using next = std::conditional_t<
+            std::is_void_v<component>,
+            List,
+            typename push_unique_type<List, component>::type
+        >;
+        using type = typename collect_shared_components<next, Rest...>::type;
+    };
+
+    template <typename... Args>
+    using shared_component_list_t =
+        typename collect_shared_components<type_list<>, Args...>::type;
 
     template <typename List, typename... Args>
     struct collect_excludes;
@@ -496,6 +644,9 @@ namespace ecs_sim
     inline constexpr bool has_exclude_arg_pack_v = (... || is_exclude_arg_v<Args>);
 
     template <typename... Args>
+    inline constexpr bool has_shared_arg_pack_v = (... || is_shared_arg_v<Args>);
+
+    template <typename... Args>
     inline constexpr bool has_filter_arg_pack_v =
-        has_tag_arg_pack_v<Args...> || has_exclude_arg_pack_v<Args...>;
+        has_tag_arg_pack_v<Args...> || has_exclude_arg_pack_v<Args...> || has_shared_arg_pack_v<Args...>;
 }

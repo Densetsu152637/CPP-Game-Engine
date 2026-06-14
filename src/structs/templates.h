@@ -91,6 +91,12 @@ namespace ecs
     {
         using component_type = std::remove_cvref_t<T>;
     };
+
+    template <typename T>
+    struct Shared
+    {
+        using component_type = std::remove_cvref_t<T>;
+    };
 }
 
 template <typename T>
@@ -98,3 +104,6 @@ using Dirty = ecs::Dirty<T>;
 
 template <typename T>
 using Exclude = ecs::Exclude<T>;
+
+template <typename T>
+using Shared = ecs::Shared<T>;

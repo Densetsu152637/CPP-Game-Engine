@@ -70,11 +70,13 @@ add_executable(CPPGameEngine
         src/ecs/aliases/component_alias.h
         src/ecs/aliases/component_alias_basic.h
         src/ecs/aliases/component_alias_buffered.h
+        src/ecs/aliases/component_alias_shared.h
         src/ecs/aliases/component_alias_ops.h
         src/ecs/aliases/component_alias_traits.h
         src/ecs/pools/component_pool_dirty.h
         src/ecs/pools/component_pool_base.h
         src/ecs/pools/component_pool_simulation.h
+        src/ecs/pools/component_pool_shared.h
         src/ecs/pools/component_pool_render.h
         src/ecs/pools/component_pool_storage.h
         src/ecs/pools/tag_pool.h
@@ -89,6 +91,8 @@ add_executable(CPPGameEngine
         src/ecs/views/view_execution.h
         src/ecs/views/view_matcher.h
         src/ecs/jobs/ecs_access_analyzer.h
+        src/ecs/jobs/ecs_iteration_traits.h
+        src/ecs/jobs/ecs_processor_pool_guarantees.h
         src/core/interfaces.h
         src/async/buffer.h
         src/async/lock.h
@@ -176,6 +180,12 @@ set_target_properties(CPPGameEngine PROPERTIES
 if(CPP_GAME_ENGINE_BUILD_TESTS)
     add_executable(CPPGameEngineEcsTests
             src/test/ecs_tests.cpp
+            src/test/ecs/shared_rendering_tests.cpp
+            src/test/rendering/shader_tests.cpp
+            src/test/rendering/render_system_integration_tests.cpp
+            src/test/rendering/rendering_test_fakes.h
+            src/test/test_assertions.h
+            src/test/test_declarations.h
             src/ecs/ecs.cpp
             src/ecs/ecs.h
             src/ecs/processor.cpp
@@ -183,12 +193,14 @@ if(CPP_GAME_ENGINE_BUILD_TESTS)
             src/ecs/aliases/component_alias.h
             src/ecs/aliases/component_alias_basic.h
             src/ecs/aliases/component_alias_buffered.h
+            src/ecs/aliases/component_alias_shared.h
             src/ecs/aliases/component_alias_ops.h
             src/ecs/aliases/component_alias_traits.h
             src/ecs/pools/component_pool.h
             src/ecs/pools/component_pool_dirty.h
             src/ecs/pools/component_pool_base.h
             src/ecs/pools/component_pool_simulation.h
+            src/ecs/pools/component_pool_shared.h
             src/ecs/pools/component_pool_render.h
             src/ecs/pools/component_pool_storage.h
             src/ecs/pools/tag_pool.h
@@ -203,6 +215,8 @@ if(CPP_GAME_ENGINE_BUILD_TESTS)
             src/ecs/views/view_execution.h
             src/ecs/views/view_matcher.h
             src/ecs/jobs/ecs_access_analyzer.h
+            src/ecs/jobs/ecs_iteration_traits.h
+            src/ecs/jobs/ecs_processor_pool_guarantees.h
             src/ecs/jobs/ecs_sim_detail.h
             src/ecs/jobs/ecs_sim_access.h
             src/ecs/jobs/ecs_sim_arg_traits.h

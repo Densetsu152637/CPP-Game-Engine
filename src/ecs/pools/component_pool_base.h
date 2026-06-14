@@ -25,6 +25,9 @@ template <typename T>
 class BufferedComponentPool;
 
 template <typename T>
+class SharedComponentPool;
+
+template <typename T>
 class RenderComponentPool;
 
 class IComponentPool

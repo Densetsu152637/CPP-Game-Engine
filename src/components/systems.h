@@ -12,6 +12,9 @@
 void movementSystem(Engine& engine, ECSProcessor& sim);
 void dirtyCollisionSystemExample(Engine& engine, ECSProcessor& sim);
 
+void sharedEntityIterationExample(Engine& engine, ECSProcessor& sim);
+void sharedMeshIterationExample(Engine& engine, ECSProcessor& sim);
+
 // rendering
 void entityRenderingExample(Engine& engine, ECSProcessor& sim, IRenderer* renderer, IShader* shader);
 void entityRenderingWithTagExample(Engine& engine, ECSProcessor& sim);

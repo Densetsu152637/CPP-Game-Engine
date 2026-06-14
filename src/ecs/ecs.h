@@ -72,6 +72,37 @@ namespace ecs
         inline constexpr bool is_exclude_v = is_exclude<std::remove_cvref_t<T>>::value;
 
         template <typename T>
+        struct is_shared : std::false_type
+        {};
+
+        template <typename T>
+        struct is_shared<Shared<T>> : std::true_type
+        {};
+
+        template <typename T>
+        inline constexpr bool is_shared_v = is_shared<std::remove_cvref_t<T>>::value;
+
+        template <typename T>
+        struct shared_component
+        {
+            using type = void;
+        };
+
+        template <typename T>
+        struct shared_component<Shared<T>>
+        {
+            static_assert(
+                is_shared_component_alias_v<std::remove_cvref_t<T>>,
+                "ecs::Shared<T> can only wrap ecs::SharedAlias component types"
+            );
+
+            using type = std::remove_cvref_t<T>;
+        };
+
+        template <typename T>
+        using shared_component_t = typename shared_component<std::remove_cvref_t<T>>::type;
+
+        template <typename T>
         struct is_view_of : std::false_type
         {};
 
@@ -105,6 +136,7 @@ namespace ecs
             !std::is_same_v<std::remove_cvref_t<T>, Entity> &&
             !is_tag_v<T> &&
             !is_exclude_v<T> &&
+            !is_shared_v<T> &&
             !is_view_of_v<T> &&
             !is_dirty_v<T>;
     }
@@ -1006,6 +1038,14 @@ void ECS::append_exclude_query_filter(
     {
         filters.append(tag_filter<ecs::tag_name_t<Target>>(ecs::query_detail::EntityFilterMode::Exclude));
     }
+    else if constexpr (ecs::query_detail::is_shared_v<Target>)
+    {
+        using Component = ecs::query_detail::shared_component_t<Target>;
+        if (ViewStorage::Rendering == storage)
+            filters.append(render_component_filter<Component>(ecs::query_detail::EntityFilterMode::Exclude));
+        else
+            filters.append(component_filter<Component>(ecs::query_detail::EntityFilterMode::Exclude));
+    }
     else if constexpr (ecs::query_detail::is_dirty_v<Target>)
     {
         using Component = ecs::query_detail::dirty_component_t<Target>;
@@ -1036,6 +1076,14 @@ void ECS::append_query_filter(ArrayList<ecs::query_detail::EntityFilter>& filter
     else if constexpr (ecs::query_detail::is_tag_v<CleanArg>)
     {
         filters.append(tag_filter<ecs::tag_name_t<CleanArg>>(ecs::query_detail::EntityFilterMode::Include));
+    }
+    else if constexpr (ecs::query_detail::is_shared_v<CleanArg>)
+    {
+        using Component = ecs::query_detail::shared_component_t<CleanArg>;
+        if (ViewStorage::Rendering == storage)
+            filters.append(render_component_filter<Component>(ecs::query_detail::EntityFilterMode::Include));
+        else
+            filters.append(component_filter<Component>(ecs::query_detail::EntityFilterMode::Include));
     }
     else if constexpr (ecs::query_detail::is_dirty_v<CleanArg>)
     {

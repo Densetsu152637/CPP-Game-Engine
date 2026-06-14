@@ -26,11 +26,7 @@ public:
     using component_value_t = ecs::component_value_t<T>;
 
     template <typename T>
-    using pool_t = std::conditional_t<
-        ecs::is_buffered_component_v<component_value_t<T>>,
-        BufferedComponentPool<component_value_t<T>>,
-        ComponentPool<component_value_t<T>>
-    >;
+    using pool_t = SimulationComponentPoolFor<component_value_t<T>>;
 
     template <typename T>
     using render_pool_t = RenderComponentPool<component_value_t<T>>;

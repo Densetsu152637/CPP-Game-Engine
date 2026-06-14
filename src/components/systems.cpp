@@ -9,9 +9,6 @@
 #include "ecs/processor.h"
 #include "rendering/ecs_rendering.h"
 
-#include <stdexcept>
-#include <utility>
-
 // simulation
 void movementSystem(Engine& engine, ECSProcessor& sim)
 {
@@ -44,22 +41,42 @@ void dirtyCollisionSystemExample(Engine&, ECSProcessor& sim)
     );
 }
 
+void sharedEntityIterationExample(Engine&, ECSProcessor& sim)
+{
+    // should iterate parallel on entities
+    sim.queue_into_sim<Velocity3D, ecs::Dirty<Position3D>, Mesh>(
+        "MOVEMENT_SYSTEM_3D",
+        [](const Velocity3D& velocity, Position3D& position, Mesh& mesh)
+        {
+            // do something here
+        }
+    );
+}
+
+
+void sharedMeshIterationExample(Engine&, ECSProcessor& sim)
+{
+    // should iterate parallel on meshes
+    sim.queue_into_sim<Velocity3D, ecs::Dirty<Position3D>, ecs::Shared<Mesh>>(
+        "MOVEMENT_SYSTEM_3D",
+        [](const Velocity3D& velocity, Position3D& position, Mesh& mesh)
+        {
+            // do something here
+        }
+    );
+}
+
 // rendering
 
 struct ExampleTag{};
 
 void entityRenderingExample(Engine&, ECSProcessor& sim, IRenderer* renderer, IShader* shader)
 {
-    const rendering::ShaderBinding<Position3D, Velocity3D> binding(
-        {"position", "velocity"}
-    );
-
     rendering::queue_shader_rendering<Position3D, Velocity3D, ecs::Shared<Mesh>, ecs::Tag<ExampleTag>>(
         sim,
         "ENTITY_RENDERING_EXAMPLE",
         renderer,
-        shader,
-        binding
+        shader
     );
 }
 

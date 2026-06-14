@@ -4,11 +4,14 @@
 
 #pragma once
 
+#include <exception>
+#include <functional>
 #include <memory>
 #include <type_traits>
 #include <utility>
 
 #include "ecs_access_analyzer.h"
+#include "ecs_iteration_traits.h"
 #include "ecs_sim_invocation.h"
 
 namespace ecs_sim
@@ -36,16 +39,71 @@ namespace ecs_sim
         run_job<Callable, DirtyComponents, Args...>(ecs, pool, context.callable);
     }
 
-    template <typename Callable, typename TagList, typename ComponentList, typename ExcludeList>
+    template <typename Callable, typename TagList, typename ComponentList, typename ExcludeList, typename SharedList, typename MatchComponentList>
     struct RenderJobExecutor;
 
-    template <typename Callable, typename... Tags, typename... Components, typename... Excludes>
-    struct RenderJobExecutor<Callable, type_list<Tags...>, type_list<Components...>, type_list<Excludes...>>
+    template <typename SharedComponent>
+    struct SharedRenderBatch
+    {
+        ecs::component_value_t<SharedComponent> value;
+        ArrayList<Entity> entities;
+
+        explicit SharedRenderBatch(const ecs::component_value_t<SharedComponent>& sharedValue)
+            : value(sharedValue)
+        {}
+    };
+
+    template <typename SharedComponent>
+    size_t find_shared_batch(
+        const ArrayList<SharedRenderBatch<SharedComponent>>& batches,
+        const ecs::component_value_t<SharedComponent>& value
+    ) {
+        for (size_t i = 0; i < batches.length(); ++i)
+        {
+            if (batches[i].value == value)
+                return i;
+        }
+
+        return Entity::N_POS;
+    }
+
+    template <typename SharedComponent>
+    ArrayList<SharedRenderBatch<SharedComponent>> group_render_entities_by_shared_component(
+        ECS& ecs,
+        const ArrayList<Entity>& entities
+    ) {
+        ArrayList<SharedRenderBatch<SharedComponent>> batches;
+        auto sharedView = ecs.template render_view<SharedComponent>();
+        sharedView.each_entities(entities, [&](const Entity& entity, const ecs::component_value_t<SharedComponent>& shared)
+        {
+            const size_t batchIndex = find_shared_batch(batches, shared);
+            if (Entity::N_POS == batchIndex)
+            {
+                SharedRenderBatch<SharedComponent>& batch = batches.emplace(shared);
+                batch.entities.append(entity);
+                return;
+            }
+
+            batches[batchIndex].entities.append(entity);
+        });
+
+        return batches;
+    }
+
+    template <typename Callable, typename... Tags, typename... Components, typename... Excludes, typename... MatchComponents>
+    struct RenderJobExecutor<
+        Callable,
+        type_list<Tags...>,
+        type_list<Components...>,
+        type_list<Excludes...>,
+        type_list<>,
+        type_list<MatchComponents...>
+    >
     {
         static void execute(void* rawContext, ECS& ecs, Threadpool& pool)
         {
             auto& context = *static_cast<JobContext<Callable>*>(rawContext);
-            ArrayList<Entity> entities = ecs.template renderMatchingEntities<Components..., ecs::Tag<Tags>..., Excludes...>();
+            ArrayList<Entity> entities = ecs.template renderMatchingEntities<MatchComponents..., ecs::Tag<Tags>..., Excludes...>();
             if (entities.empty())
                 return;
 
@@ -57,15 +115,78 @@ namespace ecs_sim
         }
     };
 
-    template <typename Callable, typename ComponentList, typename TagList, typename ExcludeList>
+    template <
+        typename Callable,
+        typename... Tags,
+        typename... Components,
+        typename... Excludes,
+        typename SharedComponent,
+        typename... MatchComponents
+    >
+    struct RenderJobExecutor<
+        Callable,
+        type_list<Tags...>,
+        type_list<Components...>,
+        type_list<Excludes...>,
+        type_list<SharedComponent>,
+        type_list<MatchComponents...>
+    >
+    {
+        static void execute(void* rawContext, ECS& ecs, Threadpool& pool)
+        {
+            auto& context = *static_cast<JobContext<Callable>*>(rawContext);
+            ArrayList<Entity> entities = ecs.template renderMatchingEntities<MatchComponents..., ecs::Tag<Tags>..., Excludes...>();
+            if (entities.empty())
+                return;
+
+            ArrayList<SharedRenderBatch<SharedComponent>> batches =
+                group_render_entities_by_shared_component<SharedComponent>(ecs, entities);
+            if (batches.empty())
+                return;
+
+            auto promise = pool.map<SharedRenderBatch<SharedComponent>, bool>(
+                std::function<bool(const SharedRenderBatch<SharedComponent>&)>(
+                    [&ecs, &context](const SharedRenderBatch<SharedComponent>& batch)
+                    {
+                        auto view = ecs.template render_view<Components...>();
+                        view.each_entities(batch.entities, [&](const Entity&, const ecs::component_value_t<Components>&... components)
+                        {
+                            std::invoke(context.callable, components...);
+                        });
+                        return true;
+                    }
+                ),
+                &batches,
+                1
+            );
+
+            auto& result = promise.await();
+            if (result.is_failure())
+                std::rethrow_exception(result.exception());
+        }
+    };
+
+    template <typename Callable, typename ComponentList, typename TagList, typename ExcludeList, typename SharedList, typename MatchComponentList>
     struct RenderJobFactory;
 
-    template <typename Callable, typename... Components, typename... Tags, typename... Excludes>
-    struct RenderJobFactory<Callable, type_list<Components...>, type_list<Tags...>, type_list<Excludes...>>
+    template <typename Callable, typename... Components, typename... Tags, typename... Excludes, typename... SharedComponents, typename... MatchComponents>
+    struct RenderJobFactory<
+        Callable,
+        type_list<Components...>,
+        type_list<Tags...>,
+        type_list<Excludes...>,
+        type_list<SharedComponents...>,
+        type_list<MatchComponents...>
+    >
     {
         template <typename SubmittedCallable>
         static RenderJob make(SubmittedCallable&& callable)
         {
+            static_assert(
+                sizeof...(SharedComponents) <= 1,
+                "ECSProcessor render jobs can use at most one ecs::Shared<T> component"
+            );
+
             static_assert(
                 std::is_invocable_v<
                     Callable&,
@@ -83,7 +204,9 @@ namespace ecs_sim
                 Callable,
                 type_list<Tags...>,
                 type_list<Components...>,
-                type_list<Excludes...>
+                type_list<Excludes...>,
+                type_list<SharedComponents...>,
+                type_list<MatchComponents...>
             >::execute;
             return job;
         }
@@ -99,6 +222,7 @@ namespace ecs_sim
     {
         using DecayedCallable = std::decay_t<Callable>;
         using ActualCallableArgs = callable_arg_list_t<DecayedCallable>;
+        using SharedComponents = shared_component_list_t<SubmittedArgs...>;
 
         static_assert(
             is_callable_inspectable_v<DecayedCallable>,
@@ -123,8 +247,13 @@ namespace ecs_sim
             "ECSProcessor submit callable is not invocable with the provided component parameters"
         );
 
+        static_assert(
+            type_list_size_v<SharedComponents> <= 1,
+            "ECSProcessor simulation jobs can use at most one ecs::Shared<T> component"
+        );
+
         Job job;
-        job.access = build_callable_access_spec<DecayedCallable, DirtyComponents>();
+        job.access = build_job_access_spec<DecayedCallable, DirtyComponents, type_list<SubmittedArgs...>>();
         job.usesInternalParallelism = job_uses_internal_parallelism_v<SubmittedArgs...>;
         job.context = std::make_shared<JobContext<DecayedCallable>>(
             DecayedCallable(std::forward<Callable>(callable))
@@ -141,12 +270,10 @@ namespace ecs_sim
             "ECSProcessor submit arguments must be component types, Dirty<T>, ecs::Dirty<T>, ecs::ViewOf<T>, ecs::Tag<T>, ecs::Exclude<T>, or Entity"
         );
 
-        using SubmittedArgs = type_list<Args...>;
-        using CallableArgs = callable_submit_arg_list_t<Args...>;
-        using DirtyComponents = guaranteed_dirty_component_list_t<Args...>;
-        return make_job_from_args<DirtyComponents>(
-            SubmittedArgs{},
-            CallableArgs{},
+        using Iteration = SimulationIterationTypes<Args...>;
+        return make_job_from_args<typename Iteration::dirty_components>(
+            typename Iteration::submitted_args{},
+            typename Iteration::callable_args{},
             std::forward<Callable>(callable)
         );
     }
@@ -161,15 +288,20 @@ namespace ecs_sim
     RenderJob make_render_job(Callable&& callable)
     {
         static_assert(
-            (... && (is_plain_component_arg_v<Args> || is_tag_arg_v<Args> || is_exclude_arg_v<Args>)),
-            "ECSProcessor render arguments must be plain component types, ecs::Tag<T> filters, or ecs::Exclude<T> filters"
+            (... && (is_plain_component_arg_v<Args> || is_tag_arg_v<Args> || is_exclude_arg_v<Args> || is_shared_arg_v<Args>)),
+            "ECSProcessor render arguments must be plain component types, ecs::Tag<T> filters, ecs::Exclude<T> filters, or ecs::Shared<T> grouping components"
         );
 
         using DecayedCallable = std::decay_t<Callable>;
-        using Components = component_list_t<Args...>;
-        using Tags = tag_list_t<Args...>;
-        using Excludes = exclude_list_t<Args...>;
-        return RenderJobFactory<DecayedCallable, Components, Tags, Excludes>::make(
+        using Iteration = RenderIterationTypes<Args...>;
+        return RenderJobFactory<
+            DecayedCallable,
+            typename Iteration::iteration_components,
+            typename Iteration::tags,
+            typename Iteration::excludes,
+            typename Iteration::shared_components,
+            typename Iteration::match_components
+        >::make(
             std::forward<Callable>(callable)
         );
     }

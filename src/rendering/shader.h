@@ -12,6 +12,7 @@
 #include <string_view>
 #include <type_traits>
 #include <typeindex>
+#include <unordered_map>
 #include <vector>
 
 #include "../ecs/aliases/component_alias_traits.h"
@@ -51,6 +52,13 @@ namespace rendering
         const ShaderUniformUpload& upload,
         std::string_view shaderName
     );
+
+    struct ShaderComponentUniform
+    {
+        std::string uniformName;
+        ShaderUniformSlot slot;
+        uint64_t frameIndex = 0;
+    };
 
     template <typename T>
     struct ComponentUniformName
@@ -122,6 +130,8 @@ namespace rendering
     {
         std::string m_name;
         ArrayList<ShaderSource> m_sources;
+        ArrayList<ShaderComponentUniform> m_componentUniforms;
+        std::unordered_map<std::type_index, size_t> m_componentUniformIndices;
         uint64_t m_lastTouchedFrame = 0;
 
     public:
@@ -146,6 +156,9 @@ namespace rendering
         uint64_t lastTouchedFrame() const
         { return m_lastTouchedFrame; }
 
+        const ArrayList<ShaderComponentUniform>& componentUniforms() const
+        { return m_componentUniforms; }
+
         IShader& addSource(ShaderSource source);
         IShader& addGlsl(ShaderStage stage, const std::filesystem::path& path);
         IShader& addSpirv(ShaderStage stage, const std::filesystem::path& path);
@@ -158,6 +171,86 @@ namespace rendering
 
         bool uploadUniformBytes(const ShaderUniformUpload& upload);
         void markUploaded();
+
+        template <typename Component>
+        IShader& bindComponent(
+            std::string uniformName,
+            const ShaderUniformSlot slot,
+            const uint64_t frameIndex = 0
+        ) {
+            if (uniformName.empty())
+                throw std::invalid_argument("Shader component uniform name cannot be empty");
+
+            const std::type_index componentType(typeid(std::remove_cvref_t<Component>));
+            const auto existing = m_componentUniformIndices.find(componentType);
+            if (existing != m_componentUniformIndices.end())
+            {
+                ShaderComponentUniform& uniform = m_componentUniforms[existing->second];
+                uniform.uniformName = std::move(uniformName);
+                uniform.slot = slot;
+                uniform.frameIndex = frameIndex;
+                return *this;
+            }
+
+            const size_t index = m_componentUniforms.length();
+            m_componentUniforms.append(ShaderComponentUniform {
+                std::move(uniformName),
+                slot,
+                frameIndex
+            });
+            m_componentUniformIndices.emplace(componentType, index);
+            return *this;
+        }
+
+        template <typename Component>
+        IShader& bindComponent(std::string uniformName)
+        {
+            return bindComponent<Component>(
+                std::move(uniformName),
+                { 0, static_cast<uint32_t>(m_componentUniforms.length()) },
+                0
+            );
+        }
+
+        template <typename Component>
+        const ShaderComponentUniform* componentUniform() const
+        {
+            const std::type_index componentType(typeid(std::remove_cvref_t<Component>));
+            const auto it = m_componentUniformIndices.find(componentType);
+            return it == m_componentUniformIndices.end() ? nullptr : &m_componentUniforms[it->second];
+        }
+
+        template <typename Component>
+        ShaderUniformUpload uploadForComponent(const Component& component) const
+        {
+            using UploadValue = shader_upload_value_t<Component>;
+            static_assert(
+                std::is_trivially_copyable_v<UploadValue>,
+                "Shader uniform uploads require trivially copyable component values"
+            );
+
+            const ShaderComponentUniform* uniform = componentUniform<Component>();
+            if (nullptr == uniform)
+                throw std::out_of_range("Shader has no bound uniform for component");
+
+            const UploadValue& uploadValue = shader_upload_value(component);
+            return ShaderUniformUpload {
+                uniform->uniformName,
+                uniform->slot,
+                &uploadValue,
+                sizeof(UploadValue),
+                std::type_index(typeid(UploadValue)),
+                uniform->frameIndex
+            };
+        }
+
+        template <typename... Components>
+        ArrayList<ShaderUniformUpload> uploadsForComponents(const Components&... components) const
+        {
+            ArrayList<ShaderUniformUpload> uploads(sizeof...(Components));
+            (uploads.append(uploadForComponent<Components>(components)), ...);
+            return uploads;
+        }
 
         template <typename T>
         bool upload(

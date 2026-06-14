@@ -44,11 +44,7 @@ template <typename... Components>
 class View
 {
     template <typename Component>
-    using sim_pool_t = std::conditional_t<
-        ecs::is_buffered_component_v<ecs::component_value_t<Component>>,
-        BufferedComponentPool<ecs::component_value_t<Component>>,
-        ComponentPool<ecs::component_value_t<Component>>
-    >;
+    using sim_pool_t = SimulationComponentPoolFor<ecs::component_value_t<Component>>;
 
     using sim_pool_tuple = std::tuple<sim_pool_t<Components>*...>;
     using render_pool_tuple = std::tuple<RenderComponentPool<ecs::component_value_t<Components>>*...>;

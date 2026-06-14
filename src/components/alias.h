@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstddef>
+
 #include "../ecs/aliases/component_alias.h"
 #include "../structs/vector.h"
 
@@ -33,13 +35,19 @@ struct Surface3D
     {}
 };
 
+struct MeshStruct
+{
+    bool operator==(const MeshStruct&) const = default;
+};
 
 // aliases
 
 struct Position3DTag {};
 struct Velocity3DTag {};
 struct Collision3DTag {};
+struct MeshTag {};
 
 using Position3D = ecs::BufferedAlias<Vector3f, Position3DTag>;
 using Velocity3D = ecs::Alias<Vector3f, Velocity3DTag>;
 using CollisionSurface = ecs::Alias<Surface3D, Collision3DTag>;
+using Mesh = ecs::SharedAlias<MeshStruct, MeshTag>;

@@ -153,6 +153,25 @@ namespace ecs_sim
                     append_exclusive_write<Component>(spec);
             }
         }
+        else if constexpr (is_shared_arg_v<Arg>)
+        {
+            append_read<shared_component_for_arg_t<Arg>>(spec);
+        }
+    }
+
+    template <typename T>
+    void append_submitted_filter_access(AccessSpec& spec)
+    {
+        using Arg = std::remove_cvref_t<T>;
+
+        if constexpr (is_shared_arg_v<Arg>)
+            append_read<shared_component_for_arg_t<Arg>>(spec);
+    }
+
+    template <typename... Args>
+    void append_submitted_filter_accesses(AccessSpec& spec, type_list<Args...>)
+    {
+        (append_submitted_filter_access<Args>(spec), ...);
     }
 
     template <typename Param>
@@ -206,6 +225,14 @@ namespace ecs_sim
     {
         AccessSpec spec = build_callable_access_spec<Callable>();
         append_guaranteed_dirty_access(spec, DirtyComponents{});
+        return spec;
+    }
+
+    template <typename Callable, typename DirtyComponents, typename SubmittedArgs>
+    AccessSpec build_job_access_spec()
+    {
+        AccessSpec spec = build_callable_access_spec<Callable, DirtyComponents>();
+        append_submitted_filter_accesses(spec, SubmittedArgs{});
         return spec;
     }
 

@@ -1,0 +1,10 @@
+#pragma once
+
+void test_shared_render_jobs_group_by_unique_component();
+void test_shared_sim_jobs_group_by_shared_alias();
+void test_shared_render_jobs_require_only_one_shared_component();
+void test_shader_component_bindings_create_uploads();
+void test_shader_component_binding_redeclaration_updates_slot();
+void test_shader_component_upload_requires_binding();
+void test_rendering_helper_uses_shader_owned_bindings();
+void test_rendering_helper_supports_shared_mesh_batches();

@@ -12,6 +12,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "ecs_iteration_traits.h"
 #include "ecs_sim_access.h"
 
 namespace ecs_sim
@@ -341,6 +342,57 @@ namespace ecs_sim
         return ecs.template renderMatchingEntities<Components..., ecs::Tag<Tags>..., Excludes...>();
     }
 
+    template <typename SharedComponent>
+    struct SharedSimulationBatch
+    {
+        ecs::component_value_t<SharedComponent> value;
+        ArrayList<Entity> entities;
+
+        explicit SharedSimulationBatch(const ecs::component_value_t<SharedComponent>& sharedValue)
+            : value(sharedValue)
+        {}
+    };
+
+    template <typename SharedComponent>
+    size_t find_shared_simulation_batch(
+        const ArrayList<SharedSimulationBatch<SharedComponent>>& batches,
+        const ecs::component_value_t<SharedComponent>& value
+    ) {
+        for (size_t i = 0; i < batches.length(); ++i)
+        {
+            if (batches[i].value == value)
+                return i;
+        }
+
+        return Entity::N_POS;
+    }
+
+    template <typename SharedComponent>
+    ArrayList<SharedSimulationBatch<SharedComponent>> group_simulation_entities_by_shared_component(
+        ECS& ecs,
+        const ArrayList<Entity>& entities
+    ) {
+        ArrayList<SharedSimulationBatch<SharedComponent>> batches;
+        auto sharedView = ecs.template view<SharedComponent>();
+        sharedView.each_entities(
+            entities,
+            [&](const Entity& entity, const ecs::component_value_t<SharedComponent>& shared)
+            {
+                const size_t batchIndex = find_shared_simulation_batch(batches, shared);
+                if (Entity::N_POS == batchIndex)
+                {
+                    SharedSimulationBatch<SharedComponent>& batch = batches.emplace(shared);
+                    batch.entities.append(entity);
+                    return;
+                }
+
+                batches[batchIndex].entities.append(entity);
+            }
+        );
+
+        return batches;
+    }
+
     template <
         typename Callable,
         typename DirtyComponents,
@@ -419,6 +471,7 @@ namespace ecs_sim
         Threadpool& pool,
         Callable& callable,
         type_list<Args...>,
+        type_list<> matchComponents,
         type_list<Tags...> tags,
         type_list<Excludes...> excludes
     )
@@ -429,7 +482,7 @@ namespace ecs_sim
         }
         else if constexpr (has_entity_arg_pack_v<Args...> || sizeof...(Tags) > 0 || sizeof...(Excludes) > 0)
         {
-            ArrayList<Entity> entities = simulation_entities_for(ecs, type_list<>{}, tags, excludes);
+            ArrayList<Entity> entities = simulation_entities_for(ecs, matchComponents, tags, excludes);
             const size_t touchedEntityCount = entities.length();
             auto dirtyState = begin_guaranteed_dirty_components(ecs, touchedEntityCount, DirtyComponents{});
             auto globalArguments = make_global_arguments<Args...>(ecs);
@@ -467,12 +520,73 @@ namespace ecs_sim
         }
     }
 
-    template <typename Callable, typename DirtyComponents, typename... Args, typename... Tags, typename... Excludes>
+    template <
+        typename Callable,
+        typename DirtyComponents,
+        typename... Args,
+        typename... MatchComponents,
+        typename... Tags,
+        typename... Excludes
+    >
+    void run_no_component_job(
+        ECS& ecs,
+        Threadpool& pool,
+        Callable& callable,
+        type_list<Args...>,
+        type_list<MatchComponents...> matchComponents,
+        type_list<Tags...> tags,
+        type_list<Excludes...> excludes
+    )
+        requires (sizeof...(MatchComponents) > 0)
+    {
+        ArrayList<Entity> entities = simulation_entities_for(ecs, matchComponents, tags, excludes);
+        const size_t touchedEntityCount = entities.length();
+        auto dirtyState = begin_guaranteed_dirty_components(ecs, touchedEntityCount, DirtyComponents{});
+        auto globalArguments = make_global_arguments<Args...>(ecs);
+        if (entities.empty())
+            return;
+
+        auto executor = [&](const Entity& entity)
+        {
+            invoke_for_entity<Callable, DirtyComponents, Args...>(
+                callable,
+                ecs,
+                entity,
+                dirtyState,
+                globalArguments
+            );
+        };
+
+        auto promise = pool.map<Entity, bool>(
+            std::function<bool(const Entity&)>([&](const Entity& entity)
+            {
+                executor(entity);
+                return true;
+            }),
+            &entities,
+            256
+        );
+
+        auto& result = promise.await();
+        if (result.is_failure())
+            std::rethrow_exception(result.exception());
+    }
+
+    template <
+        typename Callable,
+        typename DirtyComponents,
+        typename... Args,
+        typename... MatchComponents,
+        typename... Tags,
+        typename... Excludes
+    >
     void run_component_job(
         ECS& ecs,
         Threadpool& pool,
         Callable& callable,
         type_list<Args...> callableArgs,
+        type_list<>,
+        type_list<MatchComponents...> matchComponents,
         type_list<>,
         type_list<Tags...> tags,
         type_list<Excludes...> excludes
@@ -483,6 +597,7 @@ namespace ecs_sim
             pool,
             callable,
             callableArgs,
+            matchComponents,
             tags,
             excludes
         );
@@ -493,6 +608,7 @@ namespace ecs_sim
         typename DirtyComponents,
         typename... Args,
         typename... Components,
+        typename... MatchComponents,
         typename... Tags,
         typename... Excludes
     >
@@ -502,11 +618,13 @@ namespace ecs_sim
         Callable& callable,
         type_list<Args...>,
         type_list<Components...>,
+        type_list<MatchComponents...> matchComponents,
+        type_list<>,
         type_list<Tags...> tags,
         type_list<Excludes...> excludes
     )
     {
-        ArrayList<Entity> entities = simulation_entities_for(ecs, type_list<Components...>{}, tags, excludes);
+        ArrayList<Entity> entities = simulation_entities_for(ecs, matchComponents, tags, excludes);
         const size_t touchedEntityCount = entities.length();
         if (entities.empty())
             return;
@@ -531,21 +649,87 @@ namespace ecs_sim
         }, pool);
     }
 
+    template <
+        typename Callable,
+        typename DirtyComponents,
+        typename... Args,
+        typename... Components,
+        typename... MatchComponents,
+        typename SharedComponent,
+        typename... Tags,
+        typename... Excludes
+    >
+    void run_component_job(
+        ECS& ecs,
+        Threadpool& pool,
+        Callable& callable,
+        type_list<Args...>,
+        type_list<Components...>,
+        type_list<MatchComponents...> matchComponents,
+        type_list<SharedComponent>,
+        type_list<Tags...> tags,
+        type_list<Excludes...> excludes
+    )
+    {
+        ArrayList<Entity> entities = simulation_entities_for(ecs, matchComponents, tags, excludes);
+        const size_t touchedEntityCount = entities.length();
+        if (entities.empty())
+            return;
+
+        ArrayList<SharedSimulationBatch<SharedComponent>> batches =
+            group_simulation_entities_by_shared_component<SharedComponent>(ecs, entities);
+        if (batches.empty())
+            return;
+
+        auto dirtyState = begin_guaranteed_dirty_components(ecs, touchedEntityCount, DirtyComponents{});
+        auto globalArguments = make_global_arguments<Args...>(ecs);
+
+        auto promise = pool.map<SharedSimulationBatch<SharedComponent>, bool>(
+            std::function<bool(const SharedSimulationBatch<SharedComponent>&)>(
+                [&ecs, &callable, &dirtyState, &globalArguments](const SharedSimulationBatch<SharedComponent>& batch)
+                {
+                    auto view = ecs.template view<Components...>();
+                    view.set_dirty_tracking(false);
+                    view.each_entities(batch.entities, [&](const Entity& entity, ecs::component_value_t<Components>&... components)
+                    {
+                        auto componentTuple = std::forward_as_tuple(components...);
+                        invoke_for_entity_with_components<Callable, DirtyComponents>(
+                            ecs,
+                            callable,
+                            type_list<Args...>{},
+                            type_list<Components...>{},
+                            entity,
+                            componentTuple,
+                            dirtyState,
+                            globalArguments
+                        );
+                    });
+                    return true;
+                }
+            ),
+            &batches,
+            1
+        );
+
+        auto& result = promise.await();
+        if (result.is_failure())
+            std::rethrow_exception(result.exception());
+    }
+
     template <typename Callable, typename DirtyComponents, typename... Args>
     void run_job(ECS& ecs, Threadpool& pool, Callable& callable)
     {
-        using Components = component_list_t<Args...>;
-        using CallableArgs = callable_submit_arg_list_t<Args...>;
-        using Tags = tag_list_t<Args...>;
-        using Excludes = exclude_list_t<Args...>;
+        using Iteration = SimulationIterationTypes<Args...>;
         run_component_job<Callable, DirtyComponents>(
             ecs,
             pool,
             callable,
-            CallableArgs{},
-            Components{},
-            Tags{},
-            Excludes{}
+            typename Iteration::callable_args{},
+            typename Iteration::iteration_components{},
+            typename Iteration::match_components{},
+            typename Iteration::shared_components{},
+            typename Iteration::tags{},
+            typename Iteration::excludes{}
         );
     }
 

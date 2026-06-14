@@ -12,6 +12,7 @@
 #include "rendering/ecs_rendering.h"
 #include "rendering/uniform_registry.h"
 #include "structs/sparse_bit_field.h"
+#include "test/test_declarations.h"
 
 namespace
 {
@@ -274,14 +275,13 @@ namespace
 
         TestRenderer renderer;
         TestShader shader("position-shader");
-        rendering::ShaderBinding<Position> binding({"u_position"});
+        shader.bindComponent<Position>("u_position");
 
         rendering::queue_shader_rendering<Position, ecs::Tag<RenderableTag>>(
             processor,
             "draw-position",
             &renderer,
-            &shader,
-            binding
+            &shader
         );
 
         processor.simulate();
@@ -314,14 +314,15 @@ namespace
 
         TestRenderer renderer;
         TestShader shader("multi-component-shader");
-        rendering::ShaderBinding<Position, Velocity> binding({"u_position", "u_velocity"});
+        shader
+            .bindComponent<Position>("u_position")
+            .bindComponent<Velocity>("u_velocity");
 
         rendering::queue_shader_rendering<Position, Velocity, ecs::Tag<RenderableTag>>(
             processor,
             "draw-position-velocity",
             &renderer,
-            &shader,
-            binding
+            &shader
         );
 
         processor.simulate();
@@ -1735,9 +1736,17 @@ int main()
         test_sparse_bit_field_tracks_sparse_pages();
         test_sparse_bit_field_packed_and_bitwise_operations();
         test_vulkan_uniform_registry_tracks_dirty_values();
+        test_shader_component_bindings_create_uploads();
+        test_shader_component_binding_redeclaration_updates_slot();
+        test_shader_component_upload_requires_binding();
         test_renderer_template_uploads_alias_value();
         test_queue_shader_rendering_uploads_filtered_render_components();
         test_queue_shader_rendering_uploads_multiple_components();
+        test_rendering_helper_uses_shader_owned_bindings();
+        test_rendering_helper_supports_shared_mesh_batches();
+        test_shared_render_jobs_group_by_unique_component();
+        test_shared_sim_jobs_group_by_shared_alias();
+        test_shared_render_jobs_require_only_one_shared_component();
         test_ecs_tags_track_entities_and_cleanup();
         test_tag_pool_keeps_dense_entities();
         test_entities_can_be_created_with_tags();
