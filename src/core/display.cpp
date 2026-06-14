@@ -66,6 +66,11 @@ bool GLFWDisplay::createGLFWDisplay()
     return m_window != nullptr;
 }
 
+GLFWwindow* GLFWDisplay::glfwWindow() const
+{
+    return m_window;
+}
+
 void GLFWDisplay::_set_internal_callbacks()
 {
     glfwSetWindowUserPointer(m_window, this);

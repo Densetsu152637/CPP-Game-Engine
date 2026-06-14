@@ -49,6 +49,13 @@ add_executable(CPPGameEngine
         src/logging/text_colour.cpp
         src/logging/logger.cpp
         src/rendering/uniform.h
+        src/rendering/uniform_registry.cpp
+        src/rendering/uniform_registry.h
+        src/rendering/shader.cpp
+        src/rendering/shader.h
+        src/rendering/renderer.cpp
+        src/rendering/renderer.h
+        src/rendering/ecs_rendering.h
         src/ecs/pools/component_pool.h
         src/interaction/keyboard.cpp
         src/interaction/keyboard.h
@@ -114,6 +121,12 @@ add_executable(CPPGameEngine
         src/ecs/processor.h
         src/structs/sparse_bit_field.cpp
         src/structs/sparse_bit_field.h
+        src/vulcan/vulkan_renderer.cpp
+        src/vulcan/vulkan_renderer.h
+        src/vulcan/vulkan_shader.cpp
+        src/vulcan/vulkan_shader.h
+        src/vulcan/vulkan_uniform_registry.cpp
+        src/vulcan/vulkan_uniform_registry.h
 )
 
 if(Vulkan_FOUND)
@@ -201,6 +214,13 @@ if(CPP_GAME_ENGINE_BUILD_TESTS)
             src/ecs/jobs/ecs_job_factory.h
             src/ecs/rendering/ecs_render_bridge.cpp
             src/ecs/rendering/ecs_render_bridge.h
+            src/rendering/renderer.cpp
+            src/rendering/renderer.h
+            src/rendering/ecs_rendering.h
+            src/rendering/uniform_registry.cpp
+            src/rendering/uniform_registry.h
+            src/rendering/shader.cpp
+            src/rendering/shader.h
             src/async/threadpool.cpp
             src/async/threadpool.h
             src/async/promise.h
@@ -208,6 +228,10 @@ if(CPP_GAME_ENGINE_BUILD_TESTS)
             src/functional/result.h
             src/structs/sparse_bit_field.cpp
             src/structs/sparse_bit_field.h
+            src/vulcan/vulkan_shader.cpp
+            src/vulcan/vulkan_shader.h
+            src/vulcan/vulkan_uniform_registry.cpp
+            src/vulcan/vulkan_uniform_registry.h
             src/logging/logger.cpp
             src/logging/logger.h
             src/logging/text_colour.cpp

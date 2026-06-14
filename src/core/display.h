@@ -72,6 +72,7 @@ public:
     GLFWDisplay& operator=(const GLFWDisplay&) = delete;
 
     bool createGLFWDisplay();
+    GLFWwindow* glfwWindow() const;
 
     bool createDisplay() override;
     void closeDisplay() override;

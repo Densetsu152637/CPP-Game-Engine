@@ -7,6 +7,10 @@
 #include "core/engine.h"
 #include "ecs/ecs.h"
 #include "ecs/processor.h"
+#include "rendering/ecs_rendering.h"
+
+#include <stdexcept>
+#include <utility>
 
 // simulation
 void movementSystem(Engine& engine, ECSProcessor& sim)
@@ -41,18 +45,24 @@ void dirtyCollisionSystemExample(Engine&, ECSProcessor& sim)
 }
 
 // rendering
-void entityRenderingExample(Engine&, ECSProcessor& sim)
+
+struct ExampleTag{};
+
+void entityRenderingExample(Engine&, ECSProcessor& sim, IRenderer* renderer, IShader* shader)
 {
-    sim.queue_into_rendering<Position3D>(
+    const rendering::ShaderBinding<Position3D, Velocity3D> binding(
+        {"position", "velocity"}
+    );
+
+    rendering::queue_shader_rendering<Position3D, Velocity3D, ecs::Shared<Mesh>, ecs::Tag<ExampleTag>>(
+        sim,
         "ENTITY_RENDERING_EXAMPLE",
-        [](const Position3D& position)
-        {
-            // do some kind of per-entity rendering here
-        }
+        renderer,
+        shader,
+        binding
     );
 }
 
-struct ExampleTag{};
 void entityRenderingWithTagExample(Engine&, ECSProcessor& sim)
 {
     sim.queue_into_rendering<Position3D, ecs::Tag<ExampleTag>>(
