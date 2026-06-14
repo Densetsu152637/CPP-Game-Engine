@@ -21,7 +21,7 @@ void movementSystem(Engine& engine, ECSProcessor& sim)
     );
 }
 
-void dirtyCollisionSystemExample(Engine& engine, ECSProcessor& sim)
+void dirtyCollisionSystemExample(Engine&, ECSProcessor& sim)
 {
     sim.queue_into_sim<ecs::Dirty<Position3D>, CollisionSurface, ecs::ViewOf<CollisionSurface>>(
         "COLLISION_SYSTEM_EXAMPLE",

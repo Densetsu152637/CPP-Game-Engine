@@ -162,7 +162,7 @@ void ECS::swapRenderBuffers()
 static void apply_entity_filter(
     const ECS& ecs,
     ArrayList<Entity>& entities,
-    const ecs::EntityFilter& filter,
+    const ecs::query_detail::EntityFilter& filter,
     const bool keepMatches
 ) {
     ArrayList<Entity> filtered(entities.length());
@@ -176,28 +176,34 @@ static void apply_entity_filter(
     entities = std::move(filtered);
 }
 
-ArrayList<Entity> ECS::filteredEntities(const ArrayList<ecs::EntityFilter>& filters) const
+ArrayList<Entity> ECS::filteredEntities(const ArrayList<ecs::query_detail::EntityFilter>& filters) const
 {
-    ArrayList<ecs::EntityFilter> includeFilters(filters.length());
-    ArrayList<ecs::EntityFilter> excludeFilters(filters.length());
+    ArrayList<ecs::query_detail::EntityFilter> includeFilters(filters.length());
+    ArrayList<ecs::query_detail::EntityFilter> excludeFilters(filters.length());
 
-    for (const ecs::EntityFilter& filter : filters)
+    for (const ecs::query_detail::EntityFilter& filter : filters)
     {
         if (nullptr == filter.matches)
             continue;
 
-        if (ecs::EntityFilterMode::Exclude == filter.mode)
+        if (ecs::query_detail::EntityFilterMode::Exclude == filter.mode)
             excludeFilters.append(filter);
         else
             includeFilters.append(filter);
     }
 
-    includeFilters.sort([](const ecs::EntityFilter& lhs, const ecs::EntityFilter& rhs)
+    includeFilters.sort([](
+        const ecs::query_detail::EntityFilter& lhs,
+        const ecs::query_detail::EntityFilter& rhs
+    )
     {
         return lhs.size < rhs.size;
     });
 
-    excludeFilters.sort([](const ecs::EntityFilter& lhs, const ecs::EntityFilter& rhs)
+    excludeFilters.sort([](
+        const ecs::query_detail::EntityFilter& lhs,
+        const ecs::query_detail::EntityFilter& rhs
+    )
     {
         return lhs.size < rhs.size;
     });
@@ -218,7 +224,7 @@ ArrayList<Entity> ECS::filteredEntities(const ArrayList<ecs::EntityFilter>& filt
             apply_entity_filter(*this, entities, includeFilters[filterIndex], true);
     }
 
-    for (const ecs::EntityFilter& filter : excludeFilters)
+    for (const ecs::query_detail::EntityFilter& filter : excludeFilters)
     {
         if (entities.empty())
             break;

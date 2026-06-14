@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <utility>
 
 struct Entity
 {
@@ -20,7 +21,29 @@ struct Entity
 
     explicit operator bool() const { return valid(); }
     bool valid() const { return index != N_POS; }
+
+    // Equality comparison (required for containers, identity checks)
+    bool operator==(const Entity& other) const noexcept
+    {
+        return index == other.index && version == other.version;
+    }
+
+    bool operator!=(const Entity& other) const noexcept { return !(*this == other); }
+
+    // Ordering comparison (required for sorting, map keys)
+    bool operator<(const Entity& other) const noexcept
+    {
+        if (index != other.index) return index < other.index;
+        return version < other.version;
+    }
+
+    bool operator>(const Entity& other) const noexcept { return other < *this; }
+    bool operator<=(const Entity& other) const noexcept { return !(*this > other); }
+    bool operator>=(const Entity& other) const noexcept { return !(*this < other); }
 };
+
+// Sentinel for invalid/null entity (EnTT-compatible naming)
+inline constexpr Entity INVALID_ENTITY{};
 
 struct EntityRecord
 {
