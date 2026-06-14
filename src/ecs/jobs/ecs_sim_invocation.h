@@ -319,34 +319,26 @@ namespace ecs_sim
         );
     }
 
-    template <typename... Tags>
-    bool entity_matches_tags(ECS& ecs, const Entity& entity, type_list<Tags...>)
+    template <typename... Components, typename... Tags, typename... Excludes>
+    ArrayList<Entity> simulation_entities_for(
+        ECS& ecs,
+        type_list<Components...>,
+        type_list<Tags...>,
+        type_list<Excludes...>
+    )
     {
-        if constexpr (0 == sizeof...(Tags))
-            return true;
-        else
-            return (ecs.template hasTag<Tags>(entity) && ...);
+        return ecs.template matchingEntities<Components..., ecs::Tag<Tags>..., Excludes...>();
     }
 
-    template <typename ViewT, typename... Tags>
-    size_t count_matching_view_entities(ECS& ecs, ViewT& view, type_list<Tags...> tags)
+    template <typename... Components, typename... Tags, typename... Excludes>
+    ArrayList<Entity> rendering_entities_for(
+        ECS& ecs,
+        type_list<Components...>,
+        type_list<Tags...>,
+        type_list<Excludes...>
+    )
     {
-        if constexpr (0 == sizeof...(Tags))
-        {
-            (void)ecs;
-            (void)tags;
-            return view.size();
-        }
-        else
-        {
-            size_t count = 0;
-            view.each([&](const Entity& entity, auto&...)
-            {
-                if (entity_matches_tags(ecs, entity, tags))
-                    ++count;
-            });
-            return count;
-        }
+        return ecs.template renderMatchingEntities<Components..., ecs::Tag<Tags>..., Excludes...>();
     }
 
     template <
@@ -421,31 +413,31 @@ namespace ecs_sim
         );
     }
 
-    template <typename Callable, typename DirtyComponents, typename... Args, typename... Tags>
+    template <typename Callable, typename DirtyComponents, typename... Args, typename... Tags, typename... Excludes>
     void run_no_component_job(
         ECS& ecs,
         Threadpool& pool,
         Callable& callable,
         type_list<Args...>,
-        type_list<Tags...> tags
+        type_list<Tags...> tags,
+        type_list<Excludes...> excludes
     )
     {
-        if constexpr (sizeof...(Args) == 0 && sizeof...(Tags) == 0)
+        if constexpr (sizeof...(Args) == 0 && sizeof...(Tags) == 0 && sizeof...(Excludes) == 0)
         {
             std::invoke(callable);
         }
-        else if constexpr (has_entity_arg_pack_v<Args...> || sizeof...(Tags) > 0)
+        else if constexpr (has_entity_arg_pack_v<Args...> || sizeof...(Tags) > 0 || sizeof...(Excludes) > 0)
         {
-            auto view = ecs.view<>();
-            view.set_dirty_tracking(false);
-            const size_t touchedEntityCount = count_matching_view_entities(ecs, view, tags);
+            ArrayList<Entity> entities = simulation_entities_for(ecs, type_list<>{}, tags, excludes);
+            const size_t touchedEntityCount = entities.length();
             auto dirtyState = begin_guaranteed_dirty_components(ecs, touchedEntityCount, DirtyComponents{});
             auto globalArguments = make_global_arguments<Args...>(ecs);
-            view.each_mt([&](const Entity& entity)
-            {
-                if (!entity_matches_tags(ecs, entity, tags))
-                    return;
+            if (entities.empty())
+                return;
 
+            auto executor = [&](const Entity& entity)
+            {
                 invoke_for_entity<Callable, DirtyComponents, Args...>(
                     callable,
                     ecs,
@@ -453,7 +445,21 @@ namespace ecs_sim
                     dirtyState,
                     globalArguments
                 );
-            }, pool);
+            };
+
+            auto promise = pool.map<Entity, bool>(
+                std::function<bool(const Entity&)>([&](const Entity& entity)
+                {
+                    executor(entity);
+                    return true;
+                }),
+                &entities,
+                256
+            );
+
+            auto& result = promise.await();
+            if (result.is_failure())
+                std::rethrow_exception(result.exception());
         }
         else
         {
@@ -461,14 +467,15 @@ namespace ecs_sim
         }
     }
 
-    template <typename Callable, typename DirtyComponents, typename... Args, typename... Tags>
+    template <typename Callable, typename DirtyComponents, typename... Args, typename... Tags, typename... Excludes>
     void run_component_job(
         ECS& ecs,
         Threadpool& pool,
         Callable& callable,
         type_list<Args...> callableArgs,
         type_list<>,
-        type_list<Tags...> tags
+        type_list<Tags...> tags,
+        type_list<Excludes...> excludes
     )
     {
         run_no_component_job<Callable, DirtyComponents>(
@@ -476,30 +483,40 @@ namespace ecs_sim
             pool,
             callable,
             callableArgs,
-            tags
+            tags,
+            excludes
         );
     }
 
-    template <typename Callable, typename DirtyComponents, typename... Args, typename... Components, typename... Tags>
+    template <
+        typename Callable,
+        typename DirtyComponents,
+        typename... Args,
+        typename... Components,
+        typename... Tags,
+        typename... Excludes
+    >
     void run_component_job(
         ECS& ecs,
         Threadpool& pool,
         Callable& callable,
         type_list<Args...>,
         type_list<Components...>,
-        type_list<Tags...> tags
+        type_list<Tags...> tags,
+        type_list<Excludes...> excludes
     )
     {
+        ArrayList<Entity> entities = simulation_entities_for(ecs, type_list<Components...>{}, tags, excludes);
+        const size_t touchedEntityCount = entities.length();
+        if (entities.empty())
+            return;
+
         auto view = ecs.view<Components...>();
         view.set_dirty_tracking(false);
-        const size_t touchedEntityCount = count_matching_view_entities(ecs, view, tags);
         auto dirtyState = begin_guaranteed_dirty_components(ecs, touchedEntityCount, DirtyComponents{});
         auto globalArguments = make_global_arguments<Args...>(ecs);
-        view.each_mt([&](const Entity& entity, ecs::component_value_t<Components>&... components)
+        view.each_entities_mt(entities, [&](const Entity& entity, ecs::component_value_t<Components>&... components)
         {
-            if (!entity_matches_tags(ecs, entity, tags))
-                return;
-
             auto componentTuple = std::forward_as_tuple(components...);
             invoke_for_entity_with_components<Callable, DirtyComponents>(
                 ecs,
@@ -520,13 +537,15 @@ namespace ecs_sim
         using Components = component_list_t<Args...>;
         using CallableArgs = callable_submit_arg_list_t<Args...>;
         using Tags = tag_list_t<Args...>;
+        using Excludes = exclude_list_t<Args...>;
         run_component_job<Callable, DirtyComponents>(
             ecs,
             pool,
             callable,
             CallableArgs{},
             Components{},
-            Tags{}
+            Tags{},
+            Excludes{}
         );
     }
 

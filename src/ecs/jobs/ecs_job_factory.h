@@ -16,7 +16,7 @@ namespace ecs_sim
     template <typename... Args>
     inline constexpr bool job_uses_internal_parallelism_v =
         has_entity_arg_pack_v<Args...> ||
-        has_tag_arg_pack_v<Args...> ||
+        has_filter_arg_pack_v<Args...> ||
         type_list_size_v<component_list_t<Args...>> > 0;
 
     template <typename Callable>
@@ -36,31 +36,32 @@ namespace ecs_sim
         run_job<Callable, DirtyComponents, Args...>(ecs, pool, context.callable);
     }
 
-    template <typename Callable, typename TagList, typename ComponentList>
+    template <typename Callable, typename TagList, typename ComponentList, typename ExcludeList>
     struct RenderJobExecutor;
 
-    template <typename Callable, typename... Tags, typename... Components>
-    struct RenderJobExecutor<Callable, type_list<Tags...>, type_list<Components...>>
+    template <typename Callable, typename... Tags, typename... Components, typename... Excludes>
+    struct RenderJobExecutor<Callable, type_list<Tags...>, type_list<Components...>, type_list<Excludes...>>
     {
         static void execute(void* rawContext, ECS& ecs, Threadpool& pool)
         {
             auto& context = *static_cast<JobContext<Callable>*>(rawContext);
-            auto view = ecs.render_view<Components...>();
-            view.each_mt([&](const Entity& entity, const ecs::component_value_t<Components>&... components)
-            {
-                if (!entity_matches_tags(ecs, entity, type_list<Tags...>{}))
-                    return;
+            ArrayList<Entity> entities = ecs.template renderMatchingEntities<Components..., ecs::Tag<Tags>..., Excludes...>();
+            if (entities.empty())
+                return;
 
+            auto view = ecs.render_view<Components...>();
+            view.each_entities_mt(entities, [&](const Entity&, const ecs::component_value_t<Components>&... components)
+            {
                 std::invoke(context.callable, components...);
             }, pool);
         }
     };
 
-    template <typename Callable, typename ComponentList, typename TagList>
+    template <typename Callable, typename ComponentList, typename TagList, typename ExcludeList>
     struct RenderJobFactory;
 
-    template <typename Callable, typename... Components, typename... Tags>
-    struct RenderJobFactory<Callable, type_list<Components...>, type_list<Tags...>>
+    template <typename Callable, typename... Components, typename... Tags, typename... Excludes>
+    struct RenderJobFactory<Callable, type_list<Components...>, type_list<Tags...>, type_list<Excludes...>>
     {
         template <typename SubmittedCallable>
         static RenderJob make(SubmittedCallable&& callable)
@@ -78,7 +79,12 @@ namespace ecs_sim
             job.context = std::make_shared<JobContext<Callable>>(
                 Callable(std::forward<SubmittedCallable>(callable))
             );
-            job.run = &RenderJobExecutor<Callable, type_list<Tags...>, type_list<Components...>>::execute;
+            job.run = &RenderJobExecutor<
+                Callable,
+                type_list<Tags...>,
+                type_list<Components...>,
+                type_list<Excludes...>
+            >::execute;
             return job;
         }
     };
@@ -132,7 +138,7 @@ namespace ecs_sim
     {
         static_assert(
             (... && is_supported_submit_arg_v<Args>),
-            "ECSProcessor submit arguments must be component types, Dirty<T>, ecs::Dirty<T>, ecs::ViewOf<T>, ecs::Tag<T>, or Entity"
+            "ECSProcessor submit arguments must be component types, Dirty<T>, ecs::Dirty<T>, ecs::ViewOf<T>, ecs::Tag<T>, ecs::Exclude<T>, or Entity"
         );
 
         using SubmittedArgs = type_list<Args...>;
@@ -155,14 +161,15 @@ namespace ecs_sim
     RenderJob make_render_job(Callable&& callable)
     {
         static_assert(
-            (... && (is_plain_component_arg_v<Args> || is_tag_arg_v<Args>)),
-            "ECSProcessor render arguments must be plain component types or ecs::Tag<T> filters"
+            (... && (is_plain_component_arg_v<Args> || is_tag_arg_v<Args> || is_exclude_arg_v<Args>)),
+            "ECSProcessor render arguments must be plain component types, ecs::Tag<T> filters, or ecs::Exclude<T> filters"
         );
 
         using DecayedCallable = std::decay_t<Callable>;
         using Components = component_list_t<Args...>;
         using Tags = tag_list_t<Args...>;
-        return RenderJobFactory<DecayedCallable, Components, Tags>::make(
+        using Excludes = exclude_list_t<Args...>;
+        return RenderJobFactory<DecayedCallable, Components, Tags, Excludes>::make(
             std::forward<Callable>(callable)
         );
     }

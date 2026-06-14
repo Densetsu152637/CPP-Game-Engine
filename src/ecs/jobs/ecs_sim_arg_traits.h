@@ -58,6 +58,17 @@ namespace ecs_sim
     inline constexpr bool is_tag_arg_v = is_tag_arg<std::remove_cvref_t<T>>::value;
 
     template <typename T>
+    struct is_exclude_arg : std::false_type
+    {};
+
+    template <typename T>
+    struct is_exclude_arg<ecs::Exclude<T>> : std::true_type
+    {};
+
+    template <typename T>
+    inline constexpr bool is_exclude_arg_v = is_exclude_arg<std::remove_cvref_t<T>>::value;
+
+    template <typename T>
     inline constexpr bool is_wrapped_component_arg_v =
         is_dirty_component_arg_v<T>;
 
@@ -66,6 +77,7 @@ namespace ecs_sim
         !is_entity_arg_v<T> &&
         !is_view_of_v<T> &&
         !is_tag_arg_v<T> &&
+        !is_exclude_arg_v<T> &&
         !is_wrapped_component_arg_v<T>;
 
     template <typename T>
@@ -83,6 +95,7 @@ namespace ecs_sim
         is_entity_arg_v<T> ||
         is_view_of_v<T> ||
         is_tag_arg_v<T> ||
+        is_exclude_arg_v<T> ||
         is_component_submit_arg_v<T>;
 
     template <typename T>
@@ -97,6 +110,12 @@ namespace ecs_sim
 
     template <typename... Components>
     struct component_for_arg<ecs::ViewOf<Components...>>
+    {
+        using type = void;
+    };
+
+    template <typename T>
+    struct component_for_arg<ecs::Exclude<T>>
     {
         using type = void;
     };
@@ -355,7 +374,7 @@ namespace ecs_sim
     struct collect_callable_submit_args<List, Arg, Rest...>
     {
         using next = std::conditional_t<
-            is_tag_arg_v<Arg>,
+            is_tag_arg_v<Arg> || is_exclude_arg_v<Arg>,
             List,
             typename push_type<List, Arg>::type
         >;
@@ -388,6 +407,30 @@ namespace ecs_sim
 
     template <typename... Args>
     using tag_list_t = typename collect_tags<type_list<>, Args...>::type;
+
+    template <typename List, typename... Args>
+    struct collect_excludes;
+
+    template <typename List>
+    struct collect_excludes<List>
+    {
+        using type = List;
+    };
+
+    template <typename List, typename Arg, typename... Rest>
+    struct collect_excludes<List, Arg, Rest...>
+    {
+        using CleanArg = std::remove_cvref_t<Arg>;
+        using next = std::conditional_t<
+            is_exclude_arg_v<CleanArg>,
+            typename push_unique_type<List, CleanArg>::type,
+            List
+        >;
+        using type = typename collect_excludes<next, Rest...>::type;
+    };
+
+    template <typename... Args>
+    using exclude_list_t = typename collect_excludes<type_list<>, Args...>::type;
 
     template <typename List, typename Arg>
     struct append_guaranteed_dirty_component
@@ -448,4 +491,11 @@ namespace ecs_sim
 
     template <typename... Args>
     inline constexpr bool has_tag_arg_pack_v = (... || is_tag_arg_v<Args>);
+
+    template <typename... Args>
+    inline constexpr bool has_exclude_arg_pack_v = (... || is_exclude_arg_v<Args>);
+
+    template <typename... Args>
+    inline constexpr bool has_filter_arg_pack_v =
+        has_tag_arg_pack_v<Args...> || has_exclude_arg_pack_v<Args...>;
 }

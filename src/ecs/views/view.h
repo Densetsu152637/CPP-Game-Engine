@@ -1615,6 +1615,27 @@ private:
             std::rethrow_exception(result.exception());
     }
 
+    template <typename Callable>
+    void each_entity_list_mt(
+        const ArrayList<Entity>& entities,
+        Threadpool& pool,
+        const size_t minChunk,
+        Callable&& callable
+    ) {
+        if (entities.empty())
+            return;
+
+        auto promise = pool.map<Entity, bool>(
+            make_mt_executor(std::forward<Callable>(callable)),
+            &entities,
+            minChunk
+        );
+
+        auto& result = promise.await();
+        if (result.is_failure())
+            std::rethrow_exception(result.exception());
+    }
+
 public:
     explicit View(ECS& ecs, const ViewStorage storage = ViewStorage::Simulation)
         : m_ecs(&ecs),
@@ -1720,6 +1741,33 @@ public:
             each_entity_mt(pool, minChunk, std::move(callableSeed));
         else
             each_component_mt(pool, minChunk, std::move(callableSeed));
+    }
+
+    template <typename Func>
+    void each_entities_mt(
+        const ArrayList<Entity>& entities,
+        Func&& func,
+        Threadpool& pool,
+        const size_t minChunk = 256
+    ) {
+        if (entities.empty() || !ensure_cache())
+            return;
+
+        using Callable = std::decay_t<Func>;
+        Callable callableSeed(std::forward<Func>(func));
+        each_entity_list_mt(entities, pool, minChunk, std::move(callableSeed));
+    }
+
+    template <typename Func>
+    void each_entities(const ArrayList<Entity>& entities, Func&& func)
+    {
+        if (entities.empty() || !ensure_cache())
+            return;
+
+        using Callable = std::decay_t<Func>;
+        Callable callableSeed(std::forward<Func>(func));
+        for (const Entity& entity : entities)
+            execute_mt_entity_callback(entity, callableSeed);
     }
 
     template <typename Func>

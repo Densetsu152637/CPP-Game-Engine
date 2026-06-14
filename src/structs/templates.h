@@ -45,6 +45,12 @@ namespace ecs
     };
 
     template <typename T>
+    struct Exclude
+    {
+        using filter_type = std::remove_cvref_t<T>;
+    };
+
+    template <typename T>
     struct tag_name
     {
         using type = std::remove_cvref_t<T>;
@@ -58,6 +64,21 @@ namespace ecs
 
     template <typename T>
     using tag_name_t = typename tag_name<std::remove_cvref_t<T>>::type;
+
+    template <typename T>
+    struct excluded_filter
+    {
+        using type = void;
+    };
+
+    template <typename T>
+    struct excluded_filter<Exclude<T>>
+    {
+        using type = std::remove_cvref_t<T>;
+    };
+
+    template <typename T>
+    using excluded_filter_t = typename excluded_filter<std::remove_cvref_t<T>>::type;
 
     template <typename... Components>
     struct ViewOf
@@ -74,3 +95,6 @@ namespace ecs
 
 template <typename T>
 using Dirty = ecs::Dirty<T>;
+
+template <typename T>
+using Exclude = ecs::Exclude<T>;
