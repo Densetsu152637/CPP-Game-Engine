@@ -122,6 +122,7 @@ namespace vulkan
           m_presentQueue(other.m_presentQueue),
           m_imageAvailableSemaphore(other.m_imageAvailableSemaphore),
           m_queueFamilies(other.m_queueFamilies),
+          m_memoryManager(std::move(other.m_memoryManager)),
           m_swapchain(std::move(other.m_swapchain)),
           m_currentFrame(other.m_currentFrame),
           m_info(other.m_info),
@@ -141,6 +142,7 @@ namespace vulkan
         other.m_presentQueue = {};
         other.m_imageAvailableSemaphore = {};
         other.m_queueFamilies = {};
+        other.m_memoryManager.reset();
         other.m_currentFrame = {};
         other.m_info = {};
         other.m_nextFrameIndex = 0;
@@ -164,6 +166,7 @@ namespace vulkan
         m_presentQueue = other.m_presentQueue;
         m_imageAvailableSemaphore = other.m_imageAvailableSemaphore;
         m_queueFamilies = other.m_queueFamilies;
+        m_memoryManager = std::move(other.m_memoryManager);
         m_swapchain = std::move(other.m_swapchain);
         m_currentFrame = other.m_currentFrame;
         m_info = other.m_info;
@@ -183,6 +186,7 @@ namespace vulkan
         other.m_presentQueue = {};
         other.m_imageAvailableSemaphore = {};
         other.m_queueFamilies = {};
+        other.m_memoryManager.reset();
         other.m_currentFrame = {};
         other.m_info = {};
         other.m_nextFrameIndex = 0;
@@ -363,6 +367,7 @@ namespace vulkan
 
         vkGetDeviceQueue(m_device, m_queueFamilies.graphicsFamily, 0, &m_graphicsQueue);
         vkGetDeviceQueue(m_device, m_queueFamilies.presentFamily, 0, &m_presentQueue);
+        m_memoryManager.initialize(m_physicalDevice, m_device);
         m_info.hasLogicalDevice = true;
 #else
         (void)config;
@@ -459,6 +464,7 @@ namespace vulkan
 
         destroyFrameSync();
         m_swapchain.reset();
+        m_memoryManager.reset();
 
         if (nullptr != m_device)
             vkDestroyDevice(m_device, nullptr);
@@ -479,6 +485,7 @@ namespace vulkan
         m_presentQueue = {};
         m_imageAvailableSemaphore = {};
         m_queueFamilies = {};
+        m_memoryManager.reset();
         m_currentFrame = {};
         m_info = {};
         m_pendingUniformWrites.clear();

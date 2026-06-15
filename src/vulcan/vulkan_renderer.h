@@ -23,6 +23,7 @@ using VkSemaphore = void*;
 #include "../rendering/renderer.h"
 #include "../rendering/render_frame.h"
 #include "vulkan_shader.h"
+#include "vulkan_memory.h"
 #include "vulkan_swapchain.h"
 
 namespace vulkan
@@ -59,6 +60,7 @@ namespace vulkan
         VkQueue m_presentQueue = {};
         VkSemaphore m_imageAvailableSemaphore = {};
         VulkanQueueFamilyIndices m_queueFamilies;
+        VulkanMemoryManager m_memoryManager;
         VulkanSwapchain m_swapchain;
         rendering::RenderFrame m_currentFrame;
         VulkanRendererInfo m_info {};
@@ -137,6 +139,12 @@ namespace vulkan
 
         const VulkanSwapchain& swapchain() const
         { return m_swapchain; }
+
+        VulkanMemoryManager& memoryManager()
+        { return m_memoryManager; }
+
+        const VulkanMemoryManager& memoryManager() const
+        { return m_memoryManager; }
 
         const ArrayList<rendering::ShaderUniformWrite>& pendingUniformWrites() const
         { return m_pendingUniformWrites; }

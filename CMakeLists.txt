@@ -55,6 +55,7 @@ add_executable(CPPGameEngine
         src/rendering/shader.h
         src/rendering/renderer.cpp
         src/rendering/renderer.h
+        src/rendering/gpu_buffer.h
         src/rendering/swapchain.h
         src/rendering/render_frame.h
         src/rendering/ecs_rendering.h
@@ -129,6 +130,8 @@ add_executable(CPPGameEngine
         src/structs/sparse_bit_field.h
         src/vulcan/vulkan_renderer.cpp
         src/vulcan/vulkan_renderer.h
+        src/vulcan/vulkan_memory.cpp
+        src/vulcan/vulkan_memory.h
         src/vulcan/vulkan_swapchain.cpp
         src/vulcan/vulkan_swapchain.h
         src/vulcan/vulkan_shader.cpp
@@ -239,6 +242,7 @@ if(CPP_GAME_ENGINE_BUILD_TESTS)
             src/ecs/rendering/ecs_render_bridge.h
             src/rendering/renderer.cpp
             src/rendering/renderer.h
+            src/rendering/gpu_buffer.h
             src/rendering/swapchain.h
             src/rendering/render_frame.h
             src/rendering/ecs_rendering.h

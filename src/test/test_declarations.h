@@ -3,6 +3,8 @@
 void test_sparse_bit_field_tracks_sparse_pages();
 void test_sparse_bit_field_packed_and_bitwise_operations();
 void test_vulkan_uniform_registry_tracks_dirty_values();
+void test_arraylist_serializes_for_gpu_buffers();
+void test_std_vector_serializes_for_gpu_buffers();
 void test_renderer_template_uploads_alias_value();
 void test_queue_shader_rendering_uploads_filtered_render_components();
 void test_queue_shader_rendering_uploads_multiple_components();

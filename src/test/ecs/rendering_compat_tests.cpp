@@ -1,6 +1,23 @@
 #include "test/ecs/ecs_test_fixtures.h"
 
+#include <cstdint>
+#include <typeindex>
+#include <vector>
+
+#include "rendering/gpu_buffer.h"
+
 using namespace ecs_test;
+
+namespace
+{
+    struct TestVertex
+    {
+        float x = 0.0f;
+        float y = 0.0f;
+        float z = 0.0f;
+        uint32_t colour = 0;
+    };
+}
 
 void test_vulkan_uniform_registry_tracks_dirty_values()
 {
@@ -31,6 +48,39 @@ void test_vulkan_uniform_registry_tracks_dirty_values()
         },
         "uniform registry accepted a write with the wrong byte size"
     );
+}
+
+void test_arraylist_serializes_for_gpu_buffers()
+{
+    ArrayList<TestVertex> vertices;
+    vertices.append(TestVertex{1.0f, 2.0f, 3.0f, 0xff00ff00u});
+    vertices.append(TestVertex{4.0f, 5.0f, 6.0f, 0xff0000ffu});
+
+    const rendering::SerializedBufferView view = rendering::serialized_buffer_view(vertices);
+
+    require(view.data == reinterpret_cast<const std::byte*>(vertices.ptr().ptr), "ArrayList GPU view did not point at contiguous storage");
+    require(view.byteSize == sizeof(TestVertex) * 2, "ArrayList GPU view had the wrong byte size");
+    require(view.elementCount == 2, "ArrayList GPU view had the wrong element count");
+    require(view.elementStride == sizeof(TestVertex), "ArrayList GPU view had the wrong stride");
+    require(view.elementType == std::type_index(typeid(TestVertex)), "ArrayList GPU view had the wrong element type");
+
+    auto* vertex = reinterpret_cast<const TestVertex*>(view.data);
+    require(vertex[1].z == 6.0f, "ArrayList GPU view did not preserve serialized bytes");
+}
+
+void test_std_vector_serializes_for_gpu_buffers()
+{
+    const std::vector<uint16_t> indices { 0, 1, 2, 2, 3, 0 };
+    const rendering::SerializedBufferView view = rendering::serialized_buffer_view(indices);
+
+    require(view.data == reinterpret_cast<const std::byte*>(indices.data()), "std::vector GPU view did not point at contiguous storage");
+    require(view.byteSize == sizeof(uint16_t) * indices.size(), "std::vector GPU view had the wrong byte size");
+    require(view.elementCount == indices.size(), "std::vector GPU view had the wrong element count");
+    require(view.elementStride == sizeof(uint16_t), "std::vector GPU view had the wrong stride");
+    require(view.elementType == std::type_index(typeid(uint16_t)), "std::vector GPU view had the wrong element type");
+
+    auto* index = reinterpret_cast<const uint16_t*>(view.data);
+    require(index[4] == 3, "std::vector GPU view did not preserve serialized bytes");
 }
 
 void test_renderer_template_uploads_alias_value()

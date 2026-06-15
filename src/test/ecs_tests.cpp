@@ -10,6 +10,8 @@ int main()
         test_sparse_bit_field_tracks_sparse_pages();
         test_sparse_bit_field_packed_and_bitwise_operations();
         test_vulkan_uniform_registry_tracks_dirty_values();
+        test_arraylist_serializes_for_gpu_buffers();
+        test_std_vector_serializes_for_gpu_buffers();
         test_shader_component_bindings_create_uploads();
         test_shader_component_binding_redeclaration_updates_slot();
         test_shader_component_upload_requires_binding();
