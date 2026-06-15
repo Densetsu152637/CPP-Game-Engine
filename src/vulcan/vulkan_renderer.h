@@ -13,15 +13,17 @@
 #include <vulkan/vulkan.h>
 #else
 using VkInstance = void*;
-using VkSurfaceKHR = void*;
-using VkPhysicalDevice = void*;
+using VkQueue = void*;
+using VkSemaphore = void*;
 #endif
 
 #include <GLFW/glfw3.h>
 
 #include "../structs/arraylist.h"
 #include "../rendering/renderer.h"
+#include "../rendering/render_frame.h"
 #include "vulkan_shader.h"
+#include "vulkan_swapchain.h"
 
 namespace vulkan
 {
@@ -31,27 +33,51 @@ namespace vulkan
         uint32_t applicationVersion = 1;
         bool enableValidationLayers = false;
         std::vector<const char*> extraInstanceExtensions;
+        std::vector<const char*> extraDeviceExtensions;
+        rendering::SwapchainConfig swapchain;
     };
 
     struct VulkanRendererInfo
     {
         uint32_t physicalDeviceCount = 0;
         bool hasSurface = false;
+        bool hasLogicalDevice = false;
+        bool hasSwapchain = false;
+        uint32_t graphicsQueueFamily = 0;
+        uint32_t presentQueueFamily = 0;
+        rendering::SwapchainInfo swapchain;
     };
 
-    class VulkanRenderer : public IRenderer
+    class VulkanRenderer : public IRenderer, public rendering::IRenderFrameCoordinator
     {
+        GLFWwindow* m_window = nullptr;
         VkInstance m_instance = {};
         VkSurfaceKHR m_surface = {};
         VkPhysicalDevice m_physicalDevice = {};
+        VkDevice m_device = {};
+        VkQueue m_graphicsQueue = {};
+        VkQueue m_presentQueue = {};
+        VkSemaphore m_imageAvailableSemaphore = {};
+        VulkanQueueFamilyIndices m_queueFamilies;
+        VulkanSwapchain m_swapchain;
+        rendering::RenderFrame m_currentFrame;
         VulkanRendererInfo m_info {};
         ArrayList<rendering::ShaderUniformWrite> m_pendingUniformWrites;
+        rendering::SwapchainConfig m_swapchainConfig;
+        uint64_t m_nextFrameIndex = 0;
         size_t m_renderCallCount = 0;
+        bool m_frameActive = false;
         bool m_initialized = false;
 
         void createInstance(const VulkanRendererConfig& config);
         void createSurface(GLFWwindow* window);
-        void pickPhysicalDevice();
+        void pickPhysicalDevice(const VulkanRendererConfig& config);
+        void createLogicalDevice(const VulkanRendererConfig& config);
+        void createSwapchain(const rendering::SwapchainConfig& config);
+        void recreateSwapchain();
+        void createFrameSync();
+        void destroyFrameSync();
+        bool framebufferReady() const;
 
     protected:
         bool uploadUniformImpl(
@@ -72,6 +98,16 @@ namespace vulkan
         void initialize(GLFWwindow* window, const VulkanRendererConfig& config = {});
         void shutdown();
 
+        bool beginRenderFrame() override;
+        void endRenderFrame() override;
+        void cancelRenderFrame() override;
+        void waitIdle() override;
+        const rendering::RenderFrame& currentFrame() const override
+        { return m_currentFrame; }
+
+        const rendering::SwapchainInfo& swapchainInfo() const override
+        { return m_info.swapchain; }
+
         bool initialized() const
         { return m_initialized; }
 
@@ -86,6 +122,21 @@ namespace vulkan
 
         VkPhysicalDevice physicalDevice() const
         { return m_physicalDevice; }
+
+        VkDevice device() const
+        { return m_device; }
+
+        VkQueue graphicsQueue() const
+        { return m_graphicsQueue; }
+
+        VkQueue presentQueue() const
+        { return m_presentQueue; }
+
+        const VulkanQueueFamilyIndices& queueFamilies() const
+        { return m_queueFamilies; }
+
+        const VulkanSwapchain& swapchain() const
+        { return m_swapchain; }
 
         const ArrayList<rendering::ShaderUniformWrite>& pendingUniformWrites() const
         { return m_pendingUniformWrites; }

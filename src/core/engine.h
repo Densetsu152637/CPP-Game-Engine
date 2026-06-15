@@ -8,6 +8,7 @@
 #include "interfaces.h"
 #include "../async/lock.h"
 #include "../ecs/ecs.h"
+#include "../rendering/render_frame.h"
 #include "../structs/arraylist.h"
 #include "../logging/logger.h"
 
@@ -20,6 +21,7 @@ class Engine
 
     ECSProcessor* m_simulator = nullptr;
     IDisplayManager* m_display = nullptr;
+    rendering::IRenderFrameCoordinator* m_renderFrameCoordinator = nullptr;
     Logger* m_logger = nullptr;
     Waiter m_finisher;
     std::atomic<bool> m_running = false;
@@ -46,6 +48,7 @@ public:
     Engine& setSimulator(ECSProcessor* sim);
     Engine& setLogger(Logger* logger);
     Engine& setDisplay(IDisplayManager* display);
+    Engine& setRenderFrameCoordinator(rendering::IRenderFrameCoordinator* coordinator);
     Engine& addEventListener(WindowEventListener* l);
     Engine& addPollable(IPollable* p);
     Engine& addStartupListener(const std::function<void()>& fn);

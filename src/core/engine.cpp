@@ -78,6 +78,9 @@ void Engine::run()
     logicThread.join();
     renderThread.join();
 
+    if (m_renderFrameCoordinator)
+        m_renderFrameCoordinator->waitIdle();
+
     for (auto& shutdownListener : m_shutdownListeners)
     {
         shutdownListener();
@@ -108,8 +111,28 @@ void Engine::logicAction() const
 
 void Engine::renderAction() const
 {
-    if (m_simulator)
-        m_simulator->render();
+    bool frameStarted = false;
+    if (m_renderFrameCoordinator)
+    {
+        frameStarted = m_renderFrameCoordinator->beginRenderFrame();
+        if (!frameStarted)
+            return;
+    }
+
+    try
+    {
+        if (m_simulator)
+            m_simulator->render();
+    }
+    catch (...)
+    {
+        if (frameStarted)
+            m_renderFrameCoordinator->cancelRenderFrame();
+        throw;
+    }
+
+    if (frameStarted)
+        m_renderFrameCoordinator->endRenderFrame();
 }
 
 Engine& Engine::setSimulator(ECSProcessor* sim)
@@ -127,6 +150,12 @@ Engine& Engine::setLogger(Logger* logger)
 Engine& Engine::setDisplay(IDisplayManager* display)
 {
     if (display) m_display = display;
+    return *this;
+}
+
+Engine& Engine::setRenderFrameCoordinator(rendering::IRenderFrameCoordinator* coordinator)
+{
+    if (coordinator) m_renderFrameCoordinator = coordinator;
     return *this;
 }
 
