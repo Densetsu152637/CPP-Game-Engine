@@ -8,6 +8,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include "vulkan_render_resources.h"
+
 namespace vulkan
 {
     namespace
@@ -107,14 +109,18 @@ namespace vulkan
 #endif
     }
 
+    VulkanRenderer::VulkanRenderer() = default;
+
     VulkanRenderer::~VulkanRenderer()
     {
         shutdown();
     }
 
     VulkanRenderer::VulkanRenderer(VulkanRenderer&& other) noexcept
-        : m_window(other.m_window),
+        : m_gpu(std::move(other.m_gpu)),
+          m_window(other.m_window),
           m_instance(other.m_instance),
+          m_validationCallback(std::exchange(other.m_validationCallback, {})),
           m_surface(other.m_surface),
           m_physicalDevice(other.m_physicalDevice),
           m_device(other.m_device),
@@ -157,8 +163,10 @@ namespace vulkan
             return *this;
 
         shutdown();
+        m_gpu = std::move(other.m_gpu);
         m_window = other.m_window;
         m_instance = other.m_instance;
+        m_validationCallback = std::exchange(other.m_validationCallback, {});
         m_surface = other.m_surface;
         m_physicalDevice = other.m_physicalDevice;
         m_device = other.m_device;
@@ -210,13 +218,21 @@ namespace vulkan
 
         m_window = window;
         m_swapchainConfig = config.swapchain;
-        createInstance(config);
-        createSurface(window);
-        pickPhysicalDevice(config);
-        createLogicalDevice(config);
-        createFrameSync();
-        createSwapchain(config.swapchain);
-        m_initialized = true;
+        try
+        {
+            createInstance(config);
+            createSurface(window);
+            pickPhysicalDevice(config);
+            createLogicalDevice(config);
+            createFrameSync();
+            createSwapchain(config.swapchain);
+            m_initialized = true;
+        }
+        catch (...)
+        {
+            shutdown();
+            throw;
+        }
 #else
         (void)window;
         (void)config;
@@ -230,6 +246,8 @@ namespace vulkan
         std::vector<const char*> extensions = glfw_required_instance_extensions();
         for (const char* extension : config.extraInstanceExtensions)
             append_unique_extension(extensions, extension);
+        if (config.validationCallback)
+            append_unique_extension(extensions, VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
 
         std::vector<const char*> validationLayers;
         if (config.enableValidationLayers)
@@ -251,6 +269,11 @@ namespace vulkan
 
         VkInstanceCreateInfo createInfo {};
         createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+        VkDebugReportCallbackCreateInfoEXT diagnostics { VK_STRUCTURE_TYPE_DEBUG_REPORT_CALLBACK_CREATE_INFO_EXT };
+        diagnostics.flags = VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT;
+        diagnostics.pfnCallback = config.validationCallback;
+        diagnostics.pUserData = config.validationUserData;
+        if (config.validationCallback) createInfo.pNext = &diagnostics;
         createInfo.pApplicationInfo = &appInfo;
         createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
         createInfo.ppEnabledExtensionNames = extensions.data();
@@ -259,6 +282,15 @@ namespace vulkan
 
         if (VK_SUCCESS != vkCreateInstance(&createInfo, nullptr, &m_instance))
             throw std::runtime_error("Failed to create Vulkan instance");
+        if (config.validationCallback)
+        {
+            const auto createCallback = reinterpret_cast<PFN_vkCreateDebugReportCallbackEXT>(
+                vkGetInstanceProcAddr(m_instance, "vkCreateDebugReportCallbackEXT"));
+            if (!createCallback)
+                throw std::runtime_error("Vulkan debug report extension is unavailable");
+            require_vk(createCallback(m_instance, &diagnostics, nullptr, &m_validationCallback),
+                "Create validation callback");
+        }
 #else
         (void)config;
 #endif
@@ -394,6 +426,7 @@ namespace vulkan
         );
         m_info.hasSwapchain = true;
         m_info.swapchain = m_swapchain.info();
+        m_gpu->createTargets(m_swapchain);
 #else
         (void)config;
 #endif
@@ -405,16 +438,22 @@ namespace vulkan
         if (nullptr == m_device)
             return;
 
-        vkDeviceWaitIdle(m_device);
-        if (!framebufferReady())
+        try
         {
+            require_vk(vkDeviceWaitIdle(m_device), "Wait before swapchain recreation");
+            destroyFrameSync();
             m_swapchain.reset();
             m_info.hasSwapchain = false;
             m_info.swapchain = {};
-            return;
+            createFrameSync();
+            if (framebufferReady())
+                createSwapchain(m_swapchainConfig);
         }
-
-        createSwapchain(m_swapchainConfig);
+        catch (...)
+        {
+            shutdown();
+            throw;
+        }
 #endif
     }
 
@@ -429,11 +468,14 @@ namespace vulkan
 
         if (VK_SUCCESS != vkCreateSemaphore(m_device, &createInfo, nullptr, &m_imageAvailableSemaphore))
             throw std::runtime_error("Failed to create Vulkan frame semaphore");
+        m_gpu = std::make_unique<GpuState>();
+        m_gpu->initialize(m_device, m_physicalDevice, m_queueFamilies.graphicsFamily);
 #endif
     }
 
     void VulkanRenderer::destroyFrameSync()
     {
+        m_gpu.reset();
 #ifdef CPP_GAME_ENGINE_USE_VULKAN
         if (nullptr != m_device && nullptr != m_imageAvailableSemaphore)
             vkDestroySemaphore(m_device, m_imageAvailableSemaphore, nullptr);
@@ -444,7 +486,7 @@ namespace vulkan
     bool VulkanRenderer::framebufferReady() const
     {
 #ifdef CPP_GAME_ENGINE_USE_VULKAN
-        if (nullptr == m_window)
+        if (nullptr == m_window || glfwGetWindowAttrib(m_window, GLFW_ICONIFIED))
             return false;
 
         int width = 0;
@@ -459,6 +501,17 @@ namespace vulkan
     void VulkanRenderer::shutdown()
     {
 #ifdef CPP_GAME_ENGINE_USE_VULKAN
+        if (m_device && m_frameActive && m_imageAvailableSemaphore)
+        {
+            // Acquisition can signal asynchronously. Consume it even when command
+            // recording failed, before destroying its semaphore/swapchain.
+            const VkPipelineStageFlags stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+            VkSubmitInfo release { VK_STRUCTURE_TYPE_SUBMIT_INFO };
+            release.waitSemaphoreCount = 1;
+            release.pWaitSemaphores = &m_imageAvailableSemaphore;
+            release.pWaitDstStageMask = &stage;
+            vkQueueSubmit(m_graphicsQueue, 1, &release, VK_NULL_HANDLE);
+        }
         if (nullptr != m_device)
             vkDeviceWaitIdle(m_device);
 
@@ -472,12 +525,20 @@ namespace vulkan
         if (nullptr != m_instance && nullptr != m_surface)
             vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
 
+        if (m_instance && m_validationCallback)
+        {
+            const auto destroyCallback = reinterpret_cast<PFN_vkDestroyDebugReportCallbackEXT>(
+                vkGetInstanceProcAddr(m_instance, "vkDestroyDebugReportCallbackEXT"));
+            if (destroyCallback) destroyCallback(m_instance, m_validationCallback, nullptr);
+        }
+
         if (nullptr != m_instance)
             vkDestroyInstance(m_instance, nullptr);
 #endif
 
         m_window = nullptr;
         m_instance = {};
+        m_validationCallback = {};
         m_surface = {};
         m_physicalDevice = {};
         m_device = {};
@@ -513,6 +574,8 @@ namespace vulkan
         if (!m_swapchain.valid())
             return false;
 
+        require_vk(vkWaitForFences(m_device, 1, &m_gpu->completed, VK_TRUE, UINT64_MAX), "Wait for frame completion");
+
         uint32_t imageIndex = 0;
         const VkResult result = vkAcquireNextImageKHR(
             m_device,
@@ -538,6 +601,17 @@ namespace vulkan
             true
         };
         m_frameActive = true;
+        m_pendingUniformWrites.clear();
+        m_gpu->suboptimal = result == VK_SUBOPTIMAL_KHR;
+        try
+        {
+            m_gpu->begin(m_swapchain, imageIndex);
+        }
+        catch (...)
+        {
+            shutdown();
+            throw;
+        }
         return true;
 #else
         throw std::runtime_error("Vulkan render frames require CPP_GAME_ENGINE_USE_VULKAN");
@@ -550,34 +624,47 @@ namespace vulkan
         if (!m_frameActive)
             throw std::logic_error("Cannot end a Vulkan render frame before one has begun");
 
-        VkSemaphore waitSemaphores[] = { m_imageAvailableSemaphore };
-        VkSwapchainKHR swapchains[] = { m_swapchain.handle() };
-        const uint32_t imageIndex = m_currentFrame.imageIndex;
-
-        VkPresentInfoKHR presentInfo {};
-        presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-        presentInfo.waitSemaphoreCount = 1;
-        presentInfo.pWaitSemaphores = waitSemaphores;
-        presentInfo.swapchainCount = 1;
-        presentInfo.pSwapchains = swapchains;
-        presentInfo.pImageIndices = &imageIndex;
-
-        const VkResult result = vkQueuePresentKHR(m_presentQueue, &presentInfo);
-        vkQueueWaitIdle(m_presentQueue);
-
-        m_currentFrame.active = false;
-        m_frameActive = false;
-
-        if (VK_ERROR_OUT_OF_DATE_KHR == result || VK_SUBOPTIMAL_KHR == result)
+        try
         {
-            destroyFrameSync();
-            createFrameSync();
-            recreateSwapchain();
-            return;
-        }
+            vkCmdEndRenderPass(m_gpu->command);
+            require_vk(vkEndCommandBuffer(m_gpu->command), "End command buffer");
+            const uint32_t imageIndex = m_currentFrame.imageIndex;
+            const VkSemaphore rendered = m_gpu->rendered.at(imageIndex);
+            const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            VkSubmitInfo submit { VK_STRUCTURE_TYPE_SUBMIT_INFO };
+            submit.waitSemaphoreCount = 1;
+            submit.pWaitSemaphores = &m_imageAvailableSemaphore;
+            submit.pWaitDstStageMask = &waitStage;
+            submit.commandBufferCount = 1;
+            submit.pCommandBuffers = &m_gpu->command;
+            submit.signalSemaphoreCount = 1;
+            submit.pSignalSemaphores = &rendered;
+            require_vk(vkResetFences(m_device, 1, &m_gpu->completed), "Reset frame fence");
+            require_vk(vkQueueSubmit(m_graphicsQueue, 1, &submit, m_gpu->completed), "Submit render commands");
+            m_frameActive = false; // The acquisition semaphore now belongs to this submission.
 
-        if (VK_SUCCESS != result)
-            throw std::runtime_error("Failed to present a Vulkan swapchain image");
+            const VkSwapchainKHR swapchain = m_swapchain.handle();
+            VkPresentInfoKHR presentInfo { VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
+            presentInfo.waitSemaphoreCount = 1;
+            presentInfo.pWaitSemaphores = &rendered;
+            presentInfo.swapchainCount = 1;
+            presentInfo.pSwapchains = &swapchain;
+            presentInfo.pImageIndices = &imageIndex;
+            const VkResult result = vkQueuePresentKHR(m_presentQueue, &presentInfo);
+            m_currentFrame.active = false;
+            m_frameActive = false;
+            if (VK_ERROR_OUT_OF_DATE_KHR == result || VK_SUBOPTIMAL_KHR == result ||
+                (VK_SUCCESS == result && m_gpu->suboptimal))
+                recreateSwapchain();
+            else
+                require_vk(result, "Present swapchain image");
+        }
+        catch (...)
+        {
+            // A failed submit may leave an unsignaled fence: never wait on it next frame.
+            shutdown();
+            throw;
+        }
 #else
         throw std::runtime_error("Vulkan render frames require CPP_GAME_ENGINE_USE_VULKAN");
 #endif
@@ -589,21 +676,15 @@ namespace vulkan
         if (!m_frameActive)
             return;
 
-        m_currentFrame.active = false;
-        m_frameActive = false;
-
         try
         {
-            if (nullptr != m_device)
-            {
-                vkDeviceWaitIdle(m_device);
-                destroyFrameSync();
-                createFrameSync();
-                recreateSwapchain();
-            }
+            // Discard the recorded draws, but consume the acquire semaphore and release
+            // the acquired image through a valid clear/submit/present cycle.
+            m_gpu->begin(m_swapchain, m_currentFrame.imageIndex);
+            endRenderFrame();
         }
         catch (...)
-        {}
+        { shutdown(); }
 #endif
     }
 
@@ -627,7 +708,17 @@ namespace vulkan
 
     void VulkanRenderer::renderImpl(rendering::IShader& shader)
     {
-        (void)shader;
+#ifdef CPP_GAME_ENGINE_USE_VULKAN
+        if (!m_initialized || !m_frameActive)
+            throw std::logic_error("Vulkan draws require an active render frame");
+        const auto* program = dynamic_cast<const VulkanShaderProgram*>(&shader);
+        if (!program)
+            throw std::invalid_argument("VulkanRenderer requires a VulkanShaderProgram");
+        m_gpu->draw(*program, m_memoryManager);
         ++m_renderCallCount;
+#else
+        (void)shader;
+        throw std::runtime_error("Vulkan draws require CPP_GAME_ENGINE_USE_VULKAN");
+#endif
     }
 }

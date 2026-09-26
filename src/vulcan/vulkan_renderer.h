@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -15,6 +16,7 @@
 using VkInstance = void*;
 using VkQueue = void*;
 using VkSemaphore = void*;
+using VkDebugReportCallbackEXT = void*;
 #endif
 
 #include <GLFW/glfw3.h>
@@ -33,6 +35,11 @@ namespace vulkan
         std::string applicationName = "CPPGameEngine";
         uint32_t applicationVersion = 1;
         bool enableValidationLayers = false;
+#ifdef CPP_GAME_ENGINE_USE_VULKAN
+        // Optional diagnostics callback, retained through initialization and shutdown.
+        PFN_vkDebugReportCallbackEXT validationCallback = nullptr;
+        void* validationUserData = nullptr;
+#endif
         std::vector<const char*> extraInstanceExtensions;
         std::vector<const char*> extraDeviceExtensions;
         rendering::SwapchainConfig swapchain;
@@ -51,8 +58,11 @@ namespace vulkan
 
     class VulkanRenderer : public IRenderer, public rendering::IRenderFrameCoordinator
     {
+        struct GpuState;
+        std::unique_ptr<GpuState> m_gpu;
         GLFWwindow* m_window = nullptr;
         VkInstance m_instance = {};
+        VkDebugReportCallbackEXT m_validationCallback = {};
         VkSurfaceKHR m_surface = {};
         VkPhysicalDevice m_physicalDevice = {};
         VkDevice m_device = {};
@@ -89,7 +99,7 @@ namespace vulkan
         void renderImpl(rendering::IShader& shader) override;
 
     public:
-        VulkanRenderer() = default;
+        VulkanRenderer();
         ~VulkanRenderer();
 
         VulkanRenderer(const VulkanRenderer&) = delete;
