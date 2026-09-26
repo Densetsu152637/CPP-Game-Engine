@@ -74,3 +74,6 @@ macOS and Wayland builds are not configured.
 
 See [ECS design](src/ecs/README.md), [Lua scripting](docs/scripting.md), and
 [Vulkan rendering](docs/vulkan.md) for API details and current rendering limits.
+For a proposed, dependency-ordered path from this engine to human-authored and
+AI-tool-authored projects, see the
+[human and AI tooling roadmap](docs/human-ai-tooling-roadmap.md).
