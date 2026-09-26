@@ -1,5 +1,7 @@
-# CLION
-*.idea
+# IDE
+.vscode/
+.idea/
+agents.md
 
 # Prerequisites
 *.d
