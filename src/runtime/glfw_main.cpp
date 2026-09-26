@@ -1,68 +1,41 @@
-//
-// Created by Nicholas on 01/05/26.
-//
-
 #ifdef CPP_GAME_ENGINE_USE_VULKAN
 #define GLFW_INCLUDE_VULKAN
 #endif
 #include <GLFW/glfw3.h>
-
 #include <stdexcept>
-#include <thread>
-
-#include "../core/engine.h"
+#include "glfw_main.h"
 #include "../core/display.h"
 
-void runEngine(Engine* e)
+void runEngine(Engine* engine)
 {
-    if (nullptr == e) return;
-    e->run();
+    if (engine) engine->run();
 }
 
 void glfw_main(Engine* engine, IDisplayManager* display, Logger* logger)
 {
-    // Init GLFW & engine / display
-    if (!glfwInit())
-        throw std::runtime_error("Failed to init GLFW");
-
-    if (!engine)
-        throw std::runtime_error("Failed to initialize engine: nullptr");
-
-    if (!display)
-        throw std::runtime_error("Failed to initialize display: nullptr");
-
-    // GLFW flags
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-
-    // Create window
-
-    if (!display->createDisplay())
+    if (!engine || !display) throw std::invalid_argument("glfw_main requires an engine and display");
+    if (!glfwInit()) throw std::runtime_error("Failed to initialize GLFW");
+    struct EventPoller final : IPollable
     {
+        void poll() override { glfwPollEvents(); }
+    } poller;
+    try
+    {
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+        initialiseMonitorEnvironment();
+        if (!display->createDisplay()) throw std::runtime_error("Failed to create GLFW display");
+        engine->setDisplay(display).setLogger(logger).addPollable(&poller);
+        // Polling, Lua mutation and frame coordination all remain on this thread.
+        engine->run();
+        engine->removePollable(&poller);
+        display->closeDisplay();
         glfwTerminate();
     }
-
-    initialiseMonitorEnvironment();
-    // create thread for running the engine
-    std::thread engineThread(runEngine, engine);
-
-    // Main thread loop
-    while ( !display->isClosed() )
+    catch (...)
     {
-        try
-        { glfwPollEvents(); }
-        catch (std::exception& e)
-        { logger->error(e); }
+        engine->removePollable(&poller);
+        display->closeDisplay();
+        glfwTerminate();
+        throw;
     }
-
-    // await engine to terminate when the window should close
-    engine->finishExecution();
-    try
-    { engineThread.join(); }
-    catch (std::exception& e)
-    { logger->error(e); }
-
-    display->closeDisplay();
-
-    // Cleanup
-    glfwTerminate();
 }

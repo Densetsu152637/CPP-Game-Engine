@@ -8,4 +8,4 @@
 
 void runEngine(Engine* e);
 
-void glfw_main(const Engine& engine);
+void glfw_main(Engine* engine, IDisplayManager* display, Logger* logger = nullptr);
