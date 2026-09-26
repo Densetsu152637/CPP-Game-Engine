@@ -70,3 +70,5 @@ void test_global_dirty_wrapper_matches_namespaced_dirty_wrapper();
 void test_structural_changes_are_deferred_until_wall_finishes();
 void test_deferred_destroy_and_component_removal_are_invisible_until_wall_finishes();
 void test_scheduler_logging();
+void test_entt_entity_generations_survive_reuse_and_clear();
+void test_entt_storage_growth_and_view_membership();

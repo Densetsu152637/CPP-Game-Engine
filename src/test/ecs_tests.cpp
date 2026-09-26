@@ -7,6 +7,8 @@ int main()
 {
     try
     {
+        test_entt_entity_generations_survive_reuse_and_clear();
+        test_entt_storage_growth_and_view_membership();
         test_sparse_bit_field_tracks_sparse_pages();
         test_sparse_bit_field_packed_and_bitwise_operations();
         test_vulkan_uniform_registry_tracks_dirty_values();

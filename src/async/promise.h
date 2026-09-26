@@ -48,7 +48,7 @@ public:
 
     void complete(Result<T>&& res);
     Result<T>& await();
-    void assert();
+    void assertReady();
 
     Promise<T> on_error(std::function<T(std::exception_ptr)> handler);
 
@@ -148,7 +148,7 @@ Result<T>& Promise<T>::await()
 }
 
 template <typename T>
-void Promise<T>::assert()
+void Promise<T>::assertReady()
 { await().get(); } // throws error if failed
 
 
