@@ -3,6 +3,11 @@
 .idea/
 agents.md
 
+# build directories
+build/
+*-build/
+*-build-*/
+
 # Prerequisites
 *.d
 
