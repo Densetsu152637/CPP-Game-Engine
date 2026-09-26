@@ -191,10 +191,18 @@ namespace vulkan
         VkMemoryAllocateInfo allocateInfo {};
         allocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         allocateInfo.allocationSize = requirements.size;
-        allocateInfo.memoryTypeIndex = findMemoryType(
-            requirements.memoryTypeBits,
-            to_vk_memory_properties(description.memoryUsage)
-        );
+        try
+        {
+            allocateInfo.memoryTypeIndex = findMemoryType(
+                requirements.memoryTypeBits,
+                to_vk_memory_properties(description.memoryUsage)
+            );
+        }
+        catch (...)
+        {
+            vkDestroyBuffer(m_device, buffer, nullptr);
+            throw;
+        }
 
         VkDeviceMemory memory = VK_NULL_HANDLE;
         if (VK_SUCCESS != vkAllocateMemory(m_device, &allocateInfo, nullptr, &memory))
@@ -228,7 +236,8 @@ namespace vulkan
         if (nullptr == vulkanBuffer)
             throw std::invalid_argument("VulkanMemoryManager can only write VulkanBuffer instances");
 
-        if (byteOffset + data.byteSize > vulkanBuffer->description().byteSize)
+        if (byteOffset > vulkanBuffer->description().byteSize ||
+            data.byteSize > vulkanBuffer->description().byteSize - byteOffset)
             throw std::out_of_range("Vulkan buffer write exceeds buffer size");
 
         if (vulkanBuffer->description().memoryUsage == rendering::GpuMemoryUsage::GpuOnly)

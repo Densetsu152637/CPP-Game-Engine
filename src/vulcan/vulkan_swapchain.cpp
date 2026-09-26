@@ -225,6 +225,8 @@ namespace vulkan
         createInfo.imageExtent = extent;
         createInfo.imageArrayLayers = 1;
         createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        if (!(support.capabilities.supportedUsageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT))
+            throw std::runtime_error("Vulkan surface does not support color attachments");
 
         const uint32_t queueFamilyIndices[] = {
             queueFamilies.graphicsFamily,
@@ -244,6 +246,16 @@ namespace vulkan
 
         createInfo.preTransform = support.capabilities.currentTransform;
         createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+        if (!(support.capabilities.supportedCompositeAlpha & createInfo.compositeAlpha))
+        {
+            for (const auto alpha : { VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
+                VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR, VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR })
+                if (support.capabilities.supportedCompositeAlpha & alpha)
+                {
+                    createInfo.compositeAlpha = alpha;
+                    break;
+                }
+        }
         createInfo.presentMode = presentMode;
         createInfo.clipped = VK_TRUE;
         createInfo.oldSwapchain = VK_NULL_HANDLE;
@@ -400,6 +412,8 @@ namespace vulkan
             throw std::invalid_argument("Cannot choose a Vulkan surface format from an empty list");
 
 #ifdef CPP_GAME_ENGINE_USE_VULKAN
+        if (formats.size() == 1 && formats.front().format == VK_FORMAT_UNDEFINED)
+            return { VK_FORMAT_B8G8R8A8_SRGB, formats.front().colorSpace };
         for (const VkSurfaceFormatKHR& format : formats)
         {
             if (format.format == VK_FORMAT_B8G8R8A8_SRGB

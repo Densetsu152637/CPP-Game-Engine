@@ -5,6 +5,7 @@
 #include "vulkan_shader.h"
 
 #include <stdexcept>
+#include <cstring>
 #include <utility>
 
 namespace vulkan
@@ -51,6 +52,13 @@ namespace vulkan
           m_entryPoint(source.entryPoint)
     {
         rendering::validateSpirvSource(source);
+        uint32_t magic = 0;
+        if (source.bytes.size() >= sizeof(uint32_t))
+            std::memcpy(&magic, source.bytes.data(), sizeof(magic));
+        if (source.bytes.size() < 5 * sizeof(uint32_t) || magic != 0x07230203u)
+            throw std::invalid_argument("Vulkan shader requires a complete SPIR-V header");
+        if (source.entryPoint.empty() || source.entryPoint.find('\0') != std::string::npos)
+            throw std::invalid_argument("Vulkan shader requires a valid entry point name");
 
 #ifdef CPP_GAME_ENGINE_USE_VULKAN
         if (nullptr == m_device)
@@ -59,7 +67,10 @@ namespace vulkan
         VkShaderModuleCreateInfo createInfo {};
         createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
         createInfo.codeSize = source.bytes.size();
-        createInfo.pCode = reinterpret_cast<const uint32_t*>(source.bytes.data());
+        // ShaderSource stores bytes; Vulkan requires an aligned array of 32-bit words.
+        std::vector<uint32_t> words(source.bytes.size() / sizeof(uint32_t));
+        std::memcpy(words.data(), source.bytes.data(), source.bytes.size());
+        createInfo.pCode = words.data();
 
         if (VK_SUCCESS != vkCreateShaderModule(m_device, &createInfo, nullptr, &m_module))
             throw std::runtime_error("Failed to create Vulkan shader module");
