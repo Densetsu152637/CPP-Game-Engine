@@ -49,5 +49,5 @@ public:
 
 private:
     struct Impl;
-    std::unique_ptr<Impl> m_impl;
+    std::shared_ptr<Impl> m_impl;
 };

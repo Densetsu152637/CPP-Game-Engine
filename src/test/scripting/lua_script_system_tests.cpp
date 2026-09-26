@@ -160,4 +160,75 @@ void test_lua_script_system_translates_native_exceptions()
     test::require(!loaded && loaded.error().find("logger unavailable") != std::string::npos,
         "native callback exceptions should become Lua lifecycle errors");
     test::require(scripts.shutdown().has_value(), "shutdown should remain safe after a native exception");
+
+    EngineScriptApi empty_error_api;
+    empty_error_api.log = [](std::string_view) { throw std::runtime_error(""); };
+    LuaScriptSystem empty_error_scripts(std::move(empty_error_api));
+    const auto empty_error = empty_error_scripts.load_string(
+        "return { on_create = function() engine.log('message') end }", "empty_native_exception");
+    test::require(!empty_error, "an empty native exception message must still become a Lua lifecycle error");
+}
+
+void test_lua_script_system_rejects_reentrant_lifecycle_changes()
+{
+    LuaScriptSystem* system = nullptr;
+    LuaScriptId target;
+    bool load_blocked = false;
+    bool update_blocked = false;
+    bool unload_blocked = false;
+    bool shutdown_blocked = false;
+    EngineScriptApi api;
+    api.log = [&](std::string_view)
+    {
+        if (!system) return;
+        const auto nested_load = system->load_string("return {}", "nested");
+        const auto nested_update = system->update(0.0f);
+        const auto nested_unload = system->unload(target);
+        const auto nested_shutdown = system->shutdown();
+        load_blocked = !nested_load && nested_load.error().find("during Lua execution") != std::string::npos;
+        update_blocked = !nested_update && nested_update.error().find("during Lua execution") != std::string::npos;
+        unload_blocked = !nested_unload && nested_unload.error().find("during Lua execution") != std::string::npos;
+        shutdown_blocked = !nested_shutdown && nested_shutdown.error().find("during script execution") != std::string::npos;
+    };
+
+    LuaScriptSystem scripts(std::move(api));
+    system = &scripts;
+    auto loaded = scripts.load_string("return { on_update = function() engine.log('reenter') end }", "reentrant");
+    test::require(loaded.has_value(), "reentrancy test script should load");
+    target = *loaded;
+    test::require(scripts.update(0.016f).has_value(), "outer update should finish when nested mutations are rejected");
+    test::require(load_blocked && update_blocked && unload_blocked && shutdown_blocked,
+        "load, update, unload, and shutdown should reject reentrant calls from native callbacks");
+    test::require(scripts.unload(target).has_value(), "script should remain valid for normal unload after callback");
+}
+
+void test_lua_script_system_guards_lua_close_finalizers()
+{
+    LuaScriptSystem* system = nullptr;
+    LuaScriptId target;
+    bool finalizer_ran = false;
+    bool lifecycle_calls_rejected = false;
+    EngineScriptApi api;
+    api.log = [&](std::string_view message)
+    {
+        if (message != "gc" || !system) return;
+        finalizer_ran = true;
+        const auto nested_load = system->load_string("return {}", "finalizer_nested");
+        const auto nested_update = system->update(0.0f);
+        const auto nested_unload = system->unload(target);
+        const auto nested_shutdown = system->shutdown();
+        lifecycle_calls_rejected = !nested_load && !nested_update && !nested_unload && nested_shutdown;
+    };
+
+    LuaScriptSystem scripts(std::move(api));
+    system = &scripts;
+    auto loaded = scripts.load_string(
+        "local finalizer = setmetatable({}, { __gc = function() engine.log('gc') end }); return { finalizer = finalizer }",
+        "close_finalizer");
+    test::require(loaded.has_value(), "finalizer test script should load");
+    target = *loaded;
+    test::require(scripts.shutdown().has_value(), "runtime should shut down through Lua close finalizers");
+    test::require(finalizer_ran, "Lua close should run the finalizer and invoke the native callback");
+    test::require(lifecycle_calls_rejected,
+        "finalizer callbacks should not reenter lifecycle operations on a closing runtime");
 }

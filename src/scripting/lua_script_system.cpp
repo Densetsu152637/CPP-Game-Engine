@@ -1,6 +1,8 @@
 #include "lua_script_system.h"
 
 #include <algorithm>
+#include <array>
+#include <cstring>
 #include <exception>
 #include <fstream>
 #include <limits>
@@ -24,7 +26,21 @@ struct LuaScriptSystem::Impl
     // Preserve load order for predictable update and teardown behavior.
     std::map<std::uint64_t, Script> scripts;
     std::uint64_t next_id = 1;
+    unsigned lua_execution_depth = 0;
     bool closed = false;
+
+    struct ExecutionScope
+    {
+        Impl& owner;
+        explicit ExecutionScope(Impl& impl) : owner(impl) { ++owner.lua_execution_depth; }
+        ~ExecutionScope() { --owner.lua_execution_depth; }
+    };
+
+    int protected_call(const int argument_count, const int result_count)
+    {
+        ExecutionScope scope(*this);
+        return lua_pcall(state, argument_count, result_count, 0);
+    }
 
     explicit Impl(EngineScriptApi services) : api(std::move(services))
     {
@@ -48,20 +64,29 @@ struct LuaScriptSystem::Impl
     {
         int result = 0;
         bool failed = false;
+        std::array<char, 512> error_message{};
         try { result = fn(); }
         catch (const std::exception& error)
         {
-            lua_pushstring(lua, error.what());
             failed = true;
+            const char* message = error.what();
+            const size_t length = std::min(std::strlen(message), error_message.size() - 1);
+            std::memcpy(error_message.data(), message, length);
         }
         catch (...)
         {
-            lua_pushliteral(lua, "native engine callback failed");
             failed = true;
+            constexpr char message[] = "native engine callback failed";
+            std::memcpy(error_message.data(), message, sizeof(message));
         }
-        // Raise only after C++ exception unwinding has completed. Keep Lua API calls out
-        // of the active catch scope because Lua may use longjmp for error handling.
-        return failed ? lua_error(lua) : result;
+        // Lua may use longjmp for errors, so raise after the caught exception unwinds.
+        // The remaining stack locals are trivially destructible.
+        if (failed)
+        {
+            lua_pushstring(lua, error_message.data());
+            return lua_error(lua);
+        }
+        return result;
     }
 
     static int log(lua_State* lua)
@@ -184,7 +209,7 @@ struct LuaScriptSystem::Impl
             return std::unexpected(std::string("script lifecycle member '") + method + "' must be a function");
         }
         if (arguments != 0) lua_pushnumber(state, delta);
-        if (lua_pcall(state, arguments, 0, 0) != LUA_OK)
+        if (protected_call(arguments, 0) != LUA_OK)
             return std::unexpected(std::string(method) + ": " + pop_error());
         return {};
     }
@@ -210,7 +235,7 @@ struct LuaScriptSystem::Impl
             return std::unexpected("Lua chunk has no environment upvalue");
         }
 
-        if (lua_pcall(state, 0, 1, 0) != LUA_OK)
+        if (protected_call(0, 1) != LUA_OK)
             return std::unexpected(pop_error());
         if (!lua_istable(state, -1))
         {
@@ -251,6 +276,9 @@ struct LuaScriptSystem::Impl
     Result close()
     {
         if (closed) return {};
+        // Mark the runtime unavailable before lua_close: Lua runs table __gc
+        // finalizers there, and native callbacks may reenter this object.
+        closed = true;
         std::string first_error;
         if (state)
         {
@@ -264,13 +292,12 @@ struct LuaScriptSystem::Impl
             lua_close(state);
             state = nullptr;
         }
-        closed = true;
         if (!first_error.empty()) return std::unexpected(std::move(first_error));
         return {};
     }
 };
 
-LuaScriptSystem::LuaScriptSystem(EngineScriptApi api) : m_impl(std::make_unique<Impl>(std::move(api)))
+LuaScriptSystem::LuaScriptSystem(EngineScriptApi api) : m_impl(std::make_shared<Impl>(std::move(api)))
 {
     if (!m_impl->state) throw std::runtime_error("failed to create Lua state");
 }
@@ -279,27 +306,38 @@ LuaScriptSystem::~LuaScriptSystem() = default;
 
 LuaScriptSystem::LoadResult LuaScriptSystem::load_file(const std::string& path)
 {
-    if (!m_impl || m_impl->closed) return std::unexpected("Lua runtime is shut down");
+    const auto impl = m_impl;
+    if (!impl || impl->closed) return std::unexpected("Lua runtime is shut down");
+    if (impl->lua_execution_depth != 0) return std::unexpected("cannot load scripts during Lua execution");
+    Impl::ExecutionScope execution(*impl);
     std::ifstream file(path, std::ios::binary);
     if (!file) return std::unexpected("unable to open Lua script: " + path);
     std::string source((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     if (file.bad()) return std::unexpected("unable to read Lua script: " + path);
-    return m_impl->load(source, "@" + path);
+    return impl->load(source, "@" + path);
 }
 
 LuaScriptSystem::LoadResult LuaScriptSystem::load_string(const std::string_view source, const std::string_view chunk_name)
 {
-    return m_impl ? m_impl->load(source, chunk_name) : LoadResult(std::unexpected("Lua runtime unavailable"));
+    const auto impl = m_impl;
+    if (!impl) return std::unexpected("Lua runtime unavailable");
+    if (impl->closed) return std::unexpected("Lua runtime is shut down");
+    if (impl->lua_execution_depth != 0) return std::unexpected("cannot load scripts during Lua execution");
+    Impl::ExecutionScope execution(*impl);
+    return impl->load(source, chunk_name);
 }
 
 LuaScriptSystem::Result LuaScriptSystem::update(const float delta_seconds)
 {
-    if (!m_impl || m_impl->closed) return std::unexpected("Lua runtime is shut down");
+    const auto impl = m_impl;
+    if (!impl || impl->closed) return std::unexpected("Lua runtime is shut down");
+    if (impl->lua_execution_depth != 0) return std::unexpected("cannot update scripts during Lua execution");
+    Impl::ExecutionScope execution(*impl);
     std::string first_error;
-    for (const auto& [id, script] : m_impl->scripts)
+    for (const auto& [id, script] : impl->scripts)
     {
         (void)id;
-        auto result = m_impl->call(script, "on_update", 1, delta_seconds);
+        auto result = impl->call(script, "on_update", 1, delta_seconds);
         if (!result && first_error.empty()) first_error = result.error();
     }
     if (!first_error.empty()) return std::unexpected(std::move(first_error));
@@ -308,11 +346,17 @@ LuaScriptSystem::Result LuaScriptSystem::update(const float delta_seconds)
 
 LuaScriptSystem::Result LuaScriptSystem::unload(const LuaScriptId id)
 {
-    if (!m_impl || m_impl->closed) return std::unexpected("Lua runtime is shut down");
-    return m_impl->remove(id);
+    const auto impl = m_impl;
+    if (!impl || impl->closed) return std::unexpected("Lua runtime is shut down");
+    if (impl->lua_execution_depth != 0) return std::unexpected("cannot unload scripts during Lua execution");
+    Impl::ExecutionScope execution(*impl);
+    return impl->remove(id);
 }
 
 LuaScriptSystem::Result LuaScriptSystem::shutdown()
 {
-    return m_impl ? m_impl->close() : Result{};
+    const auto impl = m_impl;
+    if (!impl) return {};
+    if (impl->lua_execution_depth != 0) return std::unexpected("cannot shut down Lua during script execution");
+    return impl->close();
 }
