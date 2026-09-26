@@ -541,13 +541,13 @@ public:
     ArrayList<Entity> renderMatchingEntities() const;
 
     template <typename T>
-    ArrayList<ecs::component_value_t<T>>& denseComponents();
+    auto denseComponents();
 
     template <typename T>
-    ArrayList<ecs::component_value_t<T>>& denseComponentsMut();
+    auto denseComponentsMut();
 
     template <typename T>
-    const ArrayList<ecs::component_value_t<T>>& denseComponents() const;
+    auto denseComponents() const;
 
     template <typename... Components>
     View<Components...> view();
@@ -1210,13 +1210,13 @@ ArrayList<Entity> ECS::renderMatchingEntities() const
 }
 
 template <typename T>
-ArrayList<ecs::component_value_t<T>>& ECS::denseComponents()
+auto ECS::denseComponents()
 {
     return denseComponentsMut<T>();
 }
 
 template <typename T>
-ArrayList<ecs::component_value_t<T>>& ECS::denseComponentsMut()
+auto ECS::denseComponentsMut()
 {
     if (nullptr != archetypePoolForComponent<T>())
         throw std::runtime_error("denseComponentsMut<T> is not supported for archetyped components");
@@ -1227,7 +1227,7 @@ ArrayList<ecs::component_value_t<T>>& ECS::denseComponentsMut()
 }
 
 template <typename T>
-const ArrayList<ecs::component_value_t<T>>& ECS::denseComponents() const
+auto ECS::denseComponents() const
 {
     if (nullptr != archetypePoolForComponent<T>())
         throw std::runtime_error("denseComponents<T> is not supported for archetyped components; use ecs::ViewOf<T>");

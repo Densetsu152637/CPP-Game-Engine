@@ -5,17 +5,19 @@
 #pragma once
 
 #include "entity.h"
+#include <entt/entity/registry.hpp>
 #include "../../structs/arraylist.h"
 
 class EntityRegistry
 {
     ArrayList<EntityRecord> m_records;
-    ArrayList<size_t> m_freeList;
+    entt::basic_registry<uint64_t> m_registry;
     size_t m_generation = 0;
+
+    void record(uint64_t entity, bool alive);
 
 public:
     Entity create();
-    Entity reserve();
     bool activateReserved(const Entity& entity);
     bool destroy(const Entity& entity);
     void clear();

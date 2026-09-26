@@ -26,9 +26,9 @@ class RenderComponentPool final : public IComponentPool
     friend ComponentPool<T>;
     friend BufferedComponentPool<T>;
     friend SharedComponentPool<T>;
-    friend SparseSet<T>;
+    friend ecs::EnTTStorage<T>;
 
-    Pair<SparseSet<T>> m_storage;
+    Pair<ecs::EnTTStorage<T>> m_storage;
     std::array<size_t, 2> m_roleToBuffer { READ_INDEX, WRITE_INDEX };
     std::atomic_bool m_shouldSwap = false;
     RenderPoolSyncMode m_pendingSyncMode = RenderPoolSyncMode::None;
@@ -42,6 +42,8 @@ public:
 
     const char* type_name() const override
     { return ecs::component_type_name<T>(); }
+
+    ecs::BackendSet& backend() { return readSet().backend(); }
 
     size_t size() const override
     { return readSet().size(); }
@@ -66,14 +68,12 @@ public:
         const bool changed = m_storage.at(READ_INDEX).contains(entityIndex)
             || m_storage.at(WRITE_INDEX).contains(entityIndex);
 
+        // Entity destruction invalidates both snapshots before EnTT can reuse
+        // the index. Component-only edits still publish through writeFrom().
+        readSet().erase(entityIndex);
         writeSet().erase(entityIndex);
-
         if (changed)
-        {
-            ArrayList<size_t> entity;
-            entity.append(entityIndex);
-            markPendingEntitySync(entity);
-        }
+            this->bumpGeneration();
     }
 
     void clear() override
@@ -88,16 +88,16 @@ public:
         m_shouldSwap.store(false, std::memory_order_release);
     }
 
-    SparseSet<T>& readSet()
+    ecs::EnTTStorage<T>& readSet()
     { return m_storage.at(read_index()); }
 
-    const SparseSet<T>& readSet() const
+    const ecs::EnTTStorage<T>& readSet() const
     { return m_storage.at(read_index()); }
 
-    SparseSet<T>& writeSet()
+    ecs::EnTTStorage<T>& writeSet()
     { return m_storage.at(write_index()); }
 
-    const SparseSet<T>& writeSet() const
+    const ecs::EnTTStorage<T>& writeSet() const
     { return m_storage.at(write_index()); }
 
     size_t entity_at(const size_t denseIndex) const
@@ -225,14 +225,14 @@ private:
     }
 
     template <typename Value>
-    T& emplaceInto(SparseSet<T>& destination, const size_t entityIndex, Value&& value)
+    T& emplaceInto(ecs::EnTTStorage<T>& destination, const size_t entityIndex, Value&& value)
     {
         T& component = destination.emplace(entityIndex, std::forward<Value>(value));
         component_pool_detail::bind_to_role_lookup(component, m_roleToBuffer.data());
         return component;
     }
 
-    void emplaceRenderCopy(SparseSet<T>& destination, const size_t entityIndex, const T& value)
+    void emplaceRenderCopy(ecs::EnTTStorage<T>& destination, const size_t entityIndex, const T& value)
     {
         if constexpr (ecs::is_buffered_component_v<T>)
             emplaceInto(destination, entityIndex, value.read());
@@ -240,7 +240,7 @@ private:
             emplaceInto(destination, entityIndex, value);
     }
 
-    void copyRenderSet(SparseSet<T>& destination, const SparseSet<T>& source)
+    void copyRenderSet(ecs::EnTTStorage<T>& destination, const ecs::EnTTStorage<T>& source)
     {
         destination.clear();
 
@@ -301,9 +301,9 @@ private:
         m_pendingSyncMode = RenderPoolSyncMode::None;
     }
 
-    void writeFullDirectFromSet(const SparseSet<T>& source)
+    void writeFullDirectFromSet(const ecs::EnTTStorage<T>& source)
     {
-        SparseSet<T>& storage = writeSet();
+        ecs::EnTTStorage<T>& storage = writeSet();
         storage.clear();
 
         for (size_t i = 0; i < source.size(); ++i)
@@ -312,9 +312,9 @@ private:
         markPendingFullSync();
     }
 
-    void writeDirtyDirectFromSet(const SparseSet<T>& source, const ArrayList<size_t>& dirtyEntities)
+    void writeDirtyDirectFromSet(const ecs::EnTTStorage<T>& source, const ArrayList<size_t>& dirtyEntities)
     {
-        SparseSet<T>& storage = writeSet();
+        ecs::EnTTStorage<T>& storage = writeSet();
 
         for (const size_t entityIndex : dirtyEntities)
         {
@@ -331,9 +331,9 @@ private:
 
     template <typename U = T>
         requires ecs::is_buffered_component_v<U>
-    void writeFullBufferedFromSet(const SparseSet<U>& source)
+    void writeFullBufferedFromSet(const ecs::EnTTStorage<U>& source)
     {
-        SparseSet<T>& storage = writeSet();
+        ecs::EnTTStorage<T>& storage = writeSet();
         storage.clear();
 
         for (size_t i = 0; i < source.size(); ++i)
@@ -344,9 +344,9 @@ private:
 
     template <typename U = T>
         requires ecs::is_buffered_component_v<U>
-    void writeDirtyBufferedFromSet(const SparseSet<U>& source, const ArrayList<size_t>& dirtyEntities)
+    void writeDirtyBufferedFromSet(const ecs::EnTTStorage<U>& source, const ArrayList<size_t>& dirtyEntities)
     {
-        SparseSet<T>& storage = writeSet();
+        ecs::EnTTStorage<T>& storage = writeSet();
 
         for (const size_t entityIndex : dirtyEntities)
         {
@@ -363,7 +363,7 @@ private:
 
     void writeFullSharedFromPool(const SharedComponentPool<T>& source)
     {
-        SparseSet<T>& storage = writeSet();
+        ecs::EnTTStorage<T>& storage = writeSet();
         storage.clear();
 
         for (size_t denseIndex = 0; denseIndex < source.size(); ++denseIndex)
@@ -376,7 +376,7 @@ private:
         const SharedComponentPool<T>& source,
         const ArrayList<size_t>& dirtyEntities
     ) {
-        SparseSet<T>& storage = writeSet();
+        ecs::EnTTStorage<T>& storage = writeSet();
 
         for (const size_t entityIndex : dirtyEntities)
         {
@@ -395,7 +395,7 @@ private:
         const ecs::IArchetypePool& archetypePool,
         const ecs::ComponentTypeId componentTypeId
     ) {
-        SparseSet<T>& storage = writeSet();
+        ecs::EnTTStorage<T>& storage = writeSet();
         storage.clear();
 
         for (size_t denseIndex = 0; denseIndex < archetypePool.size(); ++denseIndex)
@@ -414,7 +414,7 @@ private:
         const ecs::ComponentTypeId componentTypeId,
         const ArrayList<size_t>& dirtyEntities
     ) {
-        SparseSet<T>& storage = writeSet();
+        ecs::EnTTStorage<T>& storage = writeSet();
 
         for (const size_t entityIndex : dirtyEntities)
         {

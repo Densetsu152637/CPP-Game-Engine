@@ -13,6 +13,45 @@ The public entry points are:
 - `ecs::Alias<T, Tag>`, `ecs::BufferedAlias<T, Tag>`, and
   `ecs::SharedAlias<T, Tag>`: component alias wrappers used by engine code.
 
+## EnTT Backend
+
+The official EnTT dependency is pinned as the `third_party/entt` Git submodule.
+Initialize it with `git submodule update --init --recursive`.
+
+EnTT owns entity allocation and generation reuse (`entt::basic_registry<uint64_t>`),
+component object storage (`entt::basic_storage`), tag and grouped-component
+membership (`entt::basic_sparse_set`), and multi-component intersections
+(`entt::basic_runtime_view`). Component type IDs use EnTT's type index. Builds
+must define `ENTT_USE_ATOMIC` consistently for concurrent type registration.
+
+`EntityRegistry` is a compatibility adapter; it no longer implements a free
+list. Its records are an iteration snapshot, while validity checks consult EnTT.
+`Entity::packed()` / `Entity::fromPacked()` preserve the 32-bit index and 32-bit
+engine generation for script handles. Clearing an ECS retains EnTT generations,
+so old handles cannot revive when slots are reused.
+
+Component pools use standalone EnTT storages because simulation values, both
+render snapshots, and explicitly grouped tuple rows have different lifetimes.
+The registry owns entity identity; these storages own their component objects.
+They are intentionally private to the engine adapters rather than attached as
+ordinary components to that identity registry. Engine APIs validate handles and
+remove all memberships on destruction before an index can be reused. The
+`EnTTStorage` facade replaces the ECS's custom sparse/dense component maps,
+and EnTT views replace the manual multi-pool intersection implementation.
+
+The remaining pool/registry classes implement engine policies that EnTT does
+not supply: dirty transfer, double-buffer publication, shared-value interning,
+explicit tuple grouping and migration, structural deferral, and job scheduling.
+Shared-value pools intern a value once per equality group and keep the
+entity-to-group mapping in EnTT. The general-purpose `src/structs/sparse_set.h`
+and bit fields remain for non-ECS consumers; ECS storage no longer uses them.
+
+EnTT uses paged component storage. `denseComponents<T>()` therefore returns a
+lightweight range **by value**, not an `ArrayList&`; indexing and iteration still
+refer to the stored components. Insertion preserves standalone component
+addresses. Erasure, clear, and migration to explicit groups can invalidate
+references. View iteration order is unspecified.
+
 ## Component Types
 
 Components are normal C++ types. The project usually wraps them in alias types

@@ -106,7 +106,7 @@ class SimulationComponentPoolBase : public IComponentPool
 
 public:
     using value_type = T;
-    using dense_array_type = ArrayList<T>;
+    using dense_array_type = typename ecs::EnTTStorage<T>::template DenseRange<false>;
 
     SimulationComponentPoolBase() = default;
 
@@ -115,6 +115,8 @@ public:
 
     const char* type_name() const override
     { return ecs::component_type_name<T>(); }
+
+    ecs::BackendSet& backend() { return m_storage.backend(); }
 
     size_t size() const override
     { return m_storage.size(); }
@@ -198,10 +200,10 @@ public:
         return true;
     }
 
-    ArrayList<T>& dense()
+    auto dense()
     { return m_storage.dense(); }
 
-    const ArrayList<T>& dense() const
+    auto dense() const
     { return m_storage.dense(); }
 
     size_t dense_index_of(const size_t entityIndex) const
@@ -214,10 +216,10 @@ public:
     { throw std::runtime_error("Simulation component pools cannot write from another pool"); }
 
 protected:
-    SparseSet<T>& sourceSet()
+    ecs::EnTTStorage<T>& sourceSet()
     { return m_storage.set(); }
 
-    const SparseSet<T>& sourceSet() const
+    const ecs::EnTTStorage<T>& sourceSet() const
     { return m_storage.set(); }
 
 private:

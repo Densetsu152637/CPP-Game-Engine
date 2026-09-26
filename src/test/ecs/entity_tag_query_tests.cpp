@@ -140,3 +140,110 @@ void test_filtered_query_uses_tags_and_excludes()
     ecs.addTag<SelectedTag>(third);
     require(query.size() == 1, "filtered query cache did not invalidate after tag change");
 }
+
+void test_entt_entity_generations_survive_reuse_and_clear()
+{
+    ECS ecs;
+    const Entity original = ecs.createEntity();
+    require(Entity::fromPacked(original.packed()) == original, "entity handle did not round-trip");
+    require(!Entity::fromPacked(INVALID_ENTITY.packed()), "null handle did not round-trip");
+    ecs.emplaceComponent<Velocity>(original, 7);
+    ecs.addTag<RenderableTag>(original);
+    ecs.destroyEntity(original);
+    const Entity reused = ecs.createEntity();
+    require(reused.index == original.index, "EnTT did not recycle the destroyed entity index");
+    require(reused.version != original.version, "recycled entity retained its old generation");
+    require(!ecs.hasEntity(original), "destroyed handle became valid after index reuse");
+    require(!ecs.try_get<Velocity>(original), "destroyed handle exposed a component");
+    require(!ecs.hasComponent<Velocity>(reused), "new entity inherited a destroyed component");
+    require(!ecs.hasTag<RenderableTag>(reused), "new entity inherited a destroyed tag");
+    ecs.emplaceComponent<Velocity>(reused, 11);
+    ecs.destroyEntity(original);
+    require(ecs.hasEntity(reused), "stale destroy removed the recycled entity");
+    ecs.clear();
+    const Entity afterClear = ecs.createEntity();
+    require(!ecs.hasEntity(reused), "clear allowed a stale entity handle to revive");
+    require(!ecs.hasEntity(original), "clear reset the original entity generation");
+    require(ecs.hasEntity(afterClear), "entity created after clear was invalid");
+    require(ecs.view<>().size() == 1, "entity registry count was wrong after clear/reuse");
+
+    for (const bool grouped : {false, true})
+    {
+        Threadpool pool(1, std::string("entt-reuse-test"));
+        ECSProcessor processor(pool);
+        ECS& rendered = processor.ecs();
+        if (grouped) processor.registerRenderArchetype<Velocity, Health>();
+        processor.queue_into_rendering<Velocity>("retain-snapshot", [](const Velocity&) {});
+        const Entity published = rendered.createEntity();
+        rendered.emplaceComponent<Velocity>(published, 21);
+        processor.simulate();
+        processor.render();
+        require(rendered.render_view<Velocity>().size() == 1, "render snapshot was not published");
+        rendered.destroyEntity(published);
+        const Entity replacement = rendered.createEntity();
+        require(replacement.index == published.index, "render test did not exercise index reuse");
+        require(rendered.render_view<Velocity>().empty(), "recycled entity inherited an old render snapshot");
+    }
+}
+
+void test_entt_storage_growth_and_view_membership()
+{
+    ECS ecs;
+    const Entity first = ecs.createEntity();
+    auto* stable = &ecs.emplaceComponent<Velocity>(first, 1);
+    ArrayList<Entity> entities;
+    entities.append(first);
+    for (int i = 1; i < 2300; ++i)
+    {
+        const Entity entity = ecs.createEntity();
+        entities.append(entity);
+        ecs.emplaceComponent<Velocity>(entity, i + 1);
+        if (i % 2 == 0) ecs.emplaceComponent<Health>(entity, i);
+    }
+    require(ecs.try_get<Velocity>(first) == stable, "EnTT page growth invalidated a component address");
+    auto view = ecs.view<Velocity, Health>();
+    require(view.size() == 1149, "EnTT runtime view intersection had the wrong size");
+    ecs.removeComponent<Health>(entities[2]);
+    ecs.destroyEntity(entities[4]);
+    require(view.size() == 1147, "EnTT runtime view did not refresh removed memberships");
+    size_t count = 0;
+    view.each([&](const Entity& entity, const Velocity&, const Health&)
+    {
+        require(ecs.hasEntity(entity), "EnTT view emitted a destroyed entity");
+        require(entity != entities[2] && entity != entities[4], "EnTT view emitted a removed membership");
+        ++count;
+    });
+    require(count == 1147, "EnTT view iteration disagreed with its size");
+    auto dense = ecs.denseComponentsMut<Velocity>();
+    dense[0] = 37;
+    require(static_cast<int>(*ecs.try_get<Velocity>(first)) == 37, "paged dense range copied component values");
+    ecs.registerArchetype<Velocity, Health>();
+    require(view.size() == 1147, "migration to grouped EnTT rows changed the view intersection");
+
+    struct SharedKey {};
+    struct SharedPayload
+    {
+        int id;
+        bool operator==(const SharedPayload&) const = default;
+    };
+    using SharedValue = ecs::SharedAlias<SharedPayload, SharedKey>;
+    ECS shared;
+    const Entity a = shared.createEntity();
+    const Entity b = shared.createEntity();
+    const Entity c = shared.createEntity();
+    for (const Entity entity : {a, b, c})
+    {
+        shared.emplaceComponent<Health>(entity, static_cast<int>(entity.index));
+        shared.emplaceComponent<SharedValue>(entity, SharedPayload{static_cast<int>(entity.index) + 10});
+    }
+    auto cached = shared.view<Health, SharedValue>();
+    require(cached.size() == 3, "shared view was not cached");
+    shared.setComponent<SharedValue>(a, SharedValue(SharedPayload{99}));
+    cached.each([&](const Entity& entity, const Health& health, const SharedValue& value)
+    {
+        require(static_cast<int>(health) == static_cast<int>(entity.index), "cached health became mispaired");
+        require(value.id == (entity == a ? 99 : static_cast<int>(entity.index) + 10),
+            "shared reassignment changed the entity associated with a cached dense index");
+    });
+
+}

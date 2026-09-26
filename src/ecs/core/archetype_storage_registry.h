@@ -1,5 +1,5 @@
 //
-// User-declared archetype storage groups backed by sparse tuple rows.
+// Engine tuple grouping and dirty policy over EnTT-owned rows and memberships.
 //
 
 #pragma once
@@ -72,6 +72,7 @@ namespace ecs
     public:
         virtual ~IArchetypePool() = default;
         virtual const std::vector<ComponentTypeId>& componentTypes() const = 0;
+        virtual BackendSet& componentBackend(ComponentTypeId componentTypeId) = 0;
         virtual size_t size() const = 0;
         virtual size_t componentSize(ComponentTypeId componentTypeId) const = 0;
         virtual size_t componentEntityAt(ComponentTypeId componentTypeId, size_t componentDenseIndex) const = 0;
@@ -158,7 +159,7 @@ namespace ecs
         std::vector<ComponentTypeId> m_componentTypes =
             archetype_detail::component_ids_in_tuple_order<Components...>();
         std::array<size_t, COMPONENT_COUNT> m_presentCounts {};
-        std::array<ArrayList<size_t>, COMPONENT_COUNT> m_presentEntities {};
+        std::array<BackendSet, COMPONENT_COUNT> m_presentEntities {};
         std::array<ComponentPoolDirtyTracker, COMPONENT_COUNT> m_dirty {};
         mutable std::mutex m_dirtyMutex;
         size_t m_generation = 0;
@@ -271,6 +272,13 @@ namespace ecs
         const std::vector<ComponentTypeId>& componentTypes() const override
         { return m_componentTypes; }
 
+        BackendSet& componentBackend(const ComponentTypeId componentTypeId) override
+        {
+            const size_t index = componentIndex(componentTypeId);
+            if (N_POS == index) throw std::out_of_range("Archetype component does not exist");
+            return m_presentEntities[index];
+        }
+
         size_t size() const override
         { return m_storage.size(); }
 
@@ -285,10 +293,10 @@ namespace ecs
             const size_t componentDenseIndex
         ) const override {
             const size_t index = componentIndex(componentTypeId);
-            if (N_POS == index || componentDenseIndex >= m_presentEntities[index].length())
+            if (N_POS == index || componentDenseIndex >= m_presentEntities[index].size())
                 throw std::out_of_range("Archetype component dense index out of range");
 
-            return m_presentEntities[index][componentDenseIndex];
+            return m_presentEntities[index].data()[componentDenseIndex];
         }
 
         size_t generation() const override
@@ -327,7 +335,7 @@ namespace ecs
             {
                 row.present[index] = true;
                 ++m_presentCounts[index];
-                m_presentEntities[index].append(entityIndex);
+                m_presentEntities[index].push(entityIndex);
                 ++m_generation;
             }
 
@@ -387,9 +395,8 @@ namespace ecs
             if (N_POS == index || 0 == m_presentCounts[index])
                 return;
 
-            ArrayList<size_t> entities = m_presentEntities[index];
-            for (const size_t entityIndex : entities)
-                removeComponent(entityIndex, componentTypeId);
+            while (!m_presentEntities[index].empty())
+                removeComponent(m_presentEntities[index].data()[0], componentTypeId);
         }
 
         void eraseEntity(const size_t entityIndex) override
@@ -458,10 +465,10 @@ namespace ecs
             const size_t componentDenseIndex
         ) const override {
             const size_t index = componentIndex(componentTypeId);
-            if (N_POS == index || componentDenseIndex >= m_presentEntities[index].length())
+            if (N_POS == index || componentDenseIndex >= m_presentEntities[index].size())
                 return nullptr;
 
-            const Row* row = m_storage.try_get(m_presentEntities[index][componentDenseIndex]);
+            const Row* row = m_storage.try_get(m_presentEntities[index].data()[componentDenseIndex]);
             if (nullptr == row || !row->present[index])
                 return nullptr;
 

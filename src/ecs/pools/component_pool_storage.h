@@ -10,7 +10,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "../../structs/sparse_set.h"
+#include "../core/entt_storage.h"
 #include "../aliases/component_alias.h"
 
 constexpr int READ_INDEX = 0;
@@ -31,16 +31,18 @@ namespace component_pool_detail
 template <typename T>
 class SparseComponentStorage
 {
-    SparseSet<T> m_storage;
+    ecs::EnTTStorage<T> m_storage;
 
 public:
     using value_type = T;
 
-    SparseSet<T>& set()
+    ecs::EnTTStorage<T>& set()
     { return m_storage; }
 
-    const SparseSet<T>& set() const
+    const ecs::EnTTStorage<T>& set() const
     { return m_storage; }
+
+    ecs::BackendSet& backend() { return m_storage.backend(); }
 
     size_t size() const
     { return m_storage.size(); }
@@ -81,10 +83,10 @@ public:
     const T& dense_at(const size_t denseIndex) const
     { return m_storage.dense_at(denseIndex); }
 
-    ArrayList<T>& dense()
+    auto dense()
     { return m_storage.dense_values(); }
 
-    const ArrayList<T>& dense() const
+    auto dense() const
     { return m_storage.dense_values(); }
 
     template <typename... Args>

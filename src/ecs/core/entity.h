@@ -22,6 +22,13 @@ struct Entity
     explicit operator bool() const { return valid(); }
     bool valid() const { return index != N_POS; }
 
+    // Stable, generation-bearing representation for scripting and serialization.
+    uint64_t packed() const noexcept
+    { return valid() ? (uint64_t{version} << 32) | static_cast<uint32_t>(index) : UINT64_MAX; }
+
+    static Entity fromPacked(const uint64_t value) noexcept
+    { return value == UINT64_MAX ? Entity{} : Entity{static_cast<uint32_t>(value), static_cast<uint32_t>(value >> 32)}; }
+
     // Equality comparison (required for containers, identity checks)
     bool operator==(const Entity& other) const noexcept
     {

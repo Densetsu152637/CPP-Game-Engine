@@ -7,7 +7,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "../../structs/page_set.h"
+#include "../core/entt_storage.h"
 #include "component_pool_base.h"
 
 template <typename T>
@@ -26,9 +26,7 @@ class SharedComponentPool final : public IComponentPool
     };
 
     ArrayList<SharedGroup> m_groups;
-    ArrayList<size_t> m_entities;
-    PaginatedSet<size_t> m_entityDenseIndex;
-    PaginatedSet<size_t> m_entityGroupIndex;
+    ecs::EnTTStorage<size_t> m_entityGroupIndex;
     mutable ArrayList<T> m_denseSnapshot;
     mutable bool m_denseSnapshotDirty = true;
 
@@ -48,10 +46,10 @@ public:
     { return ecs::component_type_name<T>(); }
 
     size_t size() const override
-    { return m_entities.length(); }
+    { return m_entityGroupIndex.size(); }
 
     bool contains(const size_t entityIndex) const
-    { return m_entityDenseIndex.contains(entityIndex); }
+    { return m_entityGroupIndex.contains(entityIndex); }
 
     bool containsEntity(const size_t entityIndex) const override
     { return contains(entityIndex); }
@@ -106,20 +104,17 @@ public:
 
         this->markEntityDirty(entityIndex);
         removeEntityFromCurrentGroup(entityIndex);
-        removeEntityDenseIndex(entityIndex);
         this->bumpGeneration();
         m_denseSnapshotDirty = true;
     }
 
     void clear() override
     {
-        if (!m_entities.empty())
+        if (!m_entityGroupIndex.empty())
             this->bumpGeneration();
 
         this->markDirty();
         m_groups.clear();
-        m_entities.clear();
-        m_entityDenseIndex.clear();
         m_entityGroupIndex.clear();
         m_denseSnapshot.clear();
         m_denseSnapshotDirty = false;
@@ -129,7 +124,7 @@ public:
     { return entityAt(denseIndex); }
 
     size_t entityAt(const size_t denseIndex) const override
-    { return m_entities[denseIndex]; }
+    { return m_entityGroupIndex.key_at(denseIndex); }
 
     T& dense_at(const size_t denseIndex)
     { return at(entityAt(denseIndex)); }
@@ -164,9 +159,10 @@ public:
 
     size_t dense_index_of(const size_t entityIndex) const
     {
-        const size_t* denseIndex = m_entityDenseIndex.try_get(entityIndex);
-        return nullptr == denseIndex ? N_POS : *denseIndex;
+        return m_entityGroupIndex.index_of(entityIndex);
     }
+
+    ecs::BackendSet& backend() { return m_entityGroupIndex.backend(); }
 
     void swapBuffers() override
     {}
@@ -188,12 +184,10 @@ private:
     {
         const bool existed = contains(entityIndex);
         if (existed)
-            removeEntityFromCurrentGroup(entityIndex);
-        else
-            appendEntityDenseIndex(entityIndex);
+            removeEntityFromCurrentGroup(entityIndex, false);
 
         const size_t groupIndex = ensureGroup(std::move(value));
-        m_entityGroupIndex.set(entityIndex, groupIndex);
+        m_entityGroupIndex.insert_or_assign(entityIndex, groupIndex);
         m_groups[groupIndex].entities.append(entityIndex);
 
         noteEntityMutation(entityIndex, !existed);
@@ -222,33 +216,7 @@ private:
         return groupIndex;
     }
 
-    void appendEntityDenseIndex(const size_t entityIndex)
-    {
-        m_entityDenseIndex.set(entityIndex, m_entities.length());
-        m_entities.append(entityIndex);
-    }
-
-    void removeEntityDenseIndex(const size_t entityIndex)
-    {
-        const size_t* denseIndexPtr = m_entityDenseIndex.try_get(entityIndex);
-        if (nullptr == denseIndexPtr)
-            return;
-
-        const size_t denseIndex = *denseIndexPtr;
-        const size_t lastIndex = m_entities.length() - 1;
-
-        if (denseIndex != lastIndex)
-        {
-            const size_t movedEntityIndex = m_entities[lastIndex];
-            m_entities[denseIndex] = movedEntityIndex;
-            m_entityDenseIndex.set(movedEntityIndex, denseIndex);
-        }
-
-        m_entities.pop();
-        m_entityDenseIndex.erase(entityIndex);
-    }
-
-    void removeEntityFromCurrentGroup(const size_t entityIndex)
+    void removeEntityFromCurrentGroup(const size_t entityIndex, const bool eraseMembership = true)
     {
         const size_t* groupIndexPtr = m_entityGroupIndex.try_get(entityIndex);
         if (nullptr == groupIndexPtr)
@@ -258,7 +226,10 @@ private:
         if (groupIndex < m_groups.length())
             removeEntityFromGroup(groupIndex, entityIndex);
 
-        m_entityGroupIndex.erase(entityIndex);
+        // Reassignment preserves EnTT membership and its dense index, so cached
+        // component views remain paired with the same entities.
+        if (eraseMembership)
+            m_entityGroupIndex.erase(entityIndex);
     }
 
     void removeEntityFromGroup(const size_t groupIndex, const size_t entityIndex)
@@ -278,7 +249,7 @@ private:
         {
             m_groups[groupIndex] = std::move(m_groups[lastIndex]);
             for (const size_t movedEntityIndex : m_groups[groupIndex].entities)
-                m_entityGroupIndex.set(movedEntityIndex, groupIndex);
+                m_entityGroupIndex.insert_or_assign(movedEntityIndex, groupIndex);
         }
 
         m_groups.pop();
@@ -290,9 +261,9 @@ private:
             return;
 
         m_denseSnapshot.clear();
-        m_denseSnapshot.reserve(m_entities.length());
-        for (const size_t entityIndex : m_entities)
-            m_denseSnapshot.append(at(entityIndex));
+        m_denseSnapshot.reserve(m_entityGroupIndex.size());
+        for (size_t index = 0; index < m_entityGroupIndex.size(); ++index)
+            m_denseSnapshot.append(at(entityAt(index)));
 
         m_denseSnapshotDirty = false;
     }

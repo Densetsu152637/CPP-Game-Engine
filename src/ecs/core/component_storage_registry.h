@@ -254,21 +254,11 @@ private:
 
         void eraseEntityFromAll(const size_t entityIndex)
         {
-            for (size_t poolIndex = 0; poolIndex < write().poolCount(); ++poolIndex)
-            {
-                ecs::IArchetypePool* writePool = write().poolAt(poolIndex);
-                const std::vector<ecs::ComponentTypeId> componentTypeIds = writePool->componentTypes();
-
-                for (const ecs::ComponentTypeId componentTypeId : componentTypeIds)
-                {
-                    const ecs::IArchetypePool* readPool = read().poolForComponent(componentTypeId);
-                    const bool presentInRead = nullptr != readPool && readPool->hasComponent(entityIndex, componentTypeId);
-                    const bool removedFromWrite = writePool->removeComponent(entityIndex, componentTypeId);
-
-                    if (presentInRead || removedFromWrite)
-                        markPendingEntitySync(componentTypeId, entityIndex);
-                }
-            }
+            // Destroyed entities must disappear from both snapshots before an
+            // index can be reused; publication remains buffered for live edits.
+            read().eraseEntityFromAll(entityIndex);
+            write().eraseEntityFromAll(entityIndex);
+            ++m_generation;
         }
 
         void clearPools()
