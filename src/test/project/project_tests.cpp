@@ -129,6 +129,12 @@ namespace
         auto nonFinite = project::loadProject(fixture.root / "project.json");
         test::require(!nonFinite, "out-of-range transform values should be rejected");
         requireCode(nonFinite.error(), "project.transform.position");
+        test::require(std::any_of(nonFinite.error().begin(), nonFinite.error().end(), [](const project::Diagnostic& diagnostic)
+        {
+            return diagnostic.code == "project.transform.position" &&
+                diagnostic.file == std::filesystem::path("scenes/main.json") &&
+                diagnostic.path == "entities[0].components.Transform.position[1]";
+        }), "transform diagnostic should identify its source file and exact field path");
 
         fixture.write("scenes/main.json", R"({"schema":1,"scene_id":"scene:main","entities":[{"id":"object:player","name":"Player","components":{"Transform":{"position":[0,1e999,0]}}}]})");
         auto outOfRangeJson = project::loadProject(fixture.root / "project.json");
