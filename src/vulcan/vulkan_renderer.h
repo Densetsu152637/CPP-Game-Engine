@@ -24,6 +24,7 @@ using VkDebugReportCallbackEXT = void*;
 #include "../structs/arraylist.h"
 #include "../rendering/renderer.h"
 #include "../rendering/render_frame.h"
+#include "../rendering/texture.h"
 #include "vulkan_shader.h"
 #include "vulkan_memory.h"
 #include "vulkan_swapchain.h"
@@ -171,6 +172,12 @@ namespace vulkan
             VulkanShaderProgram& shader,
             const rendering::SerializedBufferView& vertices,
             const rendering::VertexLayout& layout
+        );
+        void drawMesh(
+            VulkanShaderProgram& shader,
+            const rendering::SerializedBufferView& vertices,
+            const rendering::VertexLayout& layout,
+            const rendering::Texture2D& texture
         );
     };
 }

@@ -427,7 +427,7 @@ namespace vulkan
         );
         m_info.hasSwapchain = true;
         m_info.swapchain = m_swapchain.info();
-        m_gpu->createTargets(m_swapchain);
+        m_gpu->createTargets(m_swapchain, m_physicalDevice);
 #else
         (void)config;
 #endif
@@ -744,6 +744,35 @@ namespace vulkan
         (void)vertices;
         (void)layout;
         throw std::runtime_error("Vulkan mesh draws require CPP_GAME_ENGINE_USE_VULKAN");
+#endif
+    }
+
+    void VulkanRenderer::drawMesh(
+        VulkanShaderProgram& shader,
+        const rendering::SerializedBufferView& vertices,
+        const rendering::VertexLayout& layout,
+        const rendering::Texture2D& texture
+    ) {
+#ifdef CPP_GAME_ENGINE_USE_VULKAN
+        if (!m_initialized || !m_frameActive)
+            throw std::logic_error("Vulkan textured mesh draws require an active render frame");
+        if (vertices.empty() || nullptr == vertices.data || !layout.valid() ||
+            vertices.elementStride != layout.stride ||
+            vertices.elementCount > std::numeric_limits<uint32_t>::max() ||
+            vertices.elementCount > std::numeric_limits<size_t>::max() / layout.stride ||
+            vertices.byteSize != vertices.elementCount * layout.stride)
+            throw std::invalid_argument("Vulkan mesh data does not match its explicit vertex layout");
+        if (!texture.valid())
+            throw std::invalid_argument("Vulkan textures require complete row-major RGBA8 pixels");
+        m_gpu->draw(shader, m_memoryManager, &vertices, &layout, &texture,
+            m_graphicsQueue, m_queueFamilies.graphicsFamily);
+        ++m_renderCallCount;
+#else
+        (void)shader;
+        (void)vertices;
+        (void)layout;
+        (void)texture;
+        throw std::runtime_error("Vulkan textured mesh draws require CPP_GAME_ENGINE_USE_VULKAN");
 #endif
     }
 }

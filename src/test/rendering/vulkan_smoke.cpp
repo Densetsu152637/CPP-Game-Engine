@@ -1,5 +1,7 @@
 // Standalone GPU smoke test; requires compiled sample shaders and a Vulkan device.
 #include "vulcan/vulkan_renderer.h"
+#include "rendering/camera.h"
+#include "rendering/material.h"
 
 #include <array>
 #include <atomic>
@@ -39,6 +41,14 @@ namespace
     vulkan::VulkanShaderProgram makeMeshShader(const std::filesystem::path& directory)
     {
         vulkan::VulkanShaderProgram shader("mesh-smoke");
+        shader.addSpirv(rendering::ShaderStage::Vertex, directory / "mesh_textured.vert.spv");
+        shader.addSpirv(rendering::ShaderStage::Fragment, directory / "mesh_textured.frag.spv");
+        return shader;
+    }
+
+    vulkan::VulkanShaderProgram makeBufferMeshShader(const std::filesystem::path& directory)
+    {
+        vulkan::VulkanShaderProgram shader("mesh-buffer-smoke");
         shader.addSpirv(rendering::ShaderStage::Vertex, directory / "mesh.vert.spv");
         shader.addSpirv(rendering::ShaderStage::Fragment, directory / "triangle.frag.spv");
         return shader;
@@ -206,17 +216,22 @@ namespace
         bool visual)
     {
         std::array<float, 16> transform { 0.5f,0,0,0, 0,0.5f,0,0, 0,0,1,0, -0.4f,0,0,1 };
+        const rendering::CameraUniform camera;
         std::array<float, 4> color { 1,0.2f,0.1f,1 };
         auto shader = makeShader(directory);
         auto meshShader = makeMeshShader(directory);
-        const std::array<std::array<float, 3>, 3> meshVertices {{
-            {{0.0f, -0.6f, 0.0f}},
-            {{0.6f, 0.6f, 0.0f}},
-            {{-0.6f, 0.6f, 0.0f}}
+        auto bufferMeshShader = makeBufferMeshShader(directory);
+        const std::array<std::array<float, 5>, 3> meshVertices {{
+            {{0.0f, -0.6f, 0.0f, 0.5f, 1.0f}},
+            {{0.6f, 0.6f, 0.0f, 1.0f, 0.0f}},
+            {{-0.6f, 0.6f, 0.0f, 0.0f, 0.0f}}
         }};
         const auto meshView = rendering::serialized_buffer_view(meshVertices.data(), meshVertices.size());
-        const rendering::VertexLayout meshLayout { sizeof(float) * 3,
-            {{0, rendering::VertexAttributeFormat::Float3, 0}} };
+        const rendering::VertexLayout meshLayout { sizeof(float) * 5,
+            {{0, rendering::VertexAttributeFormat::Float3, 0},
+             {1, rendering::VertexAttributeFormat::Float2, sizeof(float) * 3}} };
+        const rendering::Texture2D albedo { 1, 1, {26, 179, 255, 255} };
+        const rendering::MaterialUniform material;
         std::vector<bool> drawn;
         VkSwapchainKHR trackedSwapchain = {};
         VkExtent2D trackedExtent = {};
@@ -239,18 +254,41 @@ namespace
             expectFailure([&] { renderer.beginRenderFrame(); });
             renderer.upload(shader, "transform", transform, frames, {0,0});
             renderer.upload(shader, "color", color, frames, {0,1});
+            renderer.upload(shader, "camera", camera, frames, {0,2});
             renderer.render(shader);
             // A mesh-backed draw shares uniform values through its own pipeline and buffer.
             transform[12] = 0.4f;
             color = {0.1f,0.7f,1,1};
             renderer.upload(meshShader, "transform", transform, frames, {0,0});
-            renderer.upload(meshShader, "color", color, frames, {0,1});
-            renderer.drawMesh(meshShader, meshView, meshLayout);
+            renderer.upload(meshShader, "material", material, frames, {0,1});
+            renderer.upload(meshShader, "camera", camera, frames, {0,2});
+            const rendering::Texture2D incompleteTexture { 1, 1, {0, 1, 2} };
+            expectFailure([&] { renderer.drawMesh(meshShader, meshView, meshLayout, incompleteTexture); });
+            renderer.drawMesh(meshShader, meshView, meshLayout, albedo);
+            // A farther red vertex-buffer draw must also lose to the textured mesh.
+            transform[12] = 0.4f;
+            transform[14] = 0.8f;
+            color = {1.0f,0.0f,0.0f,1};
+            renderer.upload(bufferMeshShader, "transform", transform, frames, {0,0});
+            renderer.upload(bufferMeshShader, "color", color, frames, {0,1});
+            renderer.upload(bufferMeshShader, "camera", camera, frames, {0,2});
+            renderer.drawMesh(bufferMeshShader, meshView, meshLayout);
+            transform[14] = 0.0f;
+            // A farther overlapping fragment must lose to the first draw's depth.
+            transform[12] = -0.4f;
+            transform[14] = 0.8f;
+            color = {0.1f,1.0f,0.1f,1};
+            renderer.upload(shader, "transform", transform, frames, {0,0});
+            renderer.upload(shader, "color", color, frames, {0,1});
+            renderer.upload(shader, "camera", camera, frames, {0,2});
+            renderer.render(shader);
+            transform[14] = 0.0f;
             if (frames == 2)
             {
                 auto temporary = makeShader(directory);
                 renderer.upload(temporary, "transform", transform, frames, {0,0});
                 renderer.upload(temporary, "color", color, frames, {0,1});
+                renderer.upload(temporary, "camera", camera, frames, {0,2});
                 renderer.render(temporary); // Destroy CPU shader before GPU submission.
             }
             if (frames == 3)

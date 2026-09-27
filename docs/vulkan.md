@@ -9,11 +9,17 @@ Builds without `VULKAN=1` retain backend-neutral shader and uniform support;
 attempting Vulkan initialization or drawing reports a disabled-backend error.
 
 The Vulkan backend records a render pass, binds a graphics pipeline and descriptor
-sets, draws three vertices, submits to the graphics queue, and presents the result.
-Each `render(shader, uploads)` call draws one procedural triangle. Vertex shaders
-must derive positions from `gl_VertexIndex`; there is currently no mesh or vertex
-layout API. The pipeline uses filled triangles, no culling, no depth testing, and
-an opaque color attachment. Viewport and scissor follow the swapchain extent.
+sets, submits to the graphics queue, and presents the result. `render(shader,
+uploads)` retains the procedural triangle used as a renderer smoke fixture.
+`drawMesh(shader, vertices, layout)` records a non-indexed triangle-list draw from
+explicit CPU vertex bytes. The layout supports `Float2`, `Float3`, and `Float4`
+attributes with caller-declared locations, stride, and offsets. Invalid layouts,
+device-limit violations, and data whose byte count does not match its stride are
+rejected. Vertex bytes are copied to a frame-owned host-visible vertex buffer.
+There is no index buffer, culling, blending, or mipmapping yet. Each swapchain
+image has a depth target; pipelines use depth test/write with `LESS`. The renderer
+chooses a supported D32 or D24 depth attachment format. Viewport and scissor follow
+the swapchain extent.
 
 Supply a `vulkan::VulkanShaderProgram` with exactly one SPIR-V vertex source and
 one SPIR-V fragment source. Compile GLSL before rendering (for example, with
@@ -22,26 +28,46 @@ for the fragment shader). GLSL text and compute/tessellation/geometry stages are
 rejected by this graphics path.
 
 Every entry in `shader.uniforms` becomes a uniform-buffer descriptor, visible to
-both vertex and fragment stages, at its declared set and binding. Descriptor
-arrays, samplers, storage buffers and push constants are not exposed by this API.
-Set gaps are supported; duplicate set/binding pairs, empty buffers and values
-exceeding device descriptor/range limits are rejected. The caller must match the
-SPIR-V descriptor interface and block byte layout, including std140 padding and
-matrix order. Uniform names are CPU-side identifiers, not shader reflection.
+both vertex and fragment stages, at its declared set and binding. Set gaps are
+supported; duplicate set/binding pairs, empty buffers and values exceeding device
+descriptor/range limits are rejected. The caller must match the SPIR-V descriptor
+interface and block byte layout, including std140 padding and matrix order.
+Uniform names are CPU-side identifiers, not shader reflection. The textured mesh
+overload adds one combined image sampler at set 0, binding 3; this binding is
+reserved for that draw. Other descriptor types, arrays, storage buffers and push
+constants are not exposed.
 
-The included triangle shaders expect a column-major 4x4 float matrix (64 bytes)
-at set 0 binding 0 and a four-float color (16 bytes) at set 0 binding 1. Bind those
-component values using `shader.bindComponent<T>(name, {set, binding})` or upload
-them explicitly through `renderer.upload(shader, name, value, frame, slot)`.
-Upload all statically used shader bindings before the first draw.
+The sample shaders use a column-major model matrix (64 bytes) at set 0 binding 0,
+a four-float `MaterialUniform::baseColor` (16 bytes) at set 0 binding 1, and a
+column-major view-projection `CameraUniform::viewProjection` matrix (64 bytes) at
+set 0 binding 2. Upload all statically used shader bindings before the first draw.
+Uniform values can be supplied through `shader.bindComponent<T>(name, {set,
+binding})` or `renderer.upload(shader, name, value, frame, slot)`. Components do not
+define GPU layouts: use the explicit camera/material uniform structs or pack other
+shader values into a matching GPU-side structure.
+
+`rendering::loadMeshAsset` reads the small `CGMESH 1` text format: one `vertex x y
+z u v` record per vertex, with a non-indexed triangle list, finite floats, and a
+maximum of 1,000,000 vertices. `MeshAsset::layout()` describes position at
+location 0 (`Float3`) and UV at location 1 (`Float2`).
+`rendering::loadTexturePpm` accepts ASCII PPM P3 with max value 255 and converts
+RGB pixels to opaque row-major RGBA8. The loader caps each dimension at 8192 and
+the image at 16,777,216 texels. Vulkan currently samples `R8G8B8A8_UNORM` with
+nearest filtering and repeat addressing. Texture bytes are uploaded synchronously
+when the draw is recorded and retained through frame completion; this simple path
+is intended for the first sample, not high-volume streaming.
+The authored sample stores `asset:player-mesh` at
+`examples/first-project/assets/player.mesh` and `asset:player-texture` at
+`examples/first-project/assets/player.ppm`.
 
 Each draw snapshots all current uniform bytes into its own coherent host-visible
 buffers and descriptor sets. Multiple entities using one shader in one frame
 therefore keep distinct transforms/colors, even after later uploads change the
 registry. Shader objects may be destroyed after their draw is recorded: GPU
-pipelines use a key containing source bytes, entry points and descriptor bindings,
-not a shader object's address. Pipelines are reused until swapchain recreation or
-shutdown. Changing a shader's source or descriptor bindings selects a new pipeline.
+pipelines use a key containing source bytes, entry points, descriptor bindings and
+vertex layout, not a shader object's address. Pipelines are reused until swapchain
+recreation or shutdown. Changing a shader's source, descriptor bindings, texture
+mode or vertex layout selects a new pipeline.
 
 There is one graphics frame in flight. A fence guards command-buffer and per-draw
 resource reuse; each swapchain image has its own presentation semaphore. Resize
@@ -62,7 +88,8 @@ test uses this callback to fail on any validation error, including resource leak
 On surfaces that support transfer-source usage and the sample SRGB formats, the
 smoke test also reacquires a tracked rendered image and reads it back with explicit
 GPU synchronization. It checks the separate orange/cyan triangles and clear
-background pixels, and writes `build/vulkan-readback.ppm`. Unsupported surfaces
+background pixels. Farther red/green overlays must fail the depth test and leave
+the foreground colors visible. The test writes `build/vulkan-readback.ppm`. Unsupported surfaces
 explicitly report that pixel verification was skipped.
 For visual inspection, run `build/debug-vk1/bin/VulkanSmoke` (add `.exe` on Windows)
 with `build/debug-vk1/shaders --validation --visual`. Each round holds the final

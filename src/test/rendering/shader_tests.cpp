@@ -2,7 +2,11 @@
 #include <string>
 
 #include "ecs/aliases/component_alias.h"
+#include "rendering/camera.h"
+#include "rendering/content.h"
 #include "rendering/gpu_buffer.h"
+#include "rendering/material.h"
+#include "rendering/texture.h"
 #include "test/rendering/rendering_test_fakes.h"
 #include "test/test_assertions.h"
 
@@ -82,4 +86,29 @@ void test_shader_component_upload_requires_binding()
     test::require(!positionColor.valid(), "duplicate vertex attribute locations were accepted");
     positionColor.attributes[1] = { 1, rendering::VertexAttributeFormat::Float4, sizeof(float) * 4 };
     test::require(!positionColor.valid(), "vertex attribute extending past the stride was accepted");
+    const rendering::CameraUniform camera;
+    test::require(camera.viewProjection[0] == 1.0f && camera.viewProjection[5] == 1.0f &&
+        camera.viewProjection[10] == 1.0f && camera.viewProjection[15] == 1.0f,
+        "camera uniform did not default to a column-major identity matrix");
+    const rendering::MaterialUniform material;
+    test::require(sizeof(material) == 16 && material.baseColor[3] == 1.0f,
+        "material uniform did not match a std140 vec4 tint");
+    rendering::Texture2D texture { 2, 1, {255, 0, 0, 255, 0, 255, 0, 255} };
+    test::require(texture.valid(), "valid row-major RGBA8 texture was rejected");
+    texture.rgba8.pop_back();
+    test::require(!texture.valid(), "RGBA8 texture with an incomplete texel was accepted");
+
+    const rendering::MeshAsset sampleMesh = rendering::loadMeshAsset(
+        "examples/first-project/assets/player.mesh");
+    test::require(sampleMesh.valid() && sampleMesh.vertices.size() == 3,
+        "first-project mesh asset did not load as one triangle");
+    test::require(sampleMesh.layout().valid() && sampleMesh.vertexData().elementStride == sizeof(rendering::MeshVertex),
+        "first-project mesh asset did not retain its explicit vertex layout");
+    const rendering::Texture2D sampleTexture = rendering::loadTexturePpm(
+        "examples/first-project/assets/player.ppm");
+    test::require(sampleTexture.valid() && sampleTexture.rgba8 == std::vector<uint8_t>({26, 179, 255, 255}),
+        "first-project PPM did not load into row-major RGBA8 pixels");
+    test::require_throws(
+        [] { (void)rendering::loadMeshAsset("examples/first-project/assets/missing.mesh"); },
+        "missing mesh asset did not report a loading error");
 }
