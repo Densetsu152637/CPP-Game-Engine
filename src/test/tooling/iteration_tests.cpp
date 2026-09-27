@@ -1,0 +1,232 @@
+#include "test/test_assertions.h"
+#include "tooling/iteration.h"
+
+#include <algorithm>
+#include <chrono>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <string>
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
+
+namespace
+{
+    struct TempDirectory
+    {
+        std::filesystem::path path = std::filesystem::temp_directory_path() /
+            ("cpp-game-engine-tooling-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        TempDirectory() { std::filesystem::create_directories(path); }
+        ~TempDirectory() { std::error_code ec; std::filesystem::remove_all(path, ec); }
+    };
+
+    void write(const std::filesystem::path& file, const std::string& value)
+    {
+        std::filesystem::create_directories(file.parent_path());
+        std::ofstream output(file, std::ios::binary);
+        output << value;
+        test::require(static_cast<bool>(output), "fixture file could not be written");
+    }
+
+    std::filesystem::path externalLink(const std::filesystem::path& link, const std::filesystem::path& target)
+    {
+        std::filesystem::create_directories(link.parent_path());
+#ifdef _WIN32
+        const DWORD flags = SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
+        if (CreateSymbolicLinkW(link.c_str(), target.c_str(), flags)) return link;
+        const DWORD linkError = GetLastError();
+        if (linkError != ERROR_PRIVILEGE_NOT_HELD && linkError != ERROR_INVALID_PARAMETER)
+            test::require(false, "security symlink fixture failed unexpectedly (error " + std::to_string(linkError) + ")");
+
+        // Windows may deny file-symlink creation to unprivileged processes. A directory
+        // junction exercises the same canonical escape checks without silently skipping coverage.
+        const auto junction = link.parent_path() / "external-link";
+        const std::wstring command = L"cmd.exe /d /s /c mklink /J \"" + junction.native() + L"\" \"" + target.parent_path().native() + L"\"";
+        const int result = _wsystem(command.c_str());
+        test::require(result == 0, "security junction fixture could not be created after file symlink permission denial");
+        return junction / target.filename();
+#else
+        std::error_code ec;
+        std::filesystem::create_symlink(target, link, ec);
+        test::require(!ec, "security symlink fixture could not be created: " + ec.message());
+        return link;
+#endif
+    }
+
+    void externalDirectoryLink(const std::filesystem::path& link, const std::filesystem::path& target)
+    {
+        std::filesystem::create_directories(link.parent_path());
+#ifdef _WIN32
+        const DWORD flags = SYMBOLIC_LINK_FLAG_DIRECTORY | SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
+        if (CreateSymbolicLinkW(link.c_str(), target.c_str(), flags)) return;
+        const DWORD linkError = GetLastError();
+        if (linkError != ERROR_PRIVILEGE_NOT_HELD && linkError != ERROR_INVALID_PARAMETER)
+            test::require(false, "cache directory-link fixture failed unexpectedly (error " + std::to_string(linkError) + ")");
+        const std::wstring command = L"cmd.exe /d /s /c mklink /J \"" + link.native() + L"\" \"" + target.native() + L"\"";
+        test::require(_wsystem(command.c_str()) == 0, "cache directory junction fixture could not be created");
+#else
+        std::error_code ec;
+        std::filesystem::create_directory_symlink(target, link, ec);
+        test::require(!ec, "cache directory symlink fixture could not be created: " + ec.message());
+#endif
+    }
+}
+
+void test_asset_index_is_deterministic_tracks_dependencies_and_roundtrips()
+{
+    TempDirectory temp;
+    const auto root = temp.path / "project";
+    write(root / "assets/scripts/main.lua", "require('helpers.move')\nreturn {}\n");
+    write(root / "assets/scripts/helpers/move.lua", "return {}\n");
+    write(root / "assets/shaders/main.vert", "#version 450\n#include \"common.glsl\"\n");
+    write(root / "assets/shaders/common.glsl", "const float scale = 1.0;\n");
+    project::Project project;
+    project.root = root;
+    project.assets.emplace("asset:main-script", project::Asset{"asset:main-script", "assets/scripts/main.lua", "script"});
+    project.assets.emplace("asset:move-module", project::Asset{"asset:move-module", "assets/scripts/helpers/move.lua", "script"});
+    project.assets.emplace("asset:main-shader", project::Asset{"asset:main-shader", "assets/shaders/main.vert", "shader"});
+    project.assets.emplace("asset:common-shader", project::Asset{"asset:common-shader", "assets/shaders/common.glsl", "shader"});
+    auto first = tooling::buildAssetIndex(project);
+    auto second = tooling::buildAssetIndex(project);
+    test::require(first && second, "asset index should build" + (first ? std::string{} : ": " + first.error().front().code + " " + first.error().front().message));
+    test::require(first->assets == second->assets, "asset index must be deterministic");
+    auto indexPath = tooling::writeAssetIndex(project, *first);
+    test::require(indexPath.has_value(), "asset index should write");
+    auto loaded = tooling::readAssetIndex(*indexPath);
+    test::require(loaded && loaded->assets == first->assets, "asset index should round-trip" + (loaded ? std::string{} : ": " + loaded.error().front().code + " " + loaded.error().front().message));
+    const auto script = std::find_if(first->assets.begin(), first->assets.end(), [](const auto& item) { return item.id == "asset:main-script"; });
+    test::require(script != first->assets.end() && script->dependencies.size() == 1, "Lua module dependency should be indexed");
+    const auto shader = std::find_if(first->assets.begin(), first->assets.end(), [](const auto& item) { return item.id == "asset:main-shader"; });
+    test::require(shader != first->assets.end() && shader->dependencies.size() == 1, "GLSL include dependency should be indexed");
+
+    project::Project renamed = project;
+    std::filesystem::rename(root / "assets/scripts/main.lua", root / "assets/scripts/renamed.lua");
+    renamed.assets.at("asset:main-script").path = "assets/scripts/renamed.lua";
+    const auto afterRename = tooling::buildAssetIndex(renamed);
+    test::require(afterRename && std::find_if(afterRename->assets.begin(), afterRename->assets.end(),
+        [](const auto& item) { return item.id == "asset:main-script" && item.path.filename() == "renamed.lua"; }) != afterRename->assets.end(),
+        "asset ID should remain stable when manifest path changes on rename");
+}
+
+void test_asset_index_rejects_shader_include_escape()
+{
+    TempDirectory temp;
+    const auto root = temp.path / "project";
+    write(root / "assets/shaders/main.vert", "#version 450\n#include \"../../../outside.glsl\"\n");
+    project::Project project;
+    project.root = root;
+    project.assets.emplace("asset:shader", project::Asset{"asset:shader", "assets/shaders/main.vert", "shader"});
+    const auto result = tooling::buildAssetIndex(project);
+    test::require(!result && result.error().front().code == "asset.dependency.outside_root",
+        "shader dependency outside project should fail with stable diagnostic");
+    const auto missingCompiler = tooling::validateShaders(root, temp.path / "missing-glslc.exe");
+    test::require(!missingCompiler && missingCompiler.error().front().code == "shader.compiler.missing",
+        "missing shader compiler should report a stable prerequisite diagnostic");
+}
+
+void test_lua_validation_compiles_without_executing_and_stages_only_valid_source()
+{
+    TempDirectory temp;
+    const auto file = temp.path / "script.lua";
+    write(file, "error('validation executed Lua')\nreturn {}\n");
+    test::require(tooling::validateLua(file).has_value(), "valid Lua must compile without running its top-level code");
+    auto candidate = tooling::stageScriptReload(file);
+    test::require(candidate && candidate->contents.find("validation executed Lua") != std::string::npos,
+        "valid replacement should be available as a staged candidate");
+    write(file, "function (\n");
+    auto invalid = tooling::stageScriptReload(file);
+    test::require(!invalid && invalid.error().front().code == "script.syntax.invalid",
+        "invalid replacement should leave the running script untouched and return a syntax diagnostic");
+}
+
+void test_project_template_package_and_runtime_lookup_are_root_scoped()
+{
+    TempDirectory temp;
+    const auto templateRoot = temp.path / "template";
+    write(templateRoot / "project.json", R"({"schema":1,"name":"Template","startup_scene":"scenes/main.json","assets":[{"id":"asset:main-script","path":"assets/scripts/main.lua","kind":"script"}]})");
+    write(templateRoot / "scenes/main.json", R"({"schema":1,"scene_id":"scene:main","entities":[{"id":"entity:player","name":"Player","components":{"Script":{"asset":"asset:main-script"}}}]})");
+    write(templateRoot / "assets/scripts/main.lua", "return {}\n");
+    const auto initialized = tooling::initializeProject(templateRoot, temp.path / "new-project");
+    test::require(initialized && std::filesystem::exists(*initialized / "project.json"), "template should initialize project");
+    const auto invalidTemplate = temp.path / "invalid-template";
+    write(invalidTemplate / "project.json", R"({"schema":1,"name":"Broken","startup_scene":"missing.json","assets":[]})");
+    auto rejected = tooling::initializeProject(invalidTemplate, temp.path / "rejected-project");
+    test::require(!rejected && !std::filesystem::exists(temp.path / "rejected-project"),
+        "invalid templates must fail before publishing a project destination");
+    project::Project project;
+    project.root = templateRoot;
+    project.manifest = "project.json";
+    project.scene.source = "scenes/main.json";
+    project.assets.emplace("asset:main-script", project::Asset{"asset:main-script", "assets/scripts/main.lua", "script"});
+    const auto runtime = temp.path / "engine.exe";
+    write(runtime, "engine fixture");
+    const auto package = tooling::packageProject(project, temp.path / "package", runtime);
+    test::require(package && std::filesystem::exists(*package / "bin" / runtime.filename()), "package should include runnable engine binary");
+    const auto script = tooling::locateRuntimeAsset(*package, "assets/scripts/main.lua");
+    test::require(script && std::filesystem::exists(*script), "runtime lookup should resolve package assets");
+    auto traversal = tooling::locateRuntimeAsset(*package, "../outside.lua");
+    test::require(!traversal && traversal.error().front().code == "runtime.asset.path.outside",
+        "runtime asset lookup must reject traversal");
+}
+
+void test_symlinked_assets_cannot_escape_project_or_package_roots()
+{
+    TempDirectory temp;
+    const auto root = temp.path / "project";
+    const auto sentinel = temp.path / "outside.lua";
+    write(sentinel, "return {}\n");
+    write(root / "project.json", "{}\n");
+    write(root / "scenes/main.json", "{}\n");
+    const auto externalAsset = externalLink(root / "assets/scripts/escape.lua", sentinel);
+    test::require(std::filesystem::is_regular_file(externalAsset), "external asset link fixture should resolve to sentinel file");
+    project::Project project;
+    project.root = root;
+    project.manifest = "project.json";
+    project.scene.source = "scenes/main.json";
+    project.assets.emplace("asset:escape", project::Asset{"asset:escape", externalAsset.lexically_relative(root), "script"});
+    auto index = tooling::buildAssetIndex(project);
+    test::require(!index && !index.error().empty(),
+        "asset index must reject a symlink to content outside the project");
+    const auto runtime = temp.path / "engine.exe";
+    write(runtime, "engine fixture");
+    const auto output = temp.path / "package";
+    auto packaged = tooling::packageProject(project, output, runtime);
+    test::require(!packaged && !std::filesystem::exists(output), "package must fail without publishing an external symlink target");
+
+    const auto packageRoot = temp.path / "runtime-package";
+    write(packageRoot / "assets/scripts/placeholder.lua", "return {}\n");
+    const auto externalRuntimeAsset = externalLink(packageRoot / "assets/scripts/linked.lua", sentinel);
+    auto resolved = tooling::locateRuntimeAsset(packageRoot, externalRuntimeAsset.lexically_relative(packageRoot));
+    test::require(!resolved && resolved.error().front().code == "runtime.asset.path.outside",
+        "runtime lookup must reject a symlink escaping its package root");
+}
+
+void test_derived_cache_rejects_external_directory_links()
+{
+    TempDirectory temp;
+    const auto root = temp.path / "project";
+    const auto outside = temp.path / "outside-cache";
+    write(root / "scripts/player.lua", "return {}\n");
+    std::filesystem::create_directories(outside);
+    project::Project project;
+    project.root = root;
+    project.assets.emplace("asset:player", project::Asset{"asset:player", "scripts/player.lua", "script"});
+    const auto index = tooling::buildAssetIndex(project);
+    test::require(index.has_value(), "fixture asset should index before cache redirection");
+    externalDirectoryLink(root / ".derived", outside);
+    const auto written = tooling::writeAssetIndex(project, *index);
+    test::require(!written && written.error().front().code == "derived.root.outside_root",
+        "asset index must reject an external derived-directory link");
+    test::require(!std::filesystem::exists(outside / "asset-index.json"), "asset index must not write through a cache link");
+
+    write(root / "assets/shaders/test.vert", "#version 450\nvoid main() {}\n");
+    const auto compiler = temp.path / "glslc.exe";
+    write(compiler, "unused compiler fixture");
+    const auto imported = tooling::importShaders(root, compiler);
+    test::require(!imported && imported.error().front().code == "derived.root.outside_root",
+        "shader import must reject an external derived-directory link");
+    test::require(!std::filesystem::exists(outside / "shaders"), "shader importer must not create cache data outside project");
+}
