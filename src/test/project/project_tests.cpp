@@ -5,6 +5,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 #include "project/project.h"
 #include "test/test_assertions.h"
@@ -21,9 +22,12 @@ namespace
             root = std::filesystem::temp_directory_path() / ("cpp-game-engine-project-test-" + std::to_string(nonce));
             std::filesystem::create_directories(root / "scenes");
             std::filesystem::create_directories(root / "scripts");
-            write("project.json", R"({"schema":1,"name":"Fixture","startup_scene":"scenes/main.json"})");
-            write("scenes/main.json", R"({"schema":1,"scene_id":"scene:main","entities":[{"id":"object:player","name":"Player","components":{"Transform":{"position":[0,0,0]},"Script":{"asset":"scripts/player.lua"}}}]})");
+            std::filesystem::create_directories(root / "assets");
+            write("project.json", R"({"schema":1,"name":"Fixture","startup_scene":"scenes/main.json","assets":[{"id":"asset:player-script","path":"scripts/player.lua","kind":"script"},{"id":"asset:player-mesh","path":"assets/player.mesh","kind":"mesh"},{"id":"asset:player-texture","path":"assets/player.ppm","kind":"texture"}]})");
+            write("scenes/main.json", R"({"schema":1,"scene_id":"scene:main","entities":[{"id":"object:player","name":"Player","components":{"Transform":{"position":[0,0,0]},"Script":{"asset":"asset:player-script"},"MeshRenderer":{"mesh":"asset:player-mesh","texture":"asset:player-texture"}}}]})");
             write("scripts/player.lua", "return {}\n");
+            write("assets/player.mesh", "mesh test\n");
+            write("assets/player.ppm", "P3\n1 1\n255\n0 0 0\n");
         }
 
         ~TemporaryProject()
@@ -58,10 +62,13 @@ namespace
             "project should load its startup scene and persistent entity");
         test::require(loaded->scene.entities[0].id == "object:player" && loaded->scene.entities[0].transform.has_value(),
             "scene identity and transform should be authored values");
-        test::require(loaded->scene.entities[0].script == project::Script{"scripts/player.lua"},
-            "script reference should remain project-relative");
+        test::require(loaded->scene.entities[0].script == project::Script{"asset:player-script"},
+            "script reference should store stable catalog ID");
+        test::require(loaded->scene.entities[0].meshRenderer == project::MeshRenderer{"asset:player-mesh", "asset:player-texture"},
+            "mesh renderer should preserve stable mesh and texture IDs");
+        test::require(project::resolveAsset(*loaded, "asset:player-script").has_value(), "declared asset ID should resolve");
 
-        project::SceneSession session(loaded->scene, loaded->root);
+        project::SceneSession session(*loaded);
         const auto originalRevision = session.revision();
         auto edited = session.apply(project::SetPosition{"object:player", {2.0f, 3.0f, 4.0f}}, originalRevision);
         test::require(edited.has_value() && *edited != originalRevision, "accepted edit should advance revision");
@@ -93,7 +100,7 @@ namespace
         test::require(session.playSnapshot() != nullptr, "play should expose an isolated scene snapshot");
         test::require(session.applyPlay(project::SetPosition{"object:player", {9.0f, 8.0f, 7.0f}}).has_value(),
             "runtime play snapshot should accept operations independently");
-        session.endPlay();
+        test::require(session.endPlay().has_value(), "stopping play should discard the runtime snapshot");
         test::require(session.playSnapshot() == nullptr, "stopping play should discard the runtime snapshot");
         test::require(session.snapshot().entities[0].transform->position == std::array<float, 3>{2, 3, 4},
             "runtime changes must not affect authored state");
@@ -134,6 +141,53 @@ namespace
         test::require(!unknown, "unknown fields should not be silently dropped");
         requireCode(unknown.error(), "project.field.unknown");
     }
+
+    void stableCatalogAndSessionConflictsAreEnforced()
+    {
+        TemporaryProject fixture;
+        auto loaded = project::loadProject(fixture.root / "project.json");
+        test::require(loaded.has_value(), "project with a declared asset should load");
+        fixture.write("scripts/renamed.lua", "return {}\n");
+        fixture.write("project.json", R"({"schema":1,"name":"Fixture","startup_scene":"scenes/main.json","assets":[{"id":"asset:player-script","path":"scripts/renamed.lua","kind":"script"},{"id":"asset:player-mesh","path":"assets/player.mesh","kind":"mesh"},{"id":"asset:player-texture","path":"assets/player.ppm","kind":"texture"}]})");
+        auto moved = project::loadProject(fixture.root / "project.json");
+        test::require(moved && moved->scene.entities[0].script == project::Script{"asset:player-script"}, "asset move should preserve scene ID");
+        test::require(project::resolveAsset(*moved, "asset:player-script").has_value(), "stable ID should resolve updated path");
+
+        fixture.write("project.json", R"({"schema":1,"name":"Fixture","startup_scene":"scenes/main.json","assets":[{"id":"asset:player-script","path":"scripts/renamed.lua","kind":"script"},{"id":"ASSET:PLAYER-SCRIPT","path":"scripts/player.lua","kind":"script"}]})");
+        auto duplicate = project::loadProject(fixture.root / "project.json");
+        test::require(!duplicate, "case-insensitive duplicate asset IDs should fail");
+        requireCode(duplicate.error(), "project.asset.id.duplicate");
+
+        fixture.write("project.json", R"({"schema":1,"name":"Fixture","startup_scene":"scenes/main.json","assets":[]})");
+        auto missing = project::loadProject(fixture.root / "project.json");
+        test::require(!missing, "scene reference without catalog entry should fail");
+        requireCode(missing.error(), "project.asset.unknown");
+
+        fixture.write("project.json", R"({"schema":1,"name":"Fixture","startup_scene":"scenes/main.json","assets":[{"id":"asset:player-script","path":"scripts/player.lua","kind":"script"},{"id":"asset:player-mesh","path":"assets/player.mesh","kind":"script"}]})");
+        auto wrongKind = project::loadProject(fixture.root / "project.json");
+        test::require(!wrongKind, "MeshRenderer may not reference a script asset as a mesh");
+        requireCode(wrongKind.error(), "project.asset.kind.mismatch");
+
+        fixture.write("project.json", R"({"schema":1,"name":"Fixture","startup_scene":"scenes/main.json","assets":[{"id":"asset:player-script","path":"scripts/player.lua","kind":"script"},{"id":"asset:player-mesh","path":"assets/player.mesh","kind":"mesh"},{"id":"asset:player-texture","path":"assets/player.ppm","kind":"texture"}]})");
+        loaded = project::loadProject(fixture.root / "project.json");
+        test::require(loaded.has_value(), "fixture should reload");
+        project::SceneSession session(*loaded);
+        const auto revision = session.revision();
+        bool rejected = false;
+        std::thread worker([&]
+        {
+            auto result = session.apply(project::SetPosition{"object:player", {1, 2, 3}}, revision);
+            rejected = !result && std::any_of(result.error().begin(), result.error().end(), [](const auto& d) { return d.code == "project.thread.owner"; });
+        });
+        worker.join();
+        test::require(rejected, "cross-thread mutation should have owner-thread diagnostic");
+        auto edited = session.apply(project::SetPosition{"object:player", {1, 2, 3}}, session.revision());
+        test::require(edited.has_value(), "owner-thread edit should work");
+        fixture.write("scenes/main.json", R"({"schema":1,"scene_id":"scene:main","entities":[{"id":"object:player","name":"Player","components":{"Transform":{"position":[9,0,0]},"Script":{"asset":"asset:player-script"}}}]})");
+        auto save = session.save(*edited);
+        test::require(!save, "external disk edit should prevent save");
+        requireCode(save.error(), "scene.revision.stale");
+    }
 }
 
 int main()
@@ -142,6 +196,7 @@ int main()
     {
         validProjectLoadsAndEditHistoryIsRevisioned();
         rejectsMalformedSchemaIdsAndPaths();
+        stableCatalogAndSessionConflictsAreEnforced();
         std::cout << "[PASS] project format and validation tests\n";
         return 0;
     }

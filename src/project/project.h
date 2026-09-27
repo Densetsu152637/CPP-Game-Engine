@@ -4,6 +4,7 @@
 #include <expected>
 #include <filesystem>
 #include <memory>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -40,8 +41,23 @@ namespace project
 
     struct Script
     {
-        std::filesystem::path asset;
+        std::string asset;
         bool operator==(const Script&) const = default;
+    };
+
+    struct MeshRenderer
+    {
+        std::string mesh;
+        std::optional<std::string> texture;
+        bool operator==(const MeshRenderer&) const = default;
+    };
+
+    struct Asset
+    {
+        std::string id;
+        std::filesystem::path path;
+        std::string kind;
+        bool operator==(const Asset&) const = default;
     };
 
     struct SceneEntity
@@ -50,6 +66,7 @@ namespace project
         std::string name;
         std::optional<Transform> transform;
         std::optional<Script> script;
+        std::optional<MeshRenderer> meshRenderer;
         bool operator==(const SceneEntity&) const = default;
     };
 
@@ -69,6 +86,8 @@ namespace project
         std::filesystem::path root;
         std::filesystem::path manifest;
         std::filesystem::path startupScene;
+        std::map<std::string, Asset, std::less<>> assets;
+        std::map<std::string, std::string, std::less<>> inputActions;
         Scene scene;
     };
 
@@ -84,19 +103,21 @@ namespace project
     struct SetScript
     {
         std::string entityId;
-        std::optional<std::filesystem::path> asset;
+        std::optional<std::string> asset;
     };
 
     using EditOperation = std::variant<SetPosition, SetScript>;
 
     class SceneSession
     {
+        // A document and its edits belong to the thread that constructed it.
         struct Impl;
         std::unique_ptr<Impl> m_impl;
         std::optional<Scene> m_playSnapshot;
 
     public:
         explicit SceneSession(Scene scene, std::filesystem::path projectRoot);
+        explicit SceneSession(const Project& project);
         ~SceneSession();
         SceneSession(SceneSession&&) noexcept;
         SceneSession& operator=(SceneSession&&) noexcept;
@@ -112,13 +133,16 @@ namespace project
         Result<void> beginPlay(const std::string& expectedRevision);
         Result<void> applyPlay(const EditOperation& operation);
         const Scene* playSnapshot() const noexcept;
-        void endPlay() noexcept;
+        Result<void> endPlay();
     };
 
     Result<Project> loadProject(const std::filesystem::path& manifest);
     Result<Scene> loadScene(const std::filesystem::path& sceneFile, const std::filesystem::path& projectRoot);
+    Result<Scene> loadScene(const std::filesystem::path& sceneFile, const Project& project);
+    Result<std::filesystem::path> resolveAsset(const Project& project, std::string_view assetId);
     Result<void> validateProject(const std::filesystem::path& manifest);
     Result<Scene> inspectScene(const std::filesystem::path& sceneFile, const std::filesystem::path& projectRoot);
+    Result<Scene> inspectScene(const std::filesystem::path& sceneFile, const Project& project);
 
     std::string diagnosticsJson(const Diagnostics& diagnostics);
     std::string sceneJson(const Scene& scene, const std::string& revision = {});

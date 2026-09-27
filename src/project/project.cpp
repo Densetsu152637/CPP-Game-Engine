@@ -1,6 +1,7 @@
 #include "project.h"
 
 #include <algorithm>
+#include <cwctype>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -10,6 +11,7 @@
 #include <locale>
 #include <set>
 #include <sstream>
+#include <thread>
 #include <type_traits>
 #include <unordered_set>
 
@@ -51,6 +53,12 @@ namespace project
         {
             const auto relative = target.lexically_relative(root);
             return !relative.empty() && *relative.begin() != ".." && !relative.is_absolute();
+        }
+
+        std::string folded(std::string value)
+        {
+            std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return value;
         }
 
         bool resolveFile(const std::filesystem::path& root, const std::string& authored,
@@ -269,7 +277,15 @@ namespace project
                 if (entity.script)
                 {
                     if (hasComponent) out << ',';
-                    out << "\"Script\":{\"asset\":" << quote(entity.script->asset.generic_string()) << '}';
+                    out << "\"Script\":{\"asset\":" << quote(entity.script->asset) << '}';
+                    hasComponent = true;
+                }
+                if (entity.meshRenderer)
+                {
+                    if (hasComponent) out << ',';
+                    out << "\"MeshRenderer\":{\"mesh\":" << quote(entity.meshRenderer->mesh);
+                    if (entity.meshRenderer->texture) out << ",\"texture\":" << quote(*entity.meshRenderer->texture);
+                    out << '}';
                 }
                 out << "}}";
             }
@@ -292,7 +308,14 @@ namespace project
             return false;
         }
 
-        bool applyToScene(Scene& scene, const std::filesystem::path& root,
+        bool onOwnerThread(const std::thread::id owner, const std::filesystem::path& file, Diagnostics& diagnostics)
+        {
+            if (std::this_thread::get_id() == owner) return true;
+            add(diagnostics, "project.thread.owner", file, "", "Scene session mutation must run on its owner thread");
+            return false;
+        }
+
+        bool applyToScene(Scene& scene, const std::filesystem::path& root, const std::map<std::string, Asset, std::less<>>& assets,
             const EditOperation& operation, Diagnostics& diagnostics)
         {
             return std::visit([&](const auto& command)
@@ -328,14 +351,15 @@ namespace project
                         entity->script.reset();
                         return true;
                     }
-                    if (command.asset->empty() || command.asset->is_absolute() || command.asset->has_root_name() || command.asset->has_root_directory())
+                    const auto asset = assets.find(*command.asset);
+                    if (asset == assets.end() || asset->second.kind != "script")
                     {
-                        add(diagnostics, "project.path.invalid", scene.source, "entities", "Script asset must be project-relative");
+                        add(diagnostics, "project.asset.unknown", scene.source, "entities.Script.asset", "Script asset ID is not declared as a script asset");
                         return false;
                     }
                     std::filesystem::path resolved;
-                    if (!resolveFile(root, command.asset->generic_string(), scene.source, "entities", resolved, diagnostics)) return false;
-                    entity->script = Script{command.asset->lexically_normal()};
+                    if (!resolveFile(root, asset->second.path.generic_string(), scene.source, "entities.Script.asset", resolved, diagnostics)) return false;
+                    entity->script = Script{*command.asset};
                     return true;
                 }
             }, operation);
@@ -404,7 +428,7 @@ namespace project
                     scene.entities.push_back(std::move(entity));
                     continue;
                 }
-                checkFields(*components, {"Transform", "Script"}, displayFile, path + ".components", diagnostics);
+                checkFields(*components, {"Transform", "Script", "MeshRenderer"}, displayFile, path + ".components", diagnostics);
                 if (const auto* transform = member(*components, "Transform"))
                 {
                     Transform parsed;
@@ -422,13 +446,96 @@ namespace project
                         std::string authored;
                         if (stringField(*scriptFields, "asset", displayFile, path + ".components.Script", authored, diagnostics))
                         {
-                            std::filesystem::path resolved;
-                            if (resolveFile(root, authored, displayFile, path + ".components.Script.asset", resolved, diagnostics))
-                                entity.script = Script{std::filesystem::path(authored).lexically_normal()};
+                            entity.script = Script{authored};
                         }
                     }
                 }
+                if (const auto* meshValue = member(*components, "MeshRenderer"))
+                {
+                    const auto* meshFields = object(*meshValue);
+                    if (!meshFields) add(diagnostics, "project.component.type", displayFile, path + ".components.MeshRenderer", "MeshRenderer must be an object");
+                    else
+                    {
+                        checkFields(*meshFields, {"mesh", "texture"}, displayFile, path + ".components.MeshRenderer", diagnostics);
+                        MeshRenderer renderer;
+                        const bool meshValid = stringField(*meshFields, "mesh", displayFile, path + ".components.MeshRenderer", renderer.mesh, diagnostics);
+                        if (const auto* textureValue = member(*meshFields, "texture"))
+                        {
+                            if (!textureValue->is<std::string>() || textureValue->get<std::string>().empty())
+                                add(diagnostics, "project.field.type", displayFile, path + ".components.MeshRenderer.texture", "Expected a non-empty texture asset ID");
+                            else renderer.texture = textureValue->get<std::string>();
+                        }
+                        if (meshValid) entity.meshRenderer = std::move(renderer);
+                    }
+                }
                 scene.entities.push_back(std::move(entity));
+            }
+        }
+        if (!diagnostics.empty()) return std::unexpected(std::move(diagnostics));
+        return scene;
+    }
+
+    Result<std::filesystem::path> resolveAsset(const Project& project, const std::string_view assetId)
+    {
+        const auto found = project.assets.find(assetId);
+        if (found == project.assets.end())
+            return std::unexpected(one("project.asset.unknown", project.manifest, "assets", "Asset ID is not declared in the project catalog"));
+        std::filesystem::path resolved;
+        Diagnostics diagnostics;
+        if (!resolveFile(project.root, found->second.path.generic_string(), project.manifest,
+            "assets[" + found->second.id + "].path", resolved, diagnostics))
+            return std::unexpected(std::move(diagnostics));
+        return resolved;
+    }
+
+    Result<Scene> loadScene(const std::filesystem::path& sceneFile, const Project& project)
+    {
+        auto scene = loadScene(sceneFile, project.root);
+        if (!scene) return std::unexpected(scene.error());
+        Diagnostics diagnostics;
+        for (size_t i = 0; i < scene->entities.size(); ++i)
+        {
+            const auto& renderer = scene->entities[i].meshRenderer;
+            if (renderer)
+            {
+                const auto mesh = project.assets.find(renderer->mesh);
+                const auto meshField = "entities[" + std::to_string(i) + "].components.MeshRenderer.mesh";
+                if (mesh == project.assets.end())
+                    add(diagnostics, "project.asset.unknown", scene->source, meshField, "Mesh asset ID is not declared in the project catalog");
+                else if (mesh->second.kind != "mesh")
+                    add(diagnostics, "project.asset.kind.mismatch", scene->source, meshField, "MeshRenderer.mesh must reference an asset of kind mesh");
+                else
+                {
+                    std::filesystem::path resolved;
+                    resolveFile(project.root, mesh->second.path.generic_string(), scene->source, meshField, resolved, diagnostics);
+                }
+                if (renderer->texture)
+                {
+                    const auto texture = project.assets.find(*renderer->texture);
+                    const auto textureField = "entities[" + std::to_string(i) + "].components.MeshRenderer.texture";
+                    if (texture == project.assets.end())
+                        add(diagnostics, "project.asset.unknown", scene->source, textureField, "Texture asset ID is not declared in the project catalog");
+                    else if (texture->second.kind != "texture")
+                        add(diagnostics, "project.asset.kind.mismatch", scene->source, textureField, "MeshRenderer.texture must reference an asset of kind texture");
+                    else
+                    {
+                        std::filesystem::path resolved;
+                        resolveFile(project.root, texture->second.path.generic_string(), scene->source, textureField, resolved, diagnostics);
+                    }
+                }
+            }
+            const auto& script = scene->entities[i].script;
+            if (!script) continue;
+            const auto found = project.assets.find(script->asset);
+            const auto path = "entities[" + std::to_string(i) + "].components.Script.asset";
+            if (found == project.assets.end())
+                add(diagnostics, "project.asset.unknown", scene->source, path, "Script asset ID is not declared in the project catalog");
+            else if (found->second.kind != "script")
+                add(diagnostics, "project.asset.kind.mismatch", scene->source, path, "Script component must reference an asset of kind script");
+            else
+            {
+                std::filesystem::path resolved;
+                resolveFile(project.root, found->second.path.generic_string(), scene->source, path, resolved, diagnostics);
             }
         }
         if (!diagnostics.empty()) return std::unexpected(std::move(diagnostics));
@@ -450,18 +557,74 @@ namespace project
         if (!fields)
             return std::unexpected(one("project.document.type", displayFile, "", "Project manifest must be an object"));
 
-        checkFields(*fields, {"schema", "name", "startup_scene"}, displayFile, "", diagnostics);
+        checkFields(*fields, {"schema", "name", "startup_scene", "assets", "inputActions"}, displayFile, "", diagnostics);
         Project project;
         project.root = root;
         project.manifest = relativePath(root, file);
         schemaField(*fields, displayFile, "", ProjectSchemaVersion, diagnostics);
         stringField(*fields, "name", displayFile, "", project.name, diagnostics);
+        if (const auto* assetsValue = member(*fields, "assets"))
+        {
+            if (!assetsValue->is<picojson::array>())
+                add(diagnostics, "project.field.type", displayFile, "assets", "Expected an array");
+            else
+            {
+                std::set<std::string> ids;
+                std::set<std::string> paths;
+                const auto& list = assetsValue->get<picojson::array>();
+                for (size_t i = 0; i < list.size(); ++i)
+                {
+                    const auto path = "assets[" + std::to_string(i) + "]";
+                    const auto* entry = object(list[i]);
+                    if (!entry) { add(diagnostics, "project.asset.type", displayFile, path, "Asset entry must be an object"); continue; }
+                    checkFields(*entry, {"id", "path", "kind"}, displayFile, path, diagnostics);
+                    Asset asset;
+                    bool valid = stringField(*entry, "id", displayFile, path, asset.id, diagnostics);
+                    std::string authoredPath;
+                    valid &= stringField(*entry, "path", displayFile, path, authoredPath, diagnostics);
+                    valid &= stringField(*entry, "kind", displayFile, path, asset.kind, diagnostics);
+                    if (!valid) continue;
+                    const auto foldedId = folded(asset.id);
+                    if (!ids.insert(foldedId).second)
+                        add(diagnostics, "project.asset.id.duplicate", displayFile, path + ".id", "Asset ID is duplicated (IDs are case-insensitive)");
+                    if (asset.kind != "script" && asset.kind != "mesh" && asset.kind != "texture")
+                        add(diagnostics, "project.asset.kind.unsupported", displayFile, path + ".kind", "Supported asset kinds are script, mesh, and texture");
+                    asset.path = std::filesystem::path(authoredPath).lexically_normal();
+                    const auto foldedPath = folded(asset.path.generic_string());
+                    if (!paths.insert(foldedPath).second)
+                        add(diagnostics, "project.asset.path.duplicate", displayFile, path + ".path", "Asset path collides with another declared path (paths are case-insensitive)");
+                    std::filesystem::path resolved;
+                    if (!resolveFile(root, authoredPath, displayFile, path + ".path", resolved, diagnostics)) continue;
+                    project.assets.emplace(asset.id, std::move(asset));
+                }
+            }
+        }
+        if (const auto* actionsValue = member(*fields, "inputActions"))
+        {
+            const auto* actions = object(*actionsValue);
+            if (!actions) add(diagnostics, "project.field.type", displayFile, "inputActions", "Expected an object mapping action names to key names");
+            else for (const auto& [name, keyValue] : *actions)
+            {
+                if (name.empty() || !keyValue.is<std::string>() || keyValue.get<std::string>().empty())
+                {
+                    add(diagnostics, "project.input_action.invalid", displayFile, "inputActions." + name, "Action and key names must be non-empty strings");
+                    continue;
+                }
+                const auto& key = keyValue.get<std::string>();
+                if (key != "Right" && key != "Left" && key != "Up" && key != "Down" && key != "Space")
+                {
+                    add(diagnostics, "project.input_action.key.unsupported", displayFile, "inputActions." + name, "Supported keys are Right, Left, Up, Down, and Space");
+                    continue;
+                }
+                project.inputActions.emplace(name, key);
+            }
+        }
         std::string startup;
         if (stringField(*fields, "startup_scene", displayFile, "", startup, diagnostics))
         {
             if (resolveFile(root, startup, displayFile, "startup_scene", project.startupScene, diagnostics))
             {
-                auto scene = loadScene(project.startupScene, root);
+                auto scene = loadScene(project.startupScene, project);
                 if (!scene) diagnostics.insert(diagnostics.end(), scene.error().begin(), scene.error().end());
                 else project.scene = std::move(*scene);
             }
@@ -479,6 +642,9 @@ namespace project
 
     Result<Scene> inspectScene(const std::filesystem::path& sceneFile, const std::filesystem::path& projectRoot)
     { return loadScene(sceneFile, projectRoot); }
+
+    Result<Scene> inspectScene(const std::filesystem::path& sceneFile, const Project& project)
+    { return loadScene(sceneFile, project); }
 
     std::string diagnosticsJson(const Diagnostics& diagnostics)
     {
@@ -528,13 +694,15 @@ namespace project
     {
         Scene current;
         std::filesystem::path root;
+        std::map<std::string, Asset, std::less<>> assets;
         std::string revision;
         std::string savedRevision;
         std::vector<Scene> undo;
         std::vector<Scene> redo;
+        const std::thread::id ownerThread = std::this_thread::get_id();
 
-        Impl(Scene initial, std::filesystem::path projectRoot)
-            : current(std::move(initial)), root(std::move(projectRoot)), revision(revisionFor(current)), savedRevision(revision)
+        Impl(Scene initial, std::filesystem::path projectRoot, std::map<std::string, Asset, std::less<>> catalog = {})
+            : current(std::move(initial)), root(std::move(projectRoot)), assets(std::move(catalog)), revision(revisionFor(current)), savedRevision(revision)
         {}
 
         std::filesystem::path file() const { return root / current.source; }
@@ -552,6 +720,9 @@ namespace project
     SceneSession::SceneSession(Scene scene, std::filesystem::path projectRoot)
         : m_impl(std::make_unique<Impl>(std::move(scene), std::move(projectRoot)))
     {}
+    SceneSession::SceneSession(const Project& project)
+        : m_impl(std::make_unique<Impl>(project.scene, project.root, project.assets))
+    {}
     SceneSession::~SceneSession() = default;
     SceneSession::SceneSession(SceneSession&&) noexcept = default;
     SceneSession& SceneSession::operator=(SceneSession&&) noexcept = default;
@@ -561,9 +732,10 @@ namespace project
     Result<std::string> SceneSession::apply(const EditOperation& operation, const std::string& expectedRevision)
     {
         Diagnostics diagnostics;
+        if (!onOwnerThread(m_impl->ownerThread, m_impl->current.source, diagnostics)) return std::unexpected(std::move(diagnostics));
         if (!m_impl->currentRevision(expectedRevision, diagnostics)) return std::unexpected(std::move(diagnostics));
         Scene updated = m_impl->current;
-        const bool valid = applyToScene(updated, m_impl->root, operation, diagnostics);
+        const bool valid = applyToScene(updated, m_impl->root, m_impl->assets, operation, diagnostics);
         if (!valid) return std::unexpected(std::move(diagnostics));
         m_impl->undo.push_back(std::move(m_impl->current));
         m_impl->current = std::move(updated);
@@ -575,6 +747,7 @@ namespace project
     Result<std::string> SceneSession::undo(const std::string& expectedRevision)
     {
         Diagnostics diagnostics;
+        if (!onOwnerThread(m_impl->ownerThread, m_impl->current.source, diagnostics)) return std::unexpected(std::move(diagnostics));
         if (!m_impl->currentRevision(expectedRevision, diagnostics)) return std::unexpected(std::move(diagnostics));
         if (m_impl->undo.empty()) return std::unexpected(one("scene.undo.empty", m_impl->current.source, "", "No scene operation to undo"));
         m_impl->redo.push_back(std::move(m_impl->current));
@@ -587,6 +760,7 @@ namespace project
     Result<std::string> SceneSession::redo(const std::string& expectedRevision)
     {
         Diagnostics diagnostics;
+        if (!onOwnerThread(m_impl->ownerThread, m_impl->current.source, diagnostics)) return std::unexpected(std::move(diagnostics));
         if (!m_impl->currentRevision(expectedRevision, diagnostics)) return std::unexpected(std::move(diagnostics));
         if (m_impl->redo.empty()) return std::unexpected(one("scene.redo.empty", m_impl->current.source, "", "No scene operation to redo"));
         m_impl->undo.push_back(std::move(m_impl->current));
@@ -599,6 +773,7 @@ namespace project
     Result<void> SceneSession::beginPlay(const std::string& expectedRevision)
     {
         Diagnostics diagnostics;
+        if (!onOwnerThread(m_impl->ownerThread, m_impl->current.source, diagnostics)) return std::unexpected(std::move(diagnostics));
         if (!m_impl->currentRevision(expectedRevision, diagnostics)) return std::unexpected(std::move(diagnostics));
         if (m_playSnapshot) return std::unexpected(one("scene.play.already_active", m_impl->current.source, "", "Play is already active"));
         m_playSnapshot = m_impl->current;
@@ -607,9 +782,10 @@ namespace project
 
     Result<void> SceneSession::applyPlay(const EditOperation& operation)
     {
-        if (!m_playSnapshot) return std::unexpected(one("scene.play.inactive", m_impl->current.source, "", "Play is not active"));
         Diagnostics diagnostics;
-        if (!applyToScene(*m_playSnapshot, m_impl->root, operation, diagnostics))
+        if (!onOwnerThread(m_impl->ownerThread, m_impl->current.source, diagnostics)) return std::unexpected(std::move(diagnostics));
+        if (!m_playSnapshot) return std::unexpected(one("scene.play.inactive", m_impl->current.source, "", "Play is not active"));
+        if (!applyToScene(*m_playSnapshot, m_impl->root, m_impl->assets, operation, diagnostics))
             return std::unexpected(std::move(diagnostics));
         return {};
     }
@@ -617,12 +793,18 @@ namespace project
     const Scene* SceneSession::playSnapshot() const noexcept
     { return m_playSnapshot ? &*m_playSnapshot : nullptr; }
 
-    void SceneSession::endPlay() noexcept
-    { m_playSnapshot.reset(); }
+    Result<void> SceneSession::endPlay()
+    {
+        Diagnostics diagnostics;
+        if (!onOwnerThread(m_impl->ownerThread, m_impl->current.source, diagnostics)) return std::unexpected(std::move(diagnostics));
+        m_playSnapshot.reset();
+        return {};
+    }
 
     Result<std::string> SceneSession::save(const std::string& expectedRevision)
     {
         Diagnostics diagnostics;
+        if (!onOwnerThread(m_impl->ownerThread, m_impl->current.source, diagnostics)) return std::unexpected(std::move(diagnostics));
         if (!m_impl->currentRevision(expectedRevision, diagnostics)) return std::unexpected(std::move(diagnostics));
         auto disk = loadScene(m_impl->file(), m_impl->root);
         if (!disk) return std::unexpected(disk.error());
