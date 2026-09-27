@@ -370,6 +370,25 @@ namespace project
 
     bool Runtime::running() const noexcept { return m_impl && m_impl->onOwnerThread() && m_impl->started && !m_impl->faulted; }
     std::uint64_t Runtime::tickCount() const noexcept { return m_impl && m_impl->onOwnerThread() ? m_impl->ticks : 0; }
+    std::size_t Runtime::liveEntityCount() const noexcept
+    {
+        if (!m_impl || !m_impl->onOwnerThread()) return 0;
+        const auto& ecs = m_impl->simulator.ecs();
+        std::size_t count = 0;
+        for (const auto& [id, packed] : m_impl->entities)
+        {
+            (void)id;
+            if (packed >= 0 && ecs.hasEntity(Entity::fromPacked(static_cast<std::uint64_t>(packed)))) ++count;
+        }
+        for (const auto packed : m_impl->spawnedEntities)
+            if (packed >= 0 && ecs.hasEntity(Entity::fromPacked(static_cast<std::uint64_t>(packed)))) ++count;
+        return count;
+    }
+
+    std::size_t Runtime::activeScriptCount() const noexcept
+    {
+        return m_impl && m_impl->onOwnerThread() ? m_impl->scriptInstances.size() : 0;
+    }
 
     std::optional<std::array<float, 3>> Runtime::position(const std::string_view authoredId) const
     {

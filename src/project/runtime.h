@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <map>
@@ -49,6 +50,8 @@ namespace project
         Result<void> stop();
         bool running() const noexcept;
         std::uint64_t tickCount() const noexcept;
+        std::size_t liveEntityCount() const noexcept;
+        std::size_t activeScriptCount() const noexcept;
         std::optional<std::array<float, 3>> position(std::string_view authoredEntityId) const;
         const std::map<std::string, std::int64_t>& runtimeEntities() const;
     };

@@ -146,6 +146,31 @@ namespace
             "syntax validation failure must happen before temporary ECS instantiation");
     }
 
+    void onCreateFailureCleansScriptAndSpawnedEntities()
+    {
+        auto project = sample();
+        project.assets.emplace("asset:create-then-fail", project::Asset{
+            "asset:create-then-fail", "scripts/create_then_fail.lua", "script"});
+        project.scene.entities.front().script->asset = "asset:create-then-fail";
+        std::vector<std::string> logs;
+        project::RuntimeOptions options;
+        options.log = [&](std::string_view message) { logs.emplace_back(message); };
+        project::Runtime runtime(std::move(project), std::move(options));
+
+        const auto started = runtime.start();
+        test::require(!started.has_value(), "on_create failure after native side effects must reject setup");
+        test::require(!runtime.running(), "on_create failure must leave runtime inactive");
+        test::require(runtime.runtimeEntities().empty() && runtime.liveEntityCount() == 0,
+            "startup failure must destroy authored and script-spawned entities");
+        test::require(runtime.activeScriptCount() == 0,
+            "failed on_create must remove its Lua instance from the runtime script map");
+        test::require(std::find(logs.begin(), logs.end(), "partial-on-create-effect") != logs.end(),
+            "test must observe that on_create made a side effect before failing");
+        test::require(std::find(logs.begin(), logs.end(), "spawned-entity-cleaned-by-script") != logs.end(),
+            "LuaScriptSystem should invoke on_destroy to clean script-owned entities after failed on_create");
+        test::require(!runtime.position("entity:player"), "failed setup must not expose an authored runtime entity");
+    }
+
     void mutationIsOwnerThreadBound()
     {
         project::Runtime runtime(sample());
@@ -182,6 +207,7 @@ int main()
         teardownFailureKeepsOldScriptAndCleansCandidate();
         invalidScriptFailsBeforeRuntimeBecomesActive();
         invalidLuaFailsDuringSetupAndCleansScene();
+        onCreateFailureCleansScriptAndSpawnedEntities();
         mutationIsOwnerThreadBound();
         std::cout << "[PASS] authored project runtime tests\n";
         return 0;
