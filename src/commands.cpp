@@ -233,7 +233,7 @@ std::optional<int> runCommands(int argc, char** argv) {
             args.require(2, {});
             const auto initialized = tooling::initializeProject(args.positional[0], args.positional[1]);
             if (!initialized) return fail(command, initialized.error());
-            return success(command, "{\"manifest\":" + quote(initialized->generic_string()) + "}");
+            return success(command, "{\"directory\":" + quote(initialized->generic_string()) + ",\"manifest\":" + quote((*initialized / "project.json").generic_string()) + "}");
         }
         if (command == "scene inspect") {
             args.require(1, {"--project-root"});

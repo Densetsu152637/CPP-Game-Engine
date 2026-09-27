@@ -20,7 +20,8 @@ function Invoke-Result([string[]]$Arguments, [int]$Expected = 0) {
 $template = Join-Path $repo 'examples/first-project'
 $project = Join-Path $scratch 'project'
 $manifest = Join-Path $project 'project.json'
-Invoke-Result @('project', 'init', $template, $project) | Out-Null
+$initialized = Invoke-Result @('project', 'init', $template, $project)
+if (!(Test-Path -LiteralPath $initialized.result.manifest -PathType Leaf)) { throw 'Initialization result must identify the manifest file' }
 Invoke-Result @('project', 'validate', $manifest, '--format', 'json') | Out-Null
 $scene = Invoke-Result @('scene', 'inspect', (Join-Path $project 'scenes/main.scene.json'), '--project-root', $project)
 if (!$scene.result.revision) { throw 'Scene inspection lacks a revision' }
