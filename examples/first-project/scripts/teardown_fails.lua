@@ -1,6 +1,7 @@
 return {
     on_create = function()
         print("script-started", 7)
+        io.write("script-io-output\n")
     end,
     on_update = function()
         if input.pressed("move_right") then
