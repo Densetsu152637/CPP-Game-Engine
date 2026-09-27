@@ -216,10 +216,15 @@ namespace tooling
         std::error_code ec;
         const auto root = canonicalExisting(project.root, ec);
         if (ec) return std::unexpected(error("asset.root.invalid", project.root, "", "Project root cannot be resolved"));
+        // Project values normally come from loadProject(), which stores a canonical root.
+        // Callers can also construct Project values directly (for tools and tests), so
+        // resolve catalog paths against the canonical root used by our confinement checks.
+        auto canonicalProject = project;
+        canonicalProject.root = root;
         std::map<std::filesystem::path, std::string> ids;
         for (const auto& [id, asset] : project.assets)
         {
-            auto resolved = project::resolveAsset(project, id);
+            auto resolved = project::resolveAsset(canonicalProject, id);
             if (!resolved) return std::unexpected(resolved.error());
             const auto absolute = canonicalExisting(*resolved, ec);
             if (ec || !contained(root, absolute))

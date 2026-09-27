@@ -83,8 +83,12 @@ void test_asset_index_is_deterministic_tracks_dependencies_and_roundtrips()
     write(root / "assets/scripts/helpers/move.lua", "return {}\n");
     write(root / "assets/shaders/main.vert", "#version 450\n#include \"common.glsl\"\n");
     write(root / "assets/shaders/common.glsl", "const float scale = 1.0;\n");
+    const auto aliasedRoot = temp.path / "project-alias";
+    externalDirectoryLink(aliasedRoot, root);
     project::Project project;
-    project.root = root;
+    // Temp paths on hosted Windows runners may traverse a junction. The public Project
+    // struct also permits non-canonical roots, so tooling must normalize before resolving.
+    project.root = aliasedRoot;
     project.assets.emplace("asset:main-script", project::Asset{"asset:main-script", "assets/scripts/main.lua", "script"});
     project.assets.emplace("asset:move-module", project::Asset{"asset:move-module", "assets/scripts/helpers/move.lua", "script"});
     project.assets.emplace("asset:main-shader", project::Asset{"asset:main-shader", "assets/shaders/main.vert", "shader"});
