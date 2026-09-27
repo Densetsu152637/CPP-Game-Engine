@@ -44,3 +44,11 @@ The parser rejects unknown fields and component types rather than dropping data 
 
 Schema version 1 is the initial baseline and has no migration from earlier versions. Future format changes must define an explicit, tested migration; newer unsupported documents remain errors. Diagnostics have stable codes, source files, and field paths for CLI, editor, and automation clients.
 
+`componentDescriptors()` registers serialized component names, component versions,
+property names/types/defaults, and required fields. Loading and saving dispatch
+through registered component handlers; the editor uses the same property metadata.
+An omitted component `version` means version 1; saving writes `"version":1`
+explicitly. The shared edit API supports typed position, script-reference, and
+mesh-renderer changes with expected revisions. Injected serialization and replace
+failures are tested to preserve the original scene bytes.
+

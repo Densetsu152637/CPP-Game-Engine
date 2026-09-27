@@ -21,10 +21,27 @@ make test
 make run
 ```
 
-The default build runs without Vulkan. Its sample executes 120 engine ticks:
-Lua creates an EnTT entity, moves it one unit per simulated second, and destroys
-it on shutdown. Test targets cover ECS behavior, Lua lifecycle/error handling,
-and the engine's Lua-to-ECS integration.
+The default build runs without Vulkan. `make run` loads the authored
+[first project](examples/first-project/README.md) for 120 fixed simulation ticks.
+Its persistent Player entity is owned by the scene and controlled through an
+entity-owned Lua script. Test targets cover ECS, Lua, engine integration,
+project validation/editing, isolated runtime, editor, asset tooling, and MCP.
+
+Project commands return a versioned JSON result on stdout and readable logs on
+stderr. For example (append `.exe` on Windows):
+
+```sh
+build/debug-vk0/bin/CPPGameEngine project validate examples/first-project/project.json
+build/debug-vk0/bin/CPPGameEngine run examples/first-project/project.json --headless --ticks 120 --input move_right:0
+build/debug-vk0/bin/CPPGameEngine editor examples/first-project/project.json
+```
+
+See [command and packaging usage](docs/commands.md), the
+[project/scene contract](docs/project-format.md), and the [read-only MCP adapter](docs/mcp.md).
+The native authoring editor is Windows-only and provides hierarchy, selection,
+typed position/script edits, asset selection, validation, save/reload, undo/redo,
+and isolated play/stop. The editor has no embedded viewport; the visible `run`
+command displays authored mesh/texture assets with Vulkan.
 
 For graphics, set `VULKAN_SDK` to the SDK directory and make its `Bin` directory
 available on `PATH`. The SDK supplies headers, the loader library, and `glslc`.
@@ -36,7 +53,8 @@ make VULKAN=1 smoke
 make VULKAN=1 smoke-validation
 ```
 
-`run` opens a scripted moving triangle. `smoke-validation` requires the installed
+`run` opens the authored textured sample; its declared Right-arrow action moves
+the Player. `smoke-validation` requires the installed
 Khronos validation layer; for a portable SDK on Windows, set `VK_LAYER_PATH` to
 `%VULKAN_SDK%\Bin`. The smoke test exercises multiple draws, resize/minimize,
 cancellation, invalid inputs, and renderer reinitialization on a real Vulkan GPU.
@@ -49,8 +67,8 @@ compiler in place. Project and vendor header changes trigger rebuilding (conserv
 on MSVC, plus generated `.d` dependencies on GCC). To remove output, delete the
 repository's `build` directory; `make clean` prints this instruction.
 
-The executable accepts `--headless`, `--ticks N`, `--script file.lua`, and
-`--shaders directory`. For example:
+The legacy demonstration (without a subcommand) still accepts `--headless`,
+`--ticks N`, `--script file.lua`, and `--shaders directory`. For example:
 
 ```sh
 build/debug-vk1/bin/CPPGameEngine --headless --ticks 60
@@ -74,6 +92,5 @@ macOS and Wayland builds are not configured.
 
 See [ECS design](src/ecs/README.md), [Lua scripting](docs/scripting.md), and
 [Vulkan rendering](docs/vulkan.md) for API details and current rendering limits.
-For a proposed, dependency-ordered path from this engine to human-authored and
-AI-tool-authored projects, see the
+For implementation scope and phase evidence, see the
 [human and AI tooling roadmap](docs/human-ai-tooling-roadmap.md).

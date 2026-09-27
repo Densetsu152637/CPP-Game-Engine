@@ -2,11 +2,10 @@
 
 This document describes a practical path from the current engine prototype to a
 project that people can author, inspect, and iterate on, and that automated
-tools can operate safely. It is an implementation guide, not a description of
-features already shipped. Code examples, command names, file names, and schemas
-labelled **proposed** are design examples only. No scene format, project
-manifest, JSON protocol, editor, or external UI/serialization dependency is
-currently selected.
+tools can operate safely. It records the implementation sequence and the bounded
+version 1 interfaces now provided. Examples labelled **proposed** remain design
+illustrations; the current-state table and linked interface documents describe
+shipped behavior.
 
 The central recommendation is to build one explicit, versioned project and
 scene contract, then expose it through deterministic headless commands. Human
@@ -17,40 +16,34 @@ begin by coupling an editor or an agent directly to live ECS storage.
 
 ## Current state
 
-The repository is a C++23 engine prototype. The root [README](../README.md)
-documents submodule checkout, GNU Make builds, headless execution, optional
-Vulkan setup, and platform caveats. Current entry points include:
+The six phases below are implemented as a deliberately bounded version 1
+interface. The detailed design discussion records the original sequence;
+examples still labelled proposed are illustrative rather than command syntax.
+Use [project format](project-format.md), [commands](commands.md),
+[Lua scripting](scripting.md), [Vulkan rendering](vulkan.md), and [MCP](mcp.md)
+for the shipped interfaces and limits.
 
-- `make`, `make test`, and `make run`; optional graphics commands use
-  `VULKAN=1` and the Vulkan SDK.
-- The executable accepts `--headless`, `--ticks N`, `--script file.lua`, and
-  `--shaders directory`. It does not yet load a project or scene. The sample
-  script path and procedural shader path are defaults in `src/main.cpp`.
-- `assets/scripts/moving_entity.lua` creates one entity, moves its position,
-  then destroys it during script teardown. The only other project assets are
-  the triangle vertex and fragment shaders under `assets/shaders/`.
-- The Lua `engine` table currently offers logging, entity creation/liveness/
-  destruction, and position get/set. Script files return lifecycle tables with
-  `on_create`, `on_update`, and `on_destroy`; see [Lua scripting](scripting.md).
-- The engine uses EnTT behind its ECS APIs and has generation-aware runtime
-  entity handles. Programmer-facing ECS setup, queries, and job declarations
-  are C++ APIs described in [ECS design](../src/ecs/README.md).
-- The Makefile invokes `glslc` to compile GLSL into SPIR-V; the Vulkan backend
-  loads that SPIR-V, draws the sample triangle, and uploads declared uniform
-  buffers. [Vulkan rendering](vulkan.md) documents current restrictions: no
-  mesh or vertex-layout API, no depth testing, no culling, no texture/sampler
-  interface, no material system, and no shader reflection. The current draw
-  path is procedural (`gl_VertexIndex`).
-- Keyboard and mouse listener types exist in `src/interaction/`, but the sample
-  executable does not wire an authored input map or script-facing controls.
-- The Makefile test targets cover ECS behavior, Lua lifecycle/error handling,
-  and engine-to-Lua-to-ECS integration. The Vulkan smoke test is a real-GPU
-  check and is necessarily dependent on a usable Vulkan environment.
+| Phase | Implementation | Acceptance evidence |
+| --- | --- | --- |
+| 1. Project/scene contract | `src/project/project.*`: JSON schema 1, stable scene/entity/asset IDs, confined catalog paths, typed Transform/Script/MeshRenderer, authored input actions, shared revisions and saves | `src/test/project/project_tests.cpp`: round trips, unknown fields/versions, references, confinement, edits and conflict/failure checks |
+| 2. Headless commands | `src/commands.cpp`: inspect/validate/run with versioned JSON, stderr diagnostics, bounded fixed-step state snapshots | `tools/test-cli.ps1` and RuntimeTests: result/exit checks and equal normalized state under equal input |
+| 3. Content slice | `examples/first-project`: entity-owned Lua, declared keyboard action, mesh and texture references; CPU loaders plus camera/depth/material/texture Vulkan drawing | RuntimeTests and rendering CPU tests; separately gated VulkanSmoke real-GPU/readback checks |
+| 4. Minimal editor | `src/editor`: Windows native hierarchy, typed inspector and stable script picker, logs, save/reload, undo/redo, isolated play/stop | EditorTests; native UI smoke remains separate from document-model tests |
+| 5. Iteration/package | `src/tooling`: initialization, stable-ID index and dependency hashes, shader imports, staged script reload, standalone runtime package | WorkflowTests, CLI package test from an external working directory, `.github/workflows/windows-headless.yml` |
+| 6. AI adapter | `src/automation`: read-only project validation and scene inspection through bounded, path-confined MCP stdio | WorkflowTests transport fixtures and executable routing |
 
-There is currently no project manifest, persistent scene serialization,
-asset-import/indexing pipeline, editor, structured command protocol, MCP
-adapter, or packaged game workflow in the project-owned source/docs/assets.
-These are proposed work, not hidden capabilities of EnTT, Lua, or Vulkan.
+Version 1 has no earlier released format to migrate. Unsupported versions are
+rejected; future migrations must be explicit and tested. Transform exposes world
+position only; parent hierarchies, rotation, prefabs, arbitrary component
+reflection, game save-state, and transactional external script side effects are
+not part of this contract. Undo/redo covers supported position and script-reference
+edits. The editor has no embedded viewport. MCP deliberately remains read-only.
+
+Windows is the active validated platform; the Linux branch remains unvalidated,
+and macOS/Wayland are not configured. GPU smoke is independent of headless tests;
+an unsupported readback skip is not evidence of verified pixels. Determinism is
+limited to normalized state from the supplied non-random fixture on the same
+platform with equal fixed delta, tick count, and input events.
 
 ## Recommended order
 
@@ -358,8 +351,8 @@ before building several independent interfaces.
 
 ## First implementable vertical slice
 
-The recommended first feature is **scene file → headless validation and load →
-scripted sample → structured CLI result**. Keep it deliberately small:
+The recommended first feature is **scene file â†’ headless validation and load â†’
+scripted sample â†’ structured CLI result**. Keep it deliberately small:
 
 1. Define a versioned manifest and scene format for one scene, stable object
    IDs, a transform component, and a script asset reference.

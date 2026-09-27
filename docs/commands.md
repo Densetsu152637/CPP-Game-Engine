@@ -18,7 +18,7 @@ engine mcp build/my-project
 ```
 
 `project init` copies a validated template into a new destination. Asset indexing
-writes derived data below `.cache`; `project assets --rebuild --compiler <path>`
+writes derived data below `.derived`; `project assets --rebuild --compiler <path>`
 also imports shaders. Packaging copies project content and the selected runtime
 into a new directory with a launcher; run `run.cmd --headless --ticks 120` on
 Windows. Windows is the tested packaging platform. Linux remains unvalidated;

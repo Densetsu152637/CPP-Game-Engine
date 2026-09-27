@@ -5,6 +5,7 @@ agents.md
 
 # build directories
 build/
+**/.derived/
 *-build/
 *-build-*/
 
