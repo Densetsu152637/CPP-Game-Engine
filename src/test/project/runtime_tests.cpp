@@ -119,7 +119,31 @@ namespace
         const auto started = runtime.start();
         test::require(!started.has_value(), "missing script should fail during setup before runtime is active");
         test::require(!runtime.running(), "failed setup must leave the runtime inactive");
-        test::require(!runtime.position("entity:player"), "failed setup must clean up partially instantiated entities");
+        test::require(!runtime.position("entity:player"), "invalid asset IDs must fail before ECS instantiation");
+    }
+
+    void invalidLuaFailsDuringSetupAndCleansScene()
+    {
+        auto project = sample();
+        project.assets.emplace("asset:valid-sentinel", project::Asset{
+            "asset:valid-sentinel", "scripts/teardown_fails.lua", "script"});
+        project.assets.emplace("asset:invalid-later", project::Asset{
+            "asset:invalid-later", "scripts/invalid.lua", "script"});
+        project.scene.entities.front().script->asset = "asset:valid-sentinel";
+        auto laterEntity = project.scene.entities.front();
+        laterEntity.id = "entity:later";
+        laterEntity.name = "Later Script";
+        laterEntity.script->asset = "asset:invalid-later";
+        project.scene.entities.push_back(std::move(laterEntity));
+        std::vector<std::string> logs;
+        project::RuntimeOptions options;
+        options.log = [&](std::string_view message) { logs.emplace_back(message); };
+        project::Runtime runtime(std::move(project), std::move(options));
+        const auto started = runtime.start();
+        test::require(!started.has_value(), "malformed later Lua must fail runtime setup");
+        test::require(logs.empty(), "all scripts must compile before the first script's on_create runs");
+        test::require(!runtime.running() && runtime.runtimeEntities().empty() && !runtime.position("entity:player"),
+            "syntax validation failure must happen before temporary ECS instantiation");
     }
 
     void mutationIsOwnerThreadBound()
@@ -157,6 +181,7 @@ int main()
         stagedReloadIsBoundaryAppliedAndKeepsLastGood();
         teardownFailureKeepsOldScriptAndCleansCandidate();
         invalidScriptFailsBeforeRuntimeBecomesActive();
+        invalidLuaFailsDuringSetupAndCleansScene();
         mutationIsOwnerThreadBound();
         std::cout << "[PASS] authored project runtime tests\n";
         return 0;

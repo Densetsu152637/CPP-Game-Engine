@@ -445,6 +445,19 @@ LuaScriptSystem::LoadResult LuaScriptSystem::load_string(const std::string_view 
     return impl->load(source, chunk_name, std::move(context));
 }
 
+LuaScriptSystem::Result LuaScriptSystem::validate_string(const std::string_view source, const std::string_view chunk_name)
+{
+    const auto impl = m_impl;
+    if (!impl || impl->closed || !impl->state) return std::unexpected("Lua runtime is shut down");
+    if (impl->lua_execution_depth != 0) return std::unexpected("cannot validate scripts during Lua execution");
+    Impl::ExecutionScope execution(*impl);
+    const std::string name(chunk_name);
+    if (luaL_loadbuffer(impl->state, source.data(), source.size(), name.c_str()) != LUA_OK)
+        return std::unexpected(impl->pop_error());
+    lua_pop(impl->state, 1);
+    return {};
+}
+
 LuaScriptSystem::Result LuaScriptSystem::update(const float delta_seconds)
 {
     const auto impl = m_impl;

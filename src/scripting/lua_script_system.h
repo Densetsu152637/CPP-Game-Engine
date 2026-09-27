@@ -56,6 +56,8 @@ public:
     // A script chunk returns a table containing optional on_create, on_update(dt), and on_destroy functions.
     LoadResult load_file(const std::string& path);
     LoadResult load_file(const std::string& path, LuaScriptContext context);
+    // Parse/compile source without executing its chunk or lifecycle callbacks.
+    Result validate_string(std::string_view source, std::string_view chunk_name = "script");
     LoadResult load_string(std::string_view source, std::string_view chunk_name = "script");
     LoadResult load_string(std::string_view source, LuaScriptContext context, std::string_view chunk_name = "script");
     Result update(float delta_seconds);

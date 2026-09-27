@@ -7,6 +7,8 @@
 
 #include <cmath>
 #include <deque>
+#include <fstream>
+#include <iterator>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -166,12 +168,43 @@ namespace project
                 "Faulted runtime must be stopped before it can start again"));
         if (state.started) return {};
         std::map<std::string, std::filesystem::path> resolvedScripts;
+        std::map<std::string, std::string> scriptSources;
         for (const SceneEntity& authored : state.project.scene.entities)
         {
             if (!authored.script) continue;
             auto resolved = resolveAsset(state.project, authored.script->asset);
             if (!resolved) return std::unexpected(resolved.error());
             resolvedScripts.emplace(authored.id, std::move(*resolved));
+        }
+
+        state.scripts = std::make_unique<LuaScriptSystem>(state.makeApi());
+        for (const SceneEntity& authored : state.project.scene.entities)
+        {
+            if (!authored.script) continue;
+            const auto& path = resolvedScripts.at(authored.id);
+            std::ifstream file(path, std::ios::binary);
+            if (!file)
+            {
+                (void)state.scripts->shutdown();
+                state.scripts.reset();
+                return std::unexpected(runtimeError("runtime.script.read", path, "Unable to open referenced Lua script"));
+            }
+            std::string source((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            if (file.bad())
+            {
+                (void)state.scripts->shutdown();
+                state.scripts.reset();
+                return std::unexpected(runtimeError("runtime.script.read", path, "Unable to read referenced Lua script"));
+            }
+            const std::string chunkName = "@" + path.string();
+            const auto valid = state.scripts->validate_string(source, chunkName);
+            if (!valid)
+            {
+                (void)state.scripts->shutdown();
+                state.scripts.reset();
+                return std::unexpected(runtimeError("runtime.script.compile", path, valid.error()));
+            }
+            scriptSources.emplace(authored.id, std::move(source));
         }
         auto& ecs = state.simulator.ecs();
         try
@@ -191,13 +224,13 @@ namespace project
                 }
             }
 
-            state.scripts = std::make_unique<LuaScriptSystem>(state.makeApi());
             for (const SceneEntity& authored : state.project.scene.entities)
             {
                 if (!authored.script) continue;
                 const auto owner = state.entities.at(authored.id);
                 const auto& path = resolvedScripts.at(authored.id);
-                auto loaded = state.scripts->load_file(path.string(), state.context(owner));
+                const std::string chunkName = "@" + path.string();
+                auto loaded = state.scripts->load_string(scriptSources.at(authored.id), state.context(owner), chunkName);
                 if (!loaded)
                     throw std::runtime_error("entity '" + authored.id + "' script failed: " + loaded.error());
                 state.scriptInstances.emplace(authored.id, *loaded);
