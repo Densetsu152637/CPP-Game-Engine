@@ -17,6 +17,7 @@ namespace automation::mcp
         using Array = picojson::array;
         constexpr const char* ModernProtocolVersion = "2026-07-28";
         constexpr const char* LegacyProtocolVersion = "2025-11-25";
+        constexpr std::size_t MaxRequestIdBytes = 1024;
         constexpr std::size_t MaxOutputMessageBytes = 1024 * 1024;
 
         Json object(Object value) { return Json(value); }
@@ -53,7 +54,7 @@ namespace automation::mcp
 
         bool validId(const Json& id)
         {
-            return id.is<std::string>() || id.is<double>();
+            return (id.is<std::string>() && id.get<std::string>().size() <= MaxRequestIdBytes) || id.is<double>();
         }
 
         bool validUtf8(const std::string& text)
@@ -250,7 +251,8 @@ namespace automation::mcp
 
             const bool hasId = request.contains("id");
             const Json id = hasId ? request.get("id") : nullId;
-            if (hasId && !validId(id)) return errorResponse(nullId, -32600, "request id must be a string or number");
+            if (hasId && !validId(id))
+                return errorResponse(nullId, -32600, "request id must be a number or a string of at most 1024 bytes");
             const std::string method = request.get("method").get<std::string>();
             const Json params = request.contains("params") ? request.get("params") : object({});
 

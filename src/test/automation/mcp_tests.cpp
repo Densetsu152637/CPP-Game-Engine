@@ -71,6 +71,17 @@ void test_mcp_stdio_confines_paths_and_bounds_messages()
     test::require(boundedStatus == 1, "oversized MCP lines should terminate with a protocol error");
     auto bounded = parseLine(boundedOutput.str().substr(0, boundedOutput.str().find('\n')));
     test::require(bounded.get("error").get("code").get<double>() == -32700, "oversized line should report parse error");
+
+    const std::string longId(900000, 'x');
+    std::istringstream oversizedIdInput("{\"jsonrpc\":\"2.0\",\"id\":\"" + longId + "\",\"method\":\"tools/list\"}\n");
+    std::ostringstream oversizedIdOutput;
+    const int oversizedIdStatus = automation::mcp::runStdio(std::filesystem::temp_directory_path(), oversizedIdInput, oversizedIdOutput);
+    const std::string oversizedIdLine = oversizedIdOutput.str().substr(0, oversizedIdOutput.str().find('\n'));
+    auto oversizedIdResponse = parseLine(oversizedIdLine);
+    test::require(oversizedIdStatus == 0 && oversizedIdLine.size() <= 1024 * 1024 &&
+        oversizedIdResponse.get("id").is<picojson::null>() &&
+        oversizedIdResponse.get("error").get("code").get<double>() == -32600,
+        "oversized request IDs should be rejected with a bounded invalid-request response");
 }
 
 void test_mcp_protocol_errors_negotiation_notifications_and_diagnostics()

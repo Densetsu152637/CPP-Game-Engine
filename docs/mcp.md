@@ -12,8 +12,9 @@ The adapter supports both current MCP `2026-07-28` and legacy handshake version
 include `resultType: "complete"`; protocol errors use the current error codes.
 Legacy clients use `initialize`, `notifications/initialized`, then
 `tools/list` and `tools/call`. Each input line is limited to 1 MiB, and tool
-responses are capped at 1 MiB. An oversized tool result becomes a bounded MCP
-tool error so the process still emits valid protocol JSON. Standard output
+responses are capped at 1 MiB. String request IDs are limited to 1 KiB;
+larger IDs receive a bounded invalid-request response with a null ID. An
+oversized tool result becomes a bounded MCP tool error so the process still emits valid protocol JSON. Standard output
 contains only compact JSON-RPC messages; diagnostic logging goes to standard
 error. The adapter does not expose resources, prompts, server notifications,
 or edit tools.
