@@ -87,7 +87,7 @@ ECS_TEST := $(BUILD)/bin/EcsTests$(EXE)
 LUA_TEST := $(BUILD)/bin/LuaTests$(EXE)
 ENGINE_TEST := $(BUILD)/bin/EngineTests$(EXE)
 SMOKE := $(BUILD)/bin/VulkanSmoke$(EXE)
-SHADERS := $(BUILD)/shaders/triangle.vert.spv $(BUILD)/shaders/triangle.frag.spv
+SHADERS := $(BUILD)/shaders/triangle.vert.spv $(BUILD)/shaders/triangle.frag.spv $(BUILD)/shaders/mesh.vert.spv
 .PHONY: all test shaders smoke smoke-validation run clean
 .PHONY: FORCE
 FORCE:

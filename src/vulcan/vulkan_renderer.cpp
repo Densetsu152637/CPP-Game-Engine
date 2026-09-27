@@ -5,6 +5,7 @@
 #include "vulkan_renderer.h"
 
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -719,6 +720,30 @@ namespace vulkan
 #else
         (void)shader;
         throw std::runtime_error("Vulkan draws require CPP_GAME_ENGINE_USE_VULKAN");
+#endif
+    }
+
+    void VulkanRenderer::drawMesh(
+        VulkanShaderProgram& shader,
+        const rendering::SerializedBufferView& vertices,
+        const rendering::VertexLayout& layout
+    ) {
+#ifdef CPP_GAME_ENGINE_USE_VULKAN
+        if (!m_initialized || !m_frameActive)
+            throw std::logic_error("Vulkan mesh draws require an active render frame");
+        if (vertices.empty() || nullptr == vertices.data || !layout.valid() ||
+            vertices.elementStride != layout.stride ||
+            vertices.elementCount > std::numeric_limits<uint32_t>::max() ||
+            vertices.elementCount > std::numeric_limits<size_t>::max() / layout.stride ||
+            vertices.byteSize != vertices.elementCount * layout.stride)
+            throw std::invalid_argument("Vulkan mesh data does not match its explicit vertex layout");
+        m_gpu->draw(shader, m_memoryManager, &vertices, &layout);
+        ++m_renderCallCount;
+#else
+        (void)shader;
+        (void)vertices;
+        (void)layout;
+        throw std::runtime_error("Vulkan mesh draws require CPP_GAME_ENGINE_USE_VULKAN");
 #endif
     }
 }

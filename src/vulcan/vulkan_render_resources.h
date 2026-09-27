@@ -2,6 +2,7 @@
 #pragma once
 
 #include <algorithm>
+#include <limits>
 #include <map>
 
 namespace vulkan
@@ -177,7 +178,8 @@ namespace vulkan
             return uniforms;
         }
 
-        Pipeline& pipeline(const VulkanShaderProgram& shader, const Uniforms& uniforms)
+        Pipeline& pipeline(const VulkanShaderProgram& shader, const Uniforms& uniforms,
+            const rendering::VertexLayout* vertexLayout)
         {
             // Exact content key avoids hash collisions, dangling shader pointers and address reuse.
             std::string key;
@@ -200,6 +202,16 @@ namespace vulkan
                 key.append(source.bytes.data(), source.bytes.size());
             }
             for (auto uniform : uniforms) { append(uniform->binding.set); append(uniform->binding.binding); }
+            if (vertexLayout)
+            {
+                append(vertexLayout->stride);
+                for (const auto& attribute : vertexLayout->attributes)
+                {
+                    append(attribute.location);
+                    append(attribute.format);
+                    append(attribute.offset);
+                }
+            }
             auto existing = pipelines.find(key);
             if (existing != pipelines.end()) return *existing->second;
 
@@ -232,7 +244,24 @@ namespace vulkan
                 stage.pName = module.entryPoint().c_str();
                 stages.push_back(stage);
             }
+            VkVertexInputBindingDescription binding { 0, vertexLayout ? vertexLayout->stride : 0, VK_VERTEX_INPUT_RATE_VERTEX };
+            std::vector<VkVertexInputAttributeDescription> attributes;
+            if (vertexLayout)
+                for (const auto& attribute : vertexLayout->attributes)
+                {
+                    const VkFormat format = attribute.format == rendering::VertexAttributeFormat::Float2 ? VK_FORMAT_R32G32_SFLOAT :
+                        attribute.format == rendering::VertexAttributeFormat::Float3 ? VK_FORMAT_R32G32B32_SFLOAT :
+                        VK_FORMAT_R32G32B32A32_SFLOAT;
+                    attributes.push_back({ attribute.location, 0, format, attribute.offset });
+                }
             VkPipelineVertexInputStateCreateInfo input { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+            if (vertexLayout)
+            {
+                input.vertexBindingDescriptionCount = 1;
+                input.pVertexBindingDescriptions = &binding;
+                input.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributes.size());
+                input.pVertexAttributeDescriptions = attributes.data();
+            }
             VkPipelineInputAssemblyStateCreateInfo assembly { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
             assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
             VkPipelineViewportStateCreateInfo viewport { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
@@ -272,10 +301,28 @@ namespace vulkan
             return stored;
         }
 
-        void draw(const VulkanShaderProgram& shader, VulkanMemoryManager& memory)
+        void draw(const VulkanShaderProgram& shader, VulkanMemoryManager& memory,
+            const rendering::SerializedBufferView* vertices = nullptr,
+            const rendering::VertexLayout* vertexLayout = nullptr)
         {
+            if ((vertices == nullptr) != (vertexLayout == nullptr))
+                throw std::invalid_argument("Vulkan mesh data and vertex layout must be provided together");
+            if (vertices && (vertices->empty() || !vertexLayout->valid() ||
+                vertices->elementStride != vertexLayout->stride ||
+                vertices->elementCount > std::numeric_limits<uint32_t>::max() ||
+                vertices->elementCount > std::numeric_limits<size_t>::max() / vertexLayout->stride ||
+                vertices->byteSize != vertices->elementCount * vertexLayout->stride))
+                throw std::invalid_argument("Vulkan mesh data does not match its explicit vertex layout");
+            if (vertexLayout && (vertexLayout->stride > limits.maxVertexInputBindingStride ||
+                vertexLayout->attributes.size() > limits.maxVertexInputAttributes))
+                throw std::invalid_argument("Vulkan mesh layout exceeds device vertex input limits");
+            if (vertexLayout)
+                for (const auto& attribute : vertexLayout->attributes)
+                    if (attribute.location >= limits.maxVertexInputAttributes ||
+                        attribute.offset > limits.maxVertexInputAttributeOffset)
+                        throw std::invalid_argument("Vulkan mesh attribute exceeds device vertex input limits");
             auto uniforms = uniformLayout(shader);
-            auto& program = pipeline(shader, uniforms);
+            auto& program = pipeline(shader, uniforms, vertexLayout);
             auto draw = std::make_unique<Draw>(device);
             std::vector<VkDescriptorSet> sets(program.sets.size());
             if (!sets.empty())
@@ -305,13 +352,30 @@ namespace vulkan
                     draw->buffers.push_back(std::move(buffer));
                 }
             }
+            if (vertices)
+            {
+                rendering::GpuBufferDescription description;
+                description.byteSize = vertices->byteSize;
+                description.usage = rendering::GpuBufferUsage::Vertex;
+                description.memoryUsage = rendering::GpuMemoryUsage::CpuToGpu;
+                auto buffer = memory.createVulkanBuffer(description);
+                memory.writeBuffer(*buffer, *vertices);
+                draw->buffers.push_back(std::move(buffer));
+            }
             // Retain resources before recording any references; allocation failures leave the frame valid.
             draws.push_back(std::move(draw));
             vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_GRAPHICS, program.handle);
             if (!sets.empty())
                 vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_GRAPHICS, program.layout, 0,
                     static_cast<uint32_t>(sets.size()), sets.data(), 0, nullptr);
-            vkCmdDraw(command, 3, 1, 0, 0);
+            if (vertices)
+            {
+                const VkBuffer buffer = draws.back()->buffers.back()->handle();
+                const VkDeviceSize offset = 0;
+                vkCmdBindVertexBuffers(command, 0, 1, &buffer, &offset);
+                vkCmdDraw(command, static_cast<uint32_t>(vertices->elementCount), 1, 0, 0);
+            }
+            else vkCmdDraw(command, 3, 1, 0, 0);
         }
     };
 #else

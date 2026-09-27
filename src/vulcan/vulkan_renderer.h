@@ -164,5 +164,13 @@ namespace vulkan
 
         size_t renderCallCount() const
         { return m_renderCallCount; }
+
+        // Record an asset-driven non-indexed mesh draw. Vertex bytes are copied
+        // into frame-owned GPU resources before this call returns.
+        void drawMesh(
+            VulkanShaderProgram& shader,
+            const rendering::SerializedBufferView& vertices,
+            const rendering::VertexLayout& layout
+        );
     };
 }

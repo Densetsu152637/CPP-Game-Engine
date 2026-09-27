@@ -36,6 +36,14 @@ namespace
         return shader;
     }
 
+    vulkan::VulkanShaderProgram makeMeshShader(const std::filesystem::path& directory)
+    {
+        vulkan::VulkanShaderProgram shader("mesh-smoke");
+        shader.addSpirv(rendering::ShaderStage::Vertex, directory / "mesh.vert.spv");
+        shader.addSpirv(rendering::ShaderStage::Fragment, directory / "triangle.frag.spv");
+        return shader;
+    }
+
     void check(VkResult result, const char* operation)
     {
         if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
@@ -200,6 +208,15 @@ namespace
         std::array<float, 16> transform { 0.5f,0,0,0, 0,0.5f,0,0, 0,0,1,0, -0.4f,0,0,1 };
         std::array<float, 4> color { 1,0.2f,0.1f,1 };
         auto shader = makeShader(directory);
+        auto meshShader = makeMeshShader(directory);
+        const std::array<std::array<float, 3>, 3> meshVertices {{
+            {{0.0f, -0.6f, 0.0f}},
+            {{0.6f, 0.6f, 0.0f}},
+            {{-0.6f, 0.6f, 0.0f}}
+        }};
+        const auto meshView = rendering::serialized_buffer_view(meshVertices.data(), meshVertices.size());
+        const rendering::VertexLayout meshLayout { sizeof(float) * 3,
+            {{0, rendering::VertexAttributeFormat::Float3, 0}} };
         std::vector<bool> drawn;
         VkSwapchainKHR trackedSwapchain = {};
         VkExtent2D trackedExtent = {};
@@ -223,12 +240,12 @@ namespace
             renderer.upload(shader, "transform", transform, frames, {0,0});
             renderer.upload(shader, "color", color, frames, {0,1});
             renderer.render(shader);
-            // A second draw shares the pipeline but must keep independent UBO bytes.
+            // A mesh-backed draw shares uniform values through its own pipeline and buffer.
             transform[12] = 0.4f;
             color = {0.1f,0.7f,1,1};
-            renderer.upload(shader, "transform", transform, frames, {0,0});
-            renderer.upload(shader, "color", color, frames, {0,1});
-            renderer.render(shader);
+            renderer.upload(meshShader, "transform", transform, frames, {0,0});
+            renderer.upload(meshShader, "color", color, frames, {0,1});
+            renderer.drawMesh(meshShader, meshView, meshLayout);
             if (frames == 2)
             {
                 auto temporary = makeShader(directory);

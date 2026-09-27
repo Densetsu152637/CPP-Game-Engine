@@ -16,6 +16,45 @@
 
 namespace rendering
 {
+    // Explicit vertex input metadata. This describes only shader-facing bytes;
+    // it never serializes an arbitrary component or C++ object layout.
+    enum class VertexAttributeFormat : uint8_t
+    {
+        Float2,
+        Float3,
+        Float4
+    };
+
+    struct VertexAttribute
+    {
+        uint32_t location = 0;
+        VertexAttributeFormat format = VertexAttributeFormat::Float3;
+        uint32_t offset = 0;
+    };
+
+    struct VertexLayout
+    {
+        uint32_t stride = 0;
+        std::vector<VertexAttribute> attributes;
+
+        bool valid() const
+        {
+            if (stride == 0 || attributes.empty()) return false;
+            for (size_t i = 0; i < attributes.size(); ++i)
+            {
+                const auto& attribute = attributes[i];
+                const uint32_t size = attribute.format == VertexAttributeFormat::Float2 ? 8u :
+                    attribute.format == VertexAttributeFormat::Float3 ? 12u :
+                    attribute.format == VertexAttributeFormat::Float4 ? 16u : 0u;
+                if (size == 0 || attribute.offset > stride || size > stride - attribute.offset)
+                    return false;
+                for (size_t j = 0; j < i; ++j)
+                    if (attributes[j].location == attribute.location) return false;
+            }
+            return true;
+        }
+    };
+
     enum class GpuBufferUsage : uint32_t
     {
         None = 0,

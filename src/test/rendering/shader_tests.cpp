@@ -2,6 +2,7 @@
 #include <string>
 
 #include "ecs/aliases/component_alias.h"
+#include "rendering/gpu_buffer.h"
 #include "test/rendering/rendering_test_fakes.h"
 #include "test/test_assertions.h"
 
@@ -69,4 +70,16 @@ void test_shader_component_upload_requires_binding()
         },
         "shader accepted a component upload without a binding"
     );
+
+    rendering::VertexLayout positionColor;
+    positionColor.stride = sizeof(float) * 7;
+    positionColor.attributes = {
+        { 0, rendering::VertexAttributeFormat::Float3, 0 },
+        { 1, rendering::VertexAttributeFormat::Float4, sizeof(float) * 3 }
+    };
+    test::require(positionColor.valid(), "valid explicit position/color vertex layout was rejected");
+    positionColor.attributes[1].location = 0;
+    test::require(!positionColor.valid(), "duplicate vertex attribute locations were accepted");
+    positionColor.attributes[1] = { 1, rendering::VertexAttributeFormat::Float4, sizeof(float) * 4 };
+    test::require(!positionColor.valid(), "vertex attribute extending past the stride was accepted");
 }
