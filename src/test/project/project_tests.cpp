@@ -7,11 +7,39 @@
 #include <string>
 #include <thread>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 #include "project/project.h"
 #include "test/test_assertions.h"
 
 namespace
 {
+    struct DirectoryLink
+    {
+        std::filesystem::path link;
+        DirectoryLink(std::filesystem::path linkPath, const std::filesystem::path& target) : link(std::move(linkPath))
+        {
+            std::filesystem::create_directories(link.parent_path());
+#ifdef _WIN32
+            if (CreateSymbolicLinkW(link.c_str(), target.c_str(), SYMBOLIC_LINK_FLAG_DIRECTORY | SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE)) return;
+            const auto error = GetLastError();
+            if (error != ERROR_PRIVILEGE_NOT_HELD && error != ERROR_INVALID_PARAMETER)
+                test::require(false, "project root alias creation failed unexpectedly: " + std::to_string(error));
+            const std::wstring command = L"cmd.exe /d /s /c mklink /J \"" + link.native() + L"\" \"" + target.native() + L"\"";
+            test::require(_wsystem(command.c_str()) == 0, "project directory junction could not be created");
+#else
+            std::error_code ec;
+            std::filesystem::create_directory_symlink(target, link, ec);
+            test::require(!ec, "project directory symlink could not be created: " + ec.message());
+#endif
+        }
+        ~DirectoryLink() { std::error_code ignored; std::filesystem::remove(link, ignored); }
+    };
+
     struct TemporaryProject
     {
         std::filesystem::path root;
@@ -201,6 +229,42 @@ namespace
         requireCode(save.error(), "scene.revision.stale");
     }
 
+    void sharedResolversCanonicalizeAliasedRootsAndRejectEscapingLinks()
+    {
+        TemporaryProject fixture;
+        auto loaded = project::loadProject(fixture.root / "project.json");
+        test::require(loaded.has_value(), "base fixture should load before alias checks");
+
+        const auto aliasPath = fixture.root.parent_path() / (fixture.root.filename().string() + "-alias");
+        DirectoryLink rootAlias(aliasPath, fixture.root);
+        auto aliasedProject = *loaded;
+        aliasedProject.root = aliasPath;
+        auto script = project::resolveAsset(aliasedProject, "asset:player-script");
+        test::require(script && *script == std::filesystem::canonical(fixture.root / "scripts/player.lua"),
+            "asset resolver should canonicalize a junction-backed project root");
+        auto scene = project::loadScene(aliasPath / "scenes/main.json", aliasedProject);
+        test::require(scene && scene->entities.size() == 1,
+            "project scene loader should validate assets from a junction-backed root");
+        auto missingCatalog = aliasedProject;
+        missingCatalog.assets.erase("asset:player-script");
+        auto missing = project::loadScene(aliasPath / "scenes/main.json", missingCatalog);
+        test::require(!missing, "project scene loader should reject missing references through an aliased root");
+        requireCode(missing.error(), "project.asset.unknown");
+
+        TemporaryProject outside;
+        const auto linkPath = fixture.root / "external-assets";
+        DirectoryLink externalLink(linkPath, outside.root);
+        outside.write("secret.lua", "return {}\n");
+        aliasedProject.assets.emplace("asset:escape", project::Asset{"asset:escape", "external-assets/secret.lua", "script"});
+        auto escaped = project::resolveAsset(aliasedProject, "asset:escape");
+        test::require(!escaped, "canonical root normalization must not allow an asset symlink outside the project");
+        requireCode(escaped.error(), "project.path.outside_root");
+        fixture.write("scenes/main.json", R"({"schema":1,"scene_id":"scene:main","entities":[{"id":"object:player","name":"Player","components":{"Script":{"asset":"asset:escape"}}}]})");
+        auto escapedScene = project::loadScene(aliasPath / "scenes/main.json", aliasedProject);
+        test::require(!escapedScene, "project scene loader must reject an escaping asset link through an aliased root");
+        requireCode(escapedScene.error(), "project.path.outside_root");
+    }
+
     void componentRegistryDrivesStableEditorMetadataAndSaveFailuresPreserveBytes()
     {
         const auto descriptors = project::componentDescriptors();
@@ -247,6 +311,7 @@ int main()
         validProjectLoadsAndEditHistoryIsRevisioned();
         rejectsMalformedSchemaIdsAndPaths();
         stableCatalogAndSessionConflictsAreEnforced();
+        sharedResolversCanonicalizeAliasedRootsAndRejectEscapingLinks();
         componentRegistryDrivesStableEditorMetadataAndSaveFailuresPreserveBytes();
         std::cout << "[PASS] project format and validation tests\n";
         return 0;

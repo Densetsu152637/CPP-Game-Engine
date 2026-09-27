@@ -579,9 +579,13 @@ namespace project
         const auto found = project.assets.find(assetId);
         if (found == project.assets.end())
             return std::unexpected(one("project.asset.unknown", project.manifest, "assets", "Asset ID is not declared in the project catalog"));
+        std::filesystem::path root;
+        try { root = canonicalPath(project.root); }
+        catch (const std::filesystem::filesystem_error&)
+        { return std::unexpected(one("project.root.invalid", project.root, "", "Project root cannot be resolved")); }
         std::filesystem::path resolved;
         Diagnostics diagnostics;
-        if (!resolveFile(project.root, found->second.path.generic_string(), project.manifest,
+        if (!resolveFile(root, found->second.path.generic_string(), project.manifest,
             "assets[" + found->second.id + "].path", resolved, diagnostics))
             return std::unexpected(std::move(diagnostics));
         return resolved;
@@ -589,7 +593,11 @@ namespace project
 
     Result<Scene> loadScene(const std::filesystem::path& sceneFile, const Project& project)
     {
-        auto scene = loadScene(sceneFile, project.root);
+        Project canonicalProject = project;
+        try { canonicalProject.root = canonicalPath(project.root); }
+        catch (const std::filesystem::filesystem_error&)
+        { return std::unexpected(one("project.root.invalid", project.root, "", "Project root cannot be resolved")); }
+        auto scene = loadScene(sceneFile, canonicalProject.root);
         if (!scene) return std::unexpected(scene.error());
         Diagnostics diagnostics;
         for (size_t i = 0; i < scene->entities.size(); ++i)
@@ -597,44 +605,44 @@ namespace project
             const auto& renderer = scene->entities[i].meshRenderer;
             if (renderer)
             {
-                const auto mesh = project.assets.find(renderer->mesh);
+                const auto mesh = canonicalProject.assets.find(renderer->mesh);
                 const auto meshField = "entities[" + std::to_string(i) + "].components.MeshRenderer.mesh";
-                if (mesh == project.assets.end())
+                if (mesh == canonicalProject.assets.end())
                     add(diagnostics, "project.asset.unknown", scene->source, meshField, "Mesh asset ID is not declared in the project catalog");
                 else if (mesh->second.kind != "mesh")
                     add(diagnostics, "project.asset.kind.mismatch", scene->source, meshField, "MeshRenderer.mesh must reference an asset of kind mesh");
                 else
                 {
                     std::filesystem::path resolved;
-                    resolveFile(project.root, mesh->second.path.generic_string(), scene->source, meshField, resolved, diagnostics);
+                    resolveFile(canonicalProject.root, mesh->second.path.generic_string(), scene->source, meshField, resolved, diagnostics);
                 }
                 if (renderer->texture)
                 {
-                    const auto texture = project.assets.find(*renderer->texture);
+                    const auto texture = canonicalProject.assets.find(*renderer->texture);
                     const auto textureField = "entities[" + std::to_string(i) + "].components.MeshRenderer.texture";
-                    if (texture == project.assets.end())
+                    if (texture == canonicalProject.assets.end())
                         add(diagnostics, "project.asset.unknown", scene->source, textureField, "Texture asset ID is not declared in the project catalog");
                     else if (texture->second.kind != "texture")
                         add(diagnostics, "project.asset.kind.mismatch", scene->source, textureField, "MeshRenderer.texture must reference an asset of kind texture");
                     else
                     {
                         std::filesystem::path resolved;
-                        resolveFile(project.root, texture->second.path.generic_string(), scene->source, textureField, resolved, diagnostics);
+                        resolveFile(canonicalProject.root, texture->second.path.generic_string(), scene->source, textureField, resolved, diagnostics);
                     }
                 }
             }
             const auto& script = scene->entities[i].script;
             if (!script) continue;
-            const auto found = project.assets.find(script->asset);
+            const auto found = canonicalProject.assets.find(script->asset);
             const auto path = "entities[" + std::to_string(i) + "].components.Script.asset";
-            if (found == project.assets.end())
+            if (found == canonicalProject.assets.end())
                 add(diagnostics, "project.asset.unknown", scene->source, path, "Script asset ID is not declared in the project catalog");
             else if (found->second.kind != "script")
                 add(diagnostics, "project.asset.kind.mismatch", scene->source, path, "Script component must reference an asset of kind script");
             else
             {
                 std::filesystem::path resolved;
-                resolveFile(project.root, found->second.path.generic_string(), scene->source, path, resolved, diagnostics);
+                resolveFile(canonicalProject.root, found->second.path.generic_string(), scene->source, path, resolved, diagnostics);
             }
         }
         if (!diagnostics.empty()) return std::unexpected(std::move(diagnostics));
