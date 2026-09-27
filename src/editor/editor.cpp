@@ -476,6 +476,8 @@ namespace editor
                         selectedEntity = -1;
                         for (HWND field : position) EnableWindow(field, FALSE);
                         EnableWindow(script, FALSE);
+                        EnableWindow(mesh, FALSE);
+                        EnableWindow(texture, FALSE);
                         fillAssets(script, "script", std::nullopt);
                         fillAssets(mesh, "mesh", std::nullopt);
                         fillAssets(texture, "texture", std::nullopt);
@@ -487,6 +489,8 @@ namespace editor
                 {
                     for (HWND field : position) EnableWindow(field, FALSE);
                     EnableWindow(script, FALSE);
+                    EnableWindow(mesh, FALSE);
+                    EnableWindow(texture, FALSE);
                     fillAssets(script, "script", std::nullopt);
                     fillAssets(mesh, "mesh", std::nullopt);
                     fillAssets(texture, "texture", std::nullopt);
