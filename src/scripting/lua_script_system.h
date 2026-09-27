@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <functional>
 
 struct LuaScriptId
 {
@@ -25,6 +26,18 @@ struct EngineScriptApi
     std::function<bool(std::int64_t)> destroy_entity;
     std::function<bool(std::int64_t, float, float, float)> set_position;
     std::function<std::optional<std::array<float, 3>>(std::int64_t)> get_position;
+    // Project CLI mode routes ordinary Lua output away from machine-readable stdout.
+    bool redirect_standard_output = false;
+};
+
+// Per-instance capabilities supplied to an entity-owned script. The owner is
+// a generation-aware runtime handle; it is never a persistent project ID.
+struct LuaScriptContext
+{
+    std::optional<std::int64_t> owner;
+    std::function<bool(std::string_view)> pressed;
+    std::function<bool(std::string_view)> held;
+    std::function<bool(std::string_view)> released;
 };
 
 class LuaScriptSystem
@@ -42,9 +55,14 @@ public:
 
     // A script chunk returns a table containing optional on_create, on_update(dt), and on_destroy functions.
     LoadResult load_file(const std::string& path);
+    LoadResult load_file(const std::string& path, LuaScriptContext context);
     LoadResult load_string(std::string_view source, std::string_view chunk_name = "script");
+    LoadResult load_string(std::string_view source, LuaScriptContext context, std::string_view chunk_name = "script");
     Result update(float delta_seconds);
     Result unload(LuaScriptId id);
+    // Used by transactional replacement: retain the script table when its
+    // on_destroy callback fails so the caller can discard the candidate.
+    Result unloadRetainingOnDestroyFailure(LuaScriptId id);
     Result shutdown();
 
 private:

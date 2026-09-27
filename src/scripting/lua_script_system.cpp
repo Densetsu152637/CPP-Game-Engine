@@ -19,7 +19,7 @@ extern "C"
 
 struct LuaScriptSystem::Impl
 {
-    struct Script { LuaScriptId id; int table_ref = LUA_NOREF; };
+    struct Script { LuaScriptId id; int table_ref = LUA_NOREF; LuaScriptContext context; };
 
     lua_State* state = luaL_newstate();
     EngineScriptApi api;
@@ -28,6 +28,7 @@ struct LuaScriptSystem::Impl
     std::uint64_t next_id = 1;
     unsigned lua_execution_depth = 0;
     bool closed = false;
+    const LuaScriptContext* active_context = nullptr;
 
     struct ExecutionScope
     {
@@ -45,7 +46,21 @@ struct LuaScriptSystem::Impl
     explicit Impl(EngineScriptApi services) : api(std::move(services))
     {
         if (state)
+        {
             luaL_openlibs(state);
+            if (api.redirect_standard_output)
+            {
+                lua_pushlightuserdata(state, this);
+                lua_pushcclosure(state, print_to_log, 1);
+                lua_setglobal(state, "print");
+                lua_getglobal(state, "io");
+                lua_getfield(state, -1, "stderr");
+                lua_getfield(state, -2, "output");
+                lua_pushvalue(state, -2);
+                lua_call(state, 1, 0);
+                lua_pop(state, 2);
+            }
+        }
     }
 
     ~Impl()
@@ -57,6 +72,29 @@ struct LuaScriptSystem::Impl
     static Impl* from_upvalue(lua_State* lua)
     {
         return static_cast<Impl*>(lua_touserdata(lua, lua_upvalueindex(1)));
+    }
+
+    static int print_to_log(lua_State* lua)
+    {
+        return invoke(lua, [&]
+        {
+            auto* self = from_upvalue(lua);
+            std::array<char, 4096> output{};
+            size_t used = 0;
+            const int count = lua_gettop(lua);
+            for (int index = 1; index <= count; ++index)
+            {
+                if (index > 1 && used < output.size()) output[used++] = '\t';
+                size_t length = 0;
+                const char* value = luaL_tolstring(lua, index, &length);
+                const size_t copyLength = std::min(length, output.size() - used);
+                std::memcpy(output.data() + used, value, copyLength);
+                used += copyLength;
+                lua_pop(lua, 1);
+            }
+            if (self->api.log) self->api.log(std::string_view(output.data(), used));
+            return 0;
+        });
     }
 
     template<class Fn>
@@ -170,6 +208,53 @@ struct LuaScriptSystem::Impl
         });
     }
 
+    static int self_set_position(lua_State* lua)
+    {
+        return invoke(lua, [&]
+        {
+            auto* self = from_upvalue(lua);
+            if (!self->active_context || !self->active_context->owner || !self->api.set_position)
+                return luaL_error(lua, "self position is unavailable");
+            const bool changed = self->api.set_position(*self->active_context->owner,
+                static_cast<float>(luaL_checknumber(lua, 1)), static_cast<float>(luaL_checknumber(lua, 2)),
+                static_cast<float>(luaL_checknumber(lua, 3)));
+            lua_pushboolean(lua, changed);
+            return 1;
+        });
+    }
+
+    static int self_get_position(lua_State* lua)
+    {
+        return invoke(lua, [&]
+        {
+            auto* self = from_upvalue(lua);
+            if (!self->active_context || !self->active_context->owner || !self->api.get_position)
+            { lua_pushnil(lua); return 1; }
+            const auto position = self->api.get_position(*self->active_context->owner);
+            if (!position) { lua_pushnil(lua); return 1; }
+            lua_createtable(lua, 0, 3);
+            lua_pushnumber(lua, (*position)[0]); lua_setfield(lua, -2, "x");
+            lua_pushnumber(lua, (*position)[1]); lua_setfield(lua, -2, "y");
+            lua_pushnumber(lua, (*position)[2]); lua_setfield(lua, -2, "z");
+            return 1;
+        });
+    }
+
+    static int input_action(lua_State* lua)
+    {
+        return invoke(lua, [&]
+        {
+            auto* self = from_upvalue(lua);
+            const char* action = luaL_checkstring(lua, 1);
+            const char* mode = lua_tostring(lua, lua_upvalueindex(2));
+            if (!self->active_context) { lua_pushboolean(lua, false); return 1; }
+            const auto& query = std::string_view(mode) == "pressed" ? self->active_context->pressed
+                : std::string_view(mode) == "held" ? self->active_context->held : self->active_context->released;
+            lua_pushboolean(lua, query && query(action));
+            return 1;
+        });
+    }
+
     void add_function(const char* name, lua_CFunction function)
     {
         lua_pushlightuserdata(state, this);
@@ -198,6 +283,12 @@ struct LuaScriptSystem::Impl
 
     Result call(const Script& script, const char* method, const int arguments = 0, const float delta = 0.0f)
     {
+        struct ContextScope
+        {
+            Impl& impl; const LuaScriptContext* previous;
+            ContextScope(Impl& owner, const LuaScriptContext& context) : impl(owner), previous(owner.active_context) { impl.active_context = &context; }
+            ~ContextScope() { impl.active_context = previous; }
+        } contextScope(*this, script.context);
         lua_rawgeti(state, LUA_REGISTRYINDEX, script.table_ref);
         lua_pushstring(state, method);
         lua_rawget(state, -2); // avoid executing a Lua __index metamethod outside lua_pcall
@@ -214,7 +305,7 @@ struct LuaScriptSystem::Impl
         return {};
     }
 
-    LoadResult load(std::string_view source, std::string_view name)
+    LoadResult load(std::string_view source, std::string_view name, LuaScriptContext context = {})
     {
         if (closed || !state) return std::unexpected("Lua runtime is shut down");
         const std::string chunk_name(name);
@@ -225,6 +316,22 @@ struct LuaScriptSystem::Impl
         lua_newtable(state);
         push_engine_api();
         lua_setfield(state, -2, "engine");
+        if (context.owner)
+        {
+            lua_newtable(state);
+            add_function("set_position", self_set_position);
+            add_function("get_position", self_get_position);
+            lua_setfield(state, -2, "self");
+            lua_newtable(state);
+            for (const char* mode : {"pressed", "held", "released"})
+            {
+                lua_pushlightuserdata(state, this);
+                lua_pushstring(state, mode);
+                lua_pushcclosure(state, input_action, 2);
+                lua_setfield(state, -2, mode);
+            }
+            lua_setfield(state, -2, "input");
+        }
         lua_newtable(state);
         lua_pushglobaltable(state);
         lua_setfield(state, -2, "__index");
@@ -248,7 +355,7 @@ struct LuaScriptSystem::Impl
             return std::unexpected("Lua script id space exhausted");
         }
 
-        Script script{LuaScriptId{next_id++}, luaL_ref(state, LUA_REGISTRYINDEX)};
+        Script script{LuaScriptId{next_id++}, luaL_ref(state, LUA_REGISTRYINDEX), std::move(context)};
         auto [it, inserted] = scripts.emplace(script.id.value, script);
         (void)inserted;
         auto created = call(it->second, "on_create");
@@ -263,11 +370,12 @@ struct LuaScriptSystem::Impl
         return script.id;
     }
 
-    Result remove(const LuaScriptId id)
+    Result remove(const LuaScriptId id, const bool retainOnDestroyFailure = false)
     {
         auto it = scripts.find(id.value);
         if (it == scripts.end()) return std::unexpected("unknown Lua script id");
         auto destroyed = call(it->second, "on_destroy");
+        if (!destroyed && retainOnDestroyFailure) return destroyed;
         luaL_unref(state, LUA_REGISTRYINDEX, it->second.table_ref);
         scripts.erase(it);
         return destroyed;
@@ -306,6 +414,11 @@ LuaScriptSystem::~LuaScriptSystem() = default;
 
 LuaScriptSystem::LoadResult LuaScriptSystem::load_file(const std::string& path)
 {
+    return load_file(path, {});
+}
+
+LuaScriptSystem::LoadResult LuaScriptSystem::load_file(const std::string& path, LuaScriptContext context)
+{
     const auto impl = m_impl;
     if (!impl || impl->closed) return std::unexpected("Lua runtime is shut down");
     if (impl->lua_execution_depth != 0) return std::unexpected("cannot load scripts during Lua execution");
@@ -314,17 +427,22 @@ LuaScriptSystem::LoadResult LuaScriptSystem::load_file(const std::string& path)
     if (!file) return std::unexpected("unable to open Lua script: " + path);
     std::string source((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     if (file.bad()) return std::unexpected("unable to read Lua script: " + path);
-    return impl->load(source, "@" + path);
+    return impl->load(source, "@" + path, std::move(context));
 }
 
 LuaScriptSystem::LoadResult LuaScriptSystem::load_string(const std::string_view source, const std::string_view chunk_name)
+{
+    return load_string(source, {}, chunk_name);
+}
+
+LuaScriptSystem::LoadResult LuaScriptSystem::load_string(const std::string_view source, LuaScriptContext context, const std::string_view chunk_name)
 {
     const auto impl = m_impl;
     if (!impl) return std::unexpected("Lua runtime unavailable");
     if (impl->closed) return std::unexpected("Lua runtime is shut down");
     if (impl->lua_execution_depth != 0) return std::unexpected("cannot load scripts during Lua execution");
     Impl::ExecutionScope execution(*impl);
-    return impl->load(source, chunk_name);
+    return impl->load(source, chunk_name, std::move(context));
 }
 
 LuaScriptSystem::Result LuaScriptSystem::update(const float delta_seconds)
@@ -351,6 +469,15 @@ LuaScriptSystem::Result LuaScriptSystem::unload(const LuaScriptId id)
     if (impl->lua_execution_depth != 0) return std::unexpected("cannot unload scripts during Lua execution");
     Impl::ExecutionScope execution(*impl);
     return impl->remove(id);
+}
+
+LuaScriptSystem::Result LuaScriptSystem::unloadRetainingOnDestroyFailure(const LuaScriptId id)
+{
+    const auto impl = m_impl;
+    if (!impl || impl->closed) return std::unexpected("Lua runtime is shut down");
+    if (impl->lua_execution_depth != 0) return std::unexpected("cannot unload scripts during Lua execution");
+    Impl::ExecutionScope execution(*impl);
+    return impl->remove(id, true);
 }
 
 LuaScriptSystem::Result LuaScriptSystem::shutdown()

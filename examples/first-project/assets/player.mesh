@@ -1,0 +1,5 @@
+# Explicit non-indexed triangle list: position xyz and texture uv per vertex.
+CGMESH 1
+vertex 0.0 -0.6 0.0 0.5 1.0
+vertex 0.6 0.6 0.0 1.0 0.0
+vertex -0.6 0.6 0.0 0.0 0.0

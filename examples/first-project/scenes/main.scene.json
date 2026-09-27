@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "scene_id": "scene:first-project",
+  "entities": [
+    {
+      "id": "entity:player",
+      "name": "Player",
+      "components": {
+        "Transform": { "position": [0.0, 0.0, 0.0] },
+        "Script": { "asset": "asset:player-script" },
+        "MeshRenderer": { "mesh": "asset:player-mesh", "texture": "asset:player-texture" }
+      }
+    }
+  ]
+}
