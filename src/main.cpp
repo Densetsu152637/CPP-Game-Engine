@@ -11,6 +11,7 @@
 #include "ecs/processor.h"
 #include "scripting/lua_script_system.h"
 #include "vulcan/vulkan_renderer.h"
+#include "commands.h"
 
 namespace
 {
@@ -57,6 +58,7 @@ namespace
 }
 int main(int argc, char** argv)
 {
+    if (const auto result = runCommands(argc, argv)) return *result;
 #ifdef CPP_GAME_ENGINE_USE_VULKAN
     GLFWwindow* window = nullptr;
 #endif
