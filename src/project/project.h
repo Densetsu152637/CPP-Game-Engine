@@ -6,6 +6,7 @@
 #include <memory>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -106,7 +107,44 @@ namespace project
         std::optional<std::string> asset;
     };
 
-    using EditOperation = std::variant<SetPosition, SetScript>;
+    struct SetMeshRenderer
+    {
+        std::string entityId;
+        std::optional<MeshRenderer> value;
+    };
+
+    using EditOperation = std::variant<SetPosition, SetScript, SetMeshRenderer>;
+
+    enum class PropertyType
+    {
+        Float3,
+        AssetId,
+        OptionalAssetId
+    };
+
+    struct PropertyDescriptor
+    {
+        std::string_view name;
+        PropertyType type;
+        std::string_view defaultValue;
+        bool required;
+    };
+
+    struct ComponentDescriptor
+    {
+        std::string_view serializedName;
+        unsigned schemaVersion;
+        std::span<const PropertyDescriptor> properties;
+    };
+
+    std::span<const ComponentDescriptor> componentDescriptors() noexcept;
+
+    enum class SaveFailureInjection
+    {
+        None,
+        Serialization,
+        Replace
+    };
 
     class SceneSession
     {
@@ -129,7 +167,7 @@ namespace project
         Result<std::string> apply(const EditOperation& operation, const std::string& expectedRevision);
         Result<std::string> undo(const std::string& expectedRevision);
         Result<std::string> redo(const std::string& expectedRevision);
-        Result<std::string> save(const std::string& expectedRevision);
+        Result<std::string> save(const std::string& expectedRevision, SaveFailureInjection injectFailure = SaveFailureInjection::None);
         Result<void> beginPlay(const std::string& expectedRevision);
         Result<void> applyPlay(const EditOperation& operation);
         const Scene* playSnapshot() const noexcept;

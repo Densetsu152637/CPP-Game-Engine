@@ -88,6 +88,12 @@ namespace
         test::require(!session.snapshot().entities[0].script, "script removal should affect the authored snapshot");
         test::require(session.undo(session.revision()).has_value(), "script component removal should be undoable");
         test::require(session.snapshot().entities[0].script.has_value(), "undo should restore the script reference");
+        const auto meshRevision = session.revision();
+        test::require(session.apply(project::SetMeshRenderer{"object:player", project::MeshRenderer{"asset:player-mesh", std::nullopt}}, meshRevision).has_value(),
+            "typed mesh renderer edit should apply catalog IDs");
+        test::require(!session.snapshot().entities[0].meshRenderer->texture, "mesh renderer edit should update the optional texture");
+        test::require(session.undo(session.revision()).has_value(), "mesh renderer edit should be undoable");
+        test::require(session.snapshot().entities[0].meshRenderer->texture == "asset:player-texture", "undo should restore previous renderer values");
 
         const auto authoredRevision = session.revision();
         test::require(session.save(authoredRevision).has_value(), "scene should save atomically from the current revision");
@@ -188,6 +194,44 @@ namespace
         test::require(!save, "external disk edit should prevent save");
         requireCode(save.error(), "scene.revision.stale");
     }
+
+    void componentRegistryDrivesStableEditorMetadataAndSaveFailuresPreserveBytes()
+    {
+        const auto descriptors = project::componentDescriptors();
+        test::require(descriptors.size() == 3, "registry should expose the three authored component types");
+        test::require(descriptors[0].serializedName == "Transform" && descriptors[0].schemaVersion == 1 &&
+            descriptors[0].properties.size() == 1 && descriptors[0].properties[0].name == "position" &&
+            descriptors[0].properties[0].defaultValue == "[0,0,0]", "Transform descriptor should expose stable serialized metadata");
+        test::require(descriptors[1].serializedName == "Script" && descriptors[1].schemaVersion == 1 &&
+            descriptors[1].properties[0].type == project::PropertyType::AssetId, "Script descriptor should expose asset ID metadata");
+        test::require(descriptors[2].serializedName == "MeshRenderer" && descriptors[2].schemaVersion == 1 &&
+            descriptors[2].properties.size() == 2 && descriptors[2].properties[1].type == project::PropertyType::OptionalAssetId &&
+            !descriptors[2].properties[1].required, "MeshRenderer descriptor should expose optional texture metadata");
+
+        TemporaryProject fixture;
+        auto loaded = project::loadProject(fixture.root / "project.json");
+        test::require(loaded.has_value(), "fixture should load for save fault tests");
+        project::SceneSession session(*loaded);
+        auto changed = session.apply(project::SetPosition{"object:player", {2, 3, 4}}, session.revision());
+        test::require(changed.has_value(), "fixture edit should succeed");
+        auto readScene = [&]
+        {
+            std::ifstream input(fixture.root / "scenes/main.json", std::ios::binary);
+            return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+        };
+        const auto original = readScene();
+        auto serializeFailure = session.save(*changed, project::SaveFailureInjection::Serialization);
+        test::require(!serializeFailure, "injected serializer failure should be reported");
+        requireCode(serializeFailure.error(), "scene.save.serialize");
+        test::require(readScene() == original, "serializer failure must preserve original scene bytes");
+        auto replaceFailure = session.save(*changed, project::SaveFailureInjection::Replace);
+        test::require(!replaceFailure, "injected replacement failure should be reported");
+        requireCode(replaceFailure.error(), "scene.save.replace");
+        test::require(readScene() == original, "replace failure must preserve original scene bytes");
+        test::require(!std::filesystem::exists(fixture.root / "scenes/main.json.tmp"), "failed replacement should clean its temporary file");
+        test::require(session.save(*changed).has_value(), "save should succeed after injected failures are removed");
+        test::require(readScene() != original, "successful retry should commit the edited scene");
+    }
 }
 
 int main()
@@ -197,6 +241,7 @@ int main()
         validProjectLoadsAndEditHistoryIsRevisioned();
         rejectsMalformedSchemaIdsAndPaths();
         stableCatalogAndSessionConflictsAreEnforced();
+        componentRegistryDrivesStableEditorMetadataAndSaveFailuresPreserveBytes();
         std::cout << "[PASS] project format and validation tests\n";
         return 0;
     }

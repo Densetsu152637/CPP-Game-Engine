@@ -185,6 +185,24 @@ namespace project
             return true;
         }
 
+        bool componentVersion(const Object& fields, const std::filesystem::path& file,
+            const std::string& path, const unsigned supported, Diagnostics& diagnostics)
+        {
+            const auto* item = member(fields, "version");
+            if (!item) return true; // v1 documents authored before explicit per-component versions imply version 1.
+            if (!item->is<double>() || !std::isfinite(item->get<double>()) || std::floor(item->get<double>()) != item->get<double>() || item->get<double>() < 1)
+            {
+                add(diagnostics, "project.component.version.invalid", file, path + ".version", "Expected a positive integer component version");
+                return false;
+            }
+            if (item->get<double>() != supported)
+            {
+                add(diagnostics, "project.component.version.unsupported", file, path + ".version", "Component version is not supported");
+                return false;
+            }
+            return true;
+        }
+
         void checkFields(const Object& value, const std::set<std::string>& allowed,
             const std::filesystem::path& file, const std::string& path, Diagnostics& diagnostics)
         {
@@ -203,7 +221,7 @@ namespace project
                 add(diagnostics, "project.component.type", file, path, "Transform must be an object");
                 return false;
             }
-            checkFields(*fields, {"position"}, file, path, diagnostics);
+            checkFields(*fields, {"version", "position"}, file, path, diagnostics);
             const auto* position = member(*fields, "position");
             if (!position || !position->is<picojson::array>() || position->get<picojson::array>().size() != 3)
             {
@@ -256,6 +274,104 @@ namespace project
             return out;
         }
 
+        using ParseHook = bool (*)(const Value&, const std::filesystem::path&, const std::string&, unsigned, SceneEntity&, Diagnostics&);
+        using WriteHook = void (*)(std::ostream&, const SceneEntity&, unsigned);
+        using PresentHook = bool (*)(const SceneEntity&);
+        struct RegisteredComponent
+        {
+            const ComponentDescriptor* descriptor;
+            ParseHook parse;
+            WriteHook write;
+            PresentHook present;
+        };
+
+        const std::array<PropertyDescriptor, 1> transformProperties{{{"position", PropertyType::Float3, "[0,0,0]", true}}};
+        const std::array<PropertyDescriptor, 1> scriptProperties{{{"asset", PropertyType::AssetId, "", true}}};
+        const std::array<PropertyDescriptor, 2> meshRendererProperties{{
+            {"mesh", PropertyType::AssetId, "", true},
+            {"texture", PropertyType::OptionalAssetId, "", false}}};
+
+        const std::array<ComponentDescriptor, 3>& descriptors()
+        {
+            static const std::array<ComponentDescriptor, 3> value{{
+                {"Transform", 1, transformProperties},
+                {"Script", 1, scriptProperties},
+                {"MeshRenderer", 1, meshRendererProperties}}};
+            return value;
+        }
+
+        bool hasTransform(const SceneEntity& entity) { return entity.transform.has_value(); }
+        bool hasScript(const SceneEntity& entity) { return entity.script.has_value(); }
+        bool hasMeshRenderer(const SceneEntity& entity) { return entity.meshRenderer.has_value(); }
+
+        bool parseTransformComponent(const Value& value, const std::filesystem::path& file,
+            const std::string& path, const unsigned version, SceneEntity& entity, Diagnostics& diagnostics)
+        {
+            const auto* fields = object(value);
+            if (!fields) { add(diagnostics, "project.component.type", file, path, "Transform must be an object"); return false; }
+            componentVersion(*fields, file, path, version, diagnostics);
+            Transform parsed;
+            if (!parseTransform(value, file, path, parsed, diagnostics)) return false;
+            entity.transform = parsed;
+            return true;
+        }
+
+        bool parseScriptComponent(const Value& value, const std::filesystem::path& file,
+            const std::string& path, const unsigned version, SceneEntity& entity, Diagnostics& diagnostics)
+        {
+            const auto* fields = object(value);
+            if (!fields) { add(diagnostics, "project.component.type", file, path, "Script must be an object"); return false; }
+            checkFields(*fields, {"version", "asset"}, file, path, diagnostics);
+            componentVersion(*fields, file, path, version, diagnostics);
+            std::string id;
+            if (!stringField(*fields, "asset", file, path, id, diagnostics)) return false;
+            entity.script = Script{std::move(id)};
+            return true;
+        }
+
+        bool parseMeshRendererComponent(const Value& value, const std::filesystem::path& file,
+            const std::string& path, const unsigned version, SceneEntity& entity, Diagnostics& diagnostics)
+        {
+            const auto* fields = object(value);
+            if (!fields) { add(diagnostics, "project.component.type", file, path, "MeshRenderer must be an object"); return false; }
+            checkFields(*fields, {"version", "mesh", "texture"}, file, path, diagnostics);
+            componentVersion(*fields, file, path, version, diagnostics);
+            MeshRenderer parsed;
+            bool valid = stringField(*fields, "mesh", file, path, parsed.mesh, diagnostics);
+            if (const auto* texture = member(*fields, "texture"))
+            {
+                if (!texture->is<std::string>() || texture->get<std::string>().empty())
+                { add(diagnostics, "project.field.type", file, path + ".texture", "Expected a non-empty texture asset ID"); valid = false; }
+                else parsed.texture = texture->get<std::string>();
+            }
+            if (valid) entity.meshRenderer = std::move(parsed);
+            return valid;
+        }
+
+        void writeTransform(std::ostream& out, const SceneEntity& entity, const unsigned version)
+        {
+            const auto& p = entity.transform->position;
+            out << "\"Transform\":{\"version\":" << version << ",\"position\":[" << std::setprecision(std::numeric_limits<float>::max_digits10)
+                << p[0] << ',' << p[1] << ',' << p[2] << "]}";
+        }
+        void writeScript(std::ostream& out, const SceneEntity& entity, const unsigned version)
+        { out << "\"Script\":{\"version\":" << version << ",\"asset\":" << quote(entity.script->asset) << '}'; }
+        void writeMeshRenderer(std::ostream& out, const SceneEntity& entity, const unsigned version)
+        {
+            out << "\"MeshRenderer\":{\"version\":" << version << ",\"mesh\":" << quote(entity.meshRenderer->mesh);
+            if (entity.meshRenderer->texture) out << ",\"texture\":" << quote(*entity.meshRenderer->texture);
+            out << '}';
+        }
+
+        const std::array<RegisteredComponent, 3>& componentRegistry()
+        {
+            static const std::array<RegisteredComponent, 3> value{{
+                {&descriptors()[0], parseTransformComponent, writeTransform, hasTransform},
+                {&descriptors()[1], parseScriptComponent, writeScript, hasScript},
+                {&descriptors()[2], parseMeshRendererComponent, writeMeshRenderer, hasMeshRenderer}}};
+            return value;
+        }
+
         std::string serialize(const Scene& scene)
         {
             std::ostringstream out;
@@ -266,26 +382,13 @@ namespace project
                 if (index) out << ',';
                 const auto& entity = scene.entities[index];
                 out << "{\"id\":" << quote(entity.id) << ",\"name\":" << quote(entity.name) << ",\"components\":{";
-                bool hasComponent = false;
-                if (entity.transform)
+                bool first = true;
+                for (const auto& component : componentRegistry())
                 {
-                    const auto& p = entity.transform->position;
-                    out << "\"Transform\":{\"position\":[" << std::setprecision(std::numeric_limits<float>::max_digits10)
-                        << p[0] << ',' << p[1] << ',' << p[2] << "]}";
-                    hasComponent = true;
-                }
-                if (entity.script)
-                {
-                    if (hasComponent) out << ',';
-                    out << "\"Script\":{\"asset\":" << quote(entity.script->asset) << '}';
-                    hasComponent = true;
-                }
-                if (entity.meshRenderer)
-                {
-                    if (hasComponent) out << ',';
-                    out << "\"MeshRenderer\":{\"mesh\":" << quote(entity.meshRenderer->mesh);
-                    if (entity.meshRenderer->texture) out << ",\"texture\":" << quote(*entity.meshRenderer->texture);
-                    out << '}';
+                    if (!component.present(entity)) continue;
+                    if (!first) out << ',';
+                    component.write(out, entity, component.descriptor->schemaVersion);
+                    first = false;
                 }
                 out << "}}";
             }
@@ -362,9 +465,36 @@ namespace project
                     entity->script = Script{*command.asset};
                     return true;
                 }
+                else if constexpr (std::is_same_v<Command, SetMeshRenderer>)
+                {
+                    if (!command.value) { entity->meshRenderer.reset(); return true; }
+                    const auto mesh = assets.find(command.value->mesh);
+                    if (mesh == assets.end() || mesh->second.kind != "mesh")
+                    {
+                        add(diagnostics, "project.asset.kind.mismatch", scene.source, "entities.MeshRenderer.mesh", "MeshRenderer.mesh must reference a declared mesh asset");
+                        return false;
+                    }
+                    std::filesystem::path resolved;
+                    if (!resolveFile(root, mesh->second.path.generic_string(), scene.source, "entities.MeshRenderer.mesh", resolved, diagnostics)) return false;
+                    if (command.value->texture)
+                    {
+                        const auto texture = assets.find(*command.value->texture);
+                        if (texture == assets.end() || texture->second.kind != "texture")
+                        {
+                            add(diagnostics, "project.asset.kind.mismatch", scene.source, "entities.MeshRenderer.texture", "MeshRenderer.texture must reference a declared texture asset");
+                            return false;
+                        }
+                        if (!resolveFile(root, texture->second.path.generic_string(), scene.source, "entities.MeshRenderer.texture", resolved, diagnostics)) return false;
+                    }
+                    entity->meshRenderer = command.value;
+                    return true;
+                }
             }, operation);
         }
     }
+
+    std::span<const ComponentDescriptor> componentDescriptors() noexcept
+    { return descriptors(); }
 
     Result<Scene> loadScene(const std::filesystem::path& sceneFile, const std::filesystem::path& projectRoot)
     {
@@ -428,46 +558,15 @@ namespace project
                     scene.entities.push_back(std::move(entity));
                     continue;
                 }
-                checkFields(*components, {"Transform", "Script", "MeshRenderer"}, displayFile, path + ".components", diagnostics);
-                if (const auto* transform = member(*components, "Transform"))
-                {
-                    Transform parsed;
-                    if (parseTransform(*transform, displayFile, path + ".components.Transform", parsed, diagnostics))
-                        entity.transform = parsed;
-                }
-                if (const auto* scriptValue = member(*components, "Script"))
-                {
-                    const auto* scriptFields = object(*scriptValue);
-                    if (!scriptFields)
-                        add(diagnostics, "project.component.type", displayFile, path + ".components.Script", "Script must be an object");
-                    else
-                    {
-                        checkFields(*scriptFields, {"asset"}, displayFile, path + ".components.Script", diagnostics);
-                        std::string authored;
-                        if (stringField(*scriptFields, "asset", displayFile, path + ".components.Script", authored, diagnostics))
-                        {
-                            entity.script = Script{authored};
-                        }
-                    }
-                }
-                if (const auto* meshValue = member(*components, "MeshRenderer"))
-                {
-                    const auto* meshFields = object(*meshValue);
-                    if (!meshFields) add(diagnostics, "project.component.type", displayFile, path + ".components.MeshRenderer", "MeshRenderer must be an object");
-                    else
-                    {
-                        checkFields(*meshFields, {"mesh", "texture"}, displayFile, path + ".components.MeshRenderer", diagnostics);
-                        MeshRenderer renderer;
-                        const bool meshValid = stringField(*meshFields, "mesh", displayFile, path + ".components.MeshRenderer", renderer.mesh, diagnostics);
-                        if (const auto* textureValue = member(*meshFields, "texture"))
-                        {
-                            if (!textureValue->is<std::string>() || textureValue->get<std::string>().empty())
-                                add(diagnostics, "project.field.type", displayFile, path + ".components.MeshRenderer.texture", "Expected a non-empty texture asset ID");
-                            else renderer.texture = textureValue->get<std::string>();
-                        }
-                        if (meshValid) entity.meshRenderer = std::move(renderer);
-                    }
-                }
+                std::set<std::string> registeredNames;
+                for (const auto& component : componentRegistry())
+                    registeredNames.emplace(component.descriptor->serializedName);
+                checkFields(*components, registeredNames, displayFile, path + ".components", diagnostics);
+                for (const auto& component : componentRegistry())
+                    if (const auto* value = member(*components, std::string(component.descriptor->serializedName).c_str()))
+                        component.parse(*value, displayFile,
+                            path + ".components." + std::string(component.descriptor->serializedName),
+                            component.descriptor->schemaVersion, entity, diagnostics);
                 scene.entities.push_back(std::move(entity));
             }
         }
@@ -801,7 +900,7 @@ namespace project
         return {};
     }
 
-    Result<std::string> SceneSession::save(const std::string& expectedRevision)
+    Result<std::string> SceneSession::save(const std::string& expectedRevision, const SaveFailureInjection injectFailure)
     {
         Diagnostics diagnostics;
         if (!onOwnerThread(m_impl->ownerThread, m_impl->current.source, diagnostics)) return std::unexpected(std::move(diagnostics));
@@ -813,6 +912,8 @@ namespace project
 
         const auto destination = m_impl->file();
         const auto temporary = destination.parent_path() / (destination.filename().string() + ".tmp");
+        if (injectFailure == SaveFailureInjection::Serialization)
+            return std::unexpected(one("scene.save.serialize", m_impl->current.source, "", "Injected scene serialization failure"));
         const std::string content = serialize(m_impl->current) + "\n";
         {
             std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
@@ -820,6 +921,12 @@ namespace project
             output.write(content.data(), static_cast<std::streamsize>(content.size()));
             output.flush();
             if (!output) return std::unexpected(one("scene.save.write", m_impl->current.source, "", "Unable to write complete scene file"));
+        }
+        if (injectFailure == SaveFailureInjection::Replace)
+        {
+            std::error_code ignored;
+            std::filesystem::remove(temporary, ignored);
+            return std::unexpected(one("scene.save.replace", m_impl->current.source, "", "Injected scene replacement failure"));
         }
 #ifdef _WIN32
         if (!MoveFileExW(temporary.c_str(), destination.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
