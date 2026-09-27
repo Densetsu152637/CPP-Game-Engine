@@ -14,6 +14,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstdio>
+#include <fstream>
 #include <format>
 #include <sstream>
 #include <system_error>
@@ -239,6 +240,11 @@ namespace editor
         std::cerr << "editor.unsupported_platform: the native editor is currently supported on Windows only\n";
         return 1;
     }
+
+    bool runNativeControlSmokeTest(const std::filesystem::path&, const std::filesystem::path&)
+    {
+        return false;
+    }
 }
 #else
 namespace editor
@@ -260,6 +266,8 @@ namespace editor
             PositionY,
             PositionZ,
             ScriptPicker,
+            MeshPicker,
+            TexturePicker,
             DiagnosticsBox,
             StatusText
         };
@@ -302,6 +310,10 @@ namespace editor
             HWND entities = nullptr;
             HWND position[3]{};
             HWND script = nullptr;
+            HWND mesh = nullptr;
+            HWND texture = nullptr;
+            HWND meshLabel = nullptr;
+            HWND textureLabel = nullptr;
             HWND diagnostics = nullptr;
             HWND status = nullptr;
             int selectedEntity = -1;
@@ -339,8 +351,12 @@ namespace editor
                 position[2] = control(window, L"EDIT", L"0", WS_BORDER | ES_AUTOHSCROLL, 312, 174, 170, 26, PositionZ);
                 control(window, L"STATIC", L"Script asset", SS_LEFT, 312, 214, 160, 20, 0);
                 script = control(window, L"COMBOBOX", L"", WS_BORDER | CBS_DROPDOWNLIST | WS_VSCROLL, 312, 238, 360, 240, ScriptPicker);
-                control(window, L"STATIC", L"Validation and log", SS_LEFT, 312, 292, 300, 20, 0);
-                diagnostics = control(window, L"EDIT", L"", WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_VSCROLL, 312, 316, 664, 258, DiagnosticsBox);
+                meshLabel = control(window, L"STATIC", L"MeshRenderer mesh", SS_LEFT, 312, 270, 160, 20, 0);
+                mesh = control(window, L"COMBOBOX", L"", WS_BORDER | CBS_DROPDOWNLIST | WS_VSCROLL, 312, 294, 360, 240, MeshPicker);
+                textureLabel = control(window, L"STATIC", L"MeshRenderer texture", SS_LEFT, 312, 326, 180, 20, 0);
+                texture = control(window, L"COMBOBOX", L"", WS_BORDER | CBS_DROPDOWNLIST | WS_VSCROLL, 312, 350, 360, 240, TexturePicker);
+                control(window, L"STATIC", L"Validation and log", SS_LEFT, 312, 386, 300, 20, 0);
+                diagnostics = control(window, L"EDIT", L"", WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_VSCROLL, 312, 410, 664, 164, DiagnosticsBox);
                 status = control(window, L"STATIC", L"No project open", SS_LEFT, 12, 590, 964, 32, StatusText);
             }
 
@@ -351,28 +367,54 @@ namespace editor
                 return static_cast<size_t>(selection);
             }
 
-            void fillAssets(const std::optional<project::SceneEntity>& entity)
+            void fillAssets(HWND picker, const char* kind, const std::optional<std::string>& selectedId)
             {
-                updating = true;
-                SendMessageW(script, CB_RESETCONTENT, 0, 0);
-                SendMessageW(script, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"(none)"));
+                SendMessageW(picker, CB_RESETCONTENT, 0, 0);
+                const LRESULT none = SendMessageW(picker, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"(none)"));
+                SendMessageW(picker, CB_SETITEMDATA, static_cast<WPARAM>(none), static_cast<LPARAM>(-1));
+                if (!selectedId) SendMessageW(picker, CB_SETCURSEL, static_cast<WPARAM>(none), 0);
                 const auto* opened = document.project();
                 if (opened)
                 {
                     size_t item = 0;
                     for (const auto& [assetId, asset] : opened->assets)
                     {
-                        if (asset.kind != "script") continue;
+                        if (asset.kind != kind) continue;
                         const std::wstring label = widen(assetId + " | " + asset.path.generic_string());
-                        const LRESULT index = SendMessageW(script, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
-                        SendMessageW(script, CB_SETITEMDATA, static_cast<WPARAM>(index), static_cast<LPARAM>(item));
-                        if (entity && entity->script && entity->script->asset == assetId)
-                            SendMessageW(script, CB_SETCURSEL, static_cast<WPARAM>(index), 0);
+                        const LRESULT index = SendMessageW(picker, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
+                        SendMessageW(picker, CB_SETITEMDATA, static_cast<WPARAM>(index), static_cast<LPARAM>(item));
+                        if (selectedId && *selectedId == assetId)
+                            SendMessageW(picker, CB_SETCURSEL, static_cast<WPARAM>(index), 0);
                         ++item;
                     }
                 }
-                if (!entity || !entity->script) SendMessageW(script, CB_SETCURSEL, 0, 0);
-                updating = false;
+            }
+
+            std::optional<std::string> selectedAsset(HWND picker, const char* kind) const
+            {
+                const LRESULT choice = SendMessageW(picker, CB_GETCURSEL, 0, 0);
+                if (choice == CB_ERR) return std::nullopt;
+                const LRESULT item = SendMessageW(picker, CB_GETITEMDATA, static_cast<WPARAM>(choice), 0);
+                if (item == CB_ERR || item < 0) return std::nullopt;
+                const auto* opened = document.project();
+                if (!opened) return std::nullopt;
+                size_t offset = static_cast<size_t>(item);
+                for (const auto& [id, asset] : opened->assets)
+                {
+                    if (asset.kind != kind) continue;
+                    if (offset == 0) return id;
+                    --offset;
+                }
+                return std::nullopt;
+            }
+
+            static std::wstring propertyLabel(std::string_view componentName, std::string_view propertyName)
+            {
+                for (const auto& component : project::componentDescriptors())
+                    if (component.serializedName == componentName)
+                        for (const auto& property : component.properties)
+                            if (property.name == propertyName) return widen(std::string(property.name));
+                return widen(std::string(propertyName));
             }
 
             void render()
@@ -415,26 +457,48 @@ namespace editor
                         const auto& entity = scene.entities[static_cast<size_t>(selectedEntity)];
                         const std::array<float, 3> values = entity.transform ? entity.transform->position : std::array<float, 3>{};
                         for (size_t i = 0; i < values.size(); ++i) SetWindowTextW(position[i], std::format(L"{:.6g}", values[i]).c_str());
-                        fillAssets(entity);
+                        fillAssets(script, "script", entity.script ? std::optional<std::string>(entity.script->asset) : std::nullopt);
+                        fillAssets(mesh, "mesh", entity.meshRenderer ? std::optional<std::string>(entity.meshRenderer->mesh) : std::nullopt);
+                        fillAssets(texture, "texture", entity.meshRenderer ? entity.meshRenderer->texture : std::nullopt);
+                        std::wstring meshProperty = propertyLabel("MeshRenderer", "mesh") + L" (schema ";
+                        std::wstring textureProperty = propertyLabel("MeshRenderer", "texture") + L" (schema ";
+                        for (const auto& descriptor : project::componentDescriptors())
+                            if (descriptor.serializedName == "MeshRenderer")
+                            {
+                                meshProperty += std::to_wstring(descriptor.schemaVersion) + L")";
+                                textureProperty += std::to_wstring(descriptor.schemaVersion) + L")";
+                            }
+                        SetWindowTextW(meshLabel, meshProperty.c_str());
+                        SetWindowTextW(textureLabel, textureProperty.c_str());
                     }
                     else
                     {
                         selectedEntity = -1;
                         for (HWND field : position) EnableWindow(field, FALSE);
                         EnableWindow(script, FALSE);
-                        fillAssets(std::nullopt);
+                        fillAssets(script, "script", std::nullopt);
+                        fillAssets(mesh, "mesh", std::nullopt);
+                        fillAssets(texture, "texture", std::nullopt);
+                        SetWindowTextW(meshLabel, L"MeshRenderer mesh");
+                        SetWindowTextW(textureLabel, L"MeshRenderer texture");
                     }
                 }
                 else
                 {
                     for (HWND field : position) EnableWindow(field, FALSE);
                     EnableWindow(script, FALSE);
-                    fillAssets(std::nullopt);
+                    fillAssets(script, "script", std::nullopt);
+                    fillAssets(mesh, "mesh", std::nullopt);
+                    fillAssets(texture, "texture", std::nullopt);
+                    SetWindowTextW(meshLabel, L"MeshRenderer mesh");
+                    SetWindowTextW(textureLabel, L"MeshRenderer texture");
                 }
                 if (session && selectedEntity >= 0)
                 {
                     for (HWND field : position) EnableWindow(field, TRUE);
                     EnableWindow(script, TRUE);
+                    EnableWindow(mesh, TRUE);
+                    EnableWindow(texture, session->snapshot().entities[static_cast<size_t>(selectedEntity)].meshRenderer.has_value());
                 }
                 EnableWindow(GetDlgItem(window, SaveButton), session != nullptr);
                 EnableWindow(GetDlgItem(window, ReloadButton), session != nullptr);
@@ -512,6 +576,35 @@ namespace editor
                 render();
             }
 
+            void commitMesh()
+            {
+                if (updating) return;
+                const auto index = selectedIndex();
+                const auto* session = document.session();
+                if (!index || !session || *index >= session->snapshot().entities.size()) return;
+                const auto& entity = session->snapshot().entities[*index];
+                const auto assetId = selectedAsset(mesh, "mesh");
+                std::optional<project::MeshRenderer> value;
+                if (assetId)
+                    value = project::MeshRenderer{*assetId, entity.meshRenderer ? entity.meshRenderer->texture : std::nullopt};
+                document.apply(project::SetMeshRenderer{entity.id, std::move(value)});
+                render();
+            }
+
+            void commitTexture()
+            {
+                if (updating) return;
+                const auto index = selectedIndex();
+                const auto* session = document.session();
+                if (!index || !session || *index >= session->snapshot().entities.size()) return;
+                const auto& entity = session->snapshot().entities[*index];
+                if (!entity.meshRenderer) return;
+                auto value = *entity.meshRenderer;
+                value.texture = selectedAsset(texture, "texture");
+                document.apply(project::SetMeshRenderer{entity.id, std::move(value)});
+                render();
+            }
+
             void openFromField()
             {
                 bool discardUnsaved = false;
@@ -567,6 +660,8 @@ namespace editor
                             case StopButton: document.stop(); render(); return 0;
                             case EntityList: if (HIWORD(wParam) == LBN_SELCHANGE) selectEntity(); return 0;
                             case ScriptPicker: if (HIWORD(wParam) == CBN_SELCHANGE) commitScript(); return 0;
+                            case MeshPicker: if (HIWORD(wParam) == CBN_SELCHANGE) commitMesh(); return 0;
+                            case TexturePicker: if (HIWORD(wParam) == CBN_SELCHANGE) commitTexture(); return 0;
                             case PositionX:
                             case PositionY:
                             case PositionZ:
@@ -628,6 +723,97 @@ namespace editor
                 return DefWindowProcW(hwnd, message, wParam, lParam);
             }
         };
+    }
+
+    bool runNativeControlSmokeTest(const std::filesystem::path& manifest, const std::filesystem::path& screenshot)
+    {
+        HWND parent = CreateWindowExW(0, L"STATIC", L"Editor control smoke test", WS_POPUP,
+            40, 40, 1000, 690, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+        if (!parent) return false;
+        EditorWindow app(manifest);
+        app.window = parent;
+        app.createControls();
+        bool passed = app.document.open(manifest);
+        if (passed)
+        {
+            app.selectedEntity = 0;
+            app.render();
+            const HWND required[] = {app.manifest, app.entities, app.position[0], app.position[1], app.position[2],
+                app.script, app.meshLabel, app.mesh, app.textureLabel, app.texture, app.diagnostics, app.status};
+            for (const HWND child : required)
+            {
+                RECT bounds{};
+                if (!child || !IsWindow(child) || !GetWindowRect(child, &bounds) || bounds.right <= bounds.left || bounds.bottom <= bounds.top)
+                    passed = false;
+            }
+            if (SendMessageW(app.script, CB_GETCOUNT, 0, 0) != 2 || SendMessageW(app.mesh, CB_GETCOUNT, 0, 0) != 2 ||
+                SendMessageW(app.texture, CB_GETCOUNT, 0, 0) != 2)
+                passed = false;
+
+            // Exercise the same native WM_COMMAND path as the user selecting an asset.
+            SendMessageW(app.mesh, CB_SETCURSEL, 1, 0);
+            app.onMessage(WM_COMMAND, MAKEWPARAM(MeshPicker, CBN_SELCHANGE), reinterpret_cast<LPARAM>(app.mesh));
+            SendMessageW(app.texture, CB_SETCURSEL, 1, 0);
+            app.onMessage(WM_COMMAND, MAKEWPARAM(TexturePicker, CBN_SELCHANGE), reinterpret_cast<LPARAM>(app.texture));
+            const auto& entities = app.document.session()->snapshot().entities;
+            if (entities.empty() || !entities.front().meshRenderer || entities.front().meshRenderer->mesh != "asset:mesh" ||
+                entities.front().meshRenderer->texture != std::optional<std::string>("asset:texture"))
+                passed = false;
+        }
+
+        if (passed && !screenshot.empty())
+        {
+            std::error_code directoryError;
+            if (!screenshot.parent_path().empty()) std::filesystem::create_directories(screenshot.parent_path(), directoryError);
+            if (directoryError) passed = false;
+            ShowWindow(parent, SW_SHOWNOACTIVATE);
+            UpdateWindow(parent);
+            HDC windowDc = GetWindowDC(parent);
+            HDC memoryDc = windowDc ? CreateCompatibleDC(windowDc) : nullptr;
+            RECT bounds{};
+            GetWindowRect(parent, &bounds);
+            const int width = bounds.right - bounds.left;
+            const int height = bounds.bottom - bounds.top;
+            HBITMAP bitmap = memoryDc && windowDc ? CreateCompatibleBitmap(windowDc, width, height) : nullptr;
+            HGDIOBJ old = bitmap ? SelectObject(memoryDc, bitmap) : nullptr;
+            if (!bitmap || !PrintWindow(parent, memoryDc, PW_RENDERFULLCONTENT)) passed = false;
+            if (passed)
+            {
+                BITMAP image{};
+                GetObjectW(bitmap, sizeof(image), &image);
+                BITMAPINFOHEADER info{};
+                info.biSize = sizeof(info);
+                info.biWidth = image.bmWidth;
+                info.biHeight = image.bmHeight;
+                info.biPlanes = 1;
+                info.biBitCount = 24;
+                info.biCompression = BI_RGB;
+                const DWORD stride = (static_cast<DWORD>(width) * 3 + 3) & ~3u;
+                std::vector<BYTE> pixels(static_cast<size_t>(stride) * static_cast<size_t>(height));
+                if (old) { SelectObject(memoryDc, old); old = nullptr; }
+                if (!GetDIBits(memoryDc, bitmap, 0, static_cast<UINT>(height), pixels.data(),
+                    reinterpret_cast<BITMAPINFO*>(&info), DIB_RGB_COLORS)) passed = false;
+                if (passed)
+                {
+                    BITMAPFILEHEADER fileHeader{};
+                    fileHeader.bfType = 0x4D42;
+                    fileHeader.bfOffBits = sizeof(fileHeader) + sizeof(info);
+                    fileHeader.bfSize = fileHeader.bfOffBits + static_cast<DWORD>(pixels.size());
+                    std::ofstream output(screenshot, std::ios::binary | std::ios::trunc);
+                    output.write(reinterpret_cast<const char*>(&fileHeader), sizeof(fileHeader));
+                    output.write(reinterpret_cast<const char*>(&info), sizeof(info));
+                    output.write(reinterpret_cast<const char*>(pixels.data()), static_cast<std::streamsize>(pixels.size()));
+                    passed = output.good();
+                }
+            }
+            if (old) SelectObject(memoryDc, old);
+            if (bitmap) DeleteObject(bitmap);
+            if (memoryDc) DeleteDC(memoryDc);
+            if (windowDc) ReleaseDC(parent, windowDc);
+        }
+        if (app.document.isPlaying()) app.document.stop();
+        DestroyWindow(parent);
+        return passed;
     }
 
     int run(const std::filesystem::path& manifest)

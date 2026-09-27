@@ -23,7 +23,9 @@ namespace
             root = std::filesystem::temp_directory_path() / ("cpp-engine-editor-" + std::to_string(nonce));
             std::filesystem::create_directories(root / "scenes");
             std::filesystem::create_directories(root / "scripts");
-            write(root / "project.json", R"({"schema":1,"name":"Editor Test","assets":[{"id":"asset:mover","path":"scripts/mover.lua","kind":"script"}],"startup_scene":"scenes/main.json"})");
+            std::filesystem::create_directories(root / "meshes");
+            std::filesystem::create_directories(root / "textures");
+            write(root / "project.json", R"({"schema":1,"name":"Editor Test","assets":[{"id":"asset:mover","path":"scripts/mover.lua","kind":"script"},{"id":"asset:mesh","path":"meshes/hero.mesh","kind":"mesh"},{"id":"asset:texture","path":"textures/hero.png","kind":"texture"}],"startup_scene":"scenes/main.json"})");
             writeScene();
             write(root / "scripts/mover.lua", R"lua(return {
                 on_update = function(dt)
@@ -31,6 +33,8 @@ namespace
                     self.set_position(p.x + dt, p.y, p.z)
                 end
             })lua");
+            write(root / "meshes/hero.mesh", "test mesh asset\n");
+            write(root / "textures/hero.png", "test texture asset\n");
         }
 
         ~TemporaryProject()
@@ -72,6 +76,24 @@ void test_editor_document_edit_history_save_reload_and_play_isolation()
 
     const project::SetScript attach {"object:hero", "asset:mover"};
     test::require(document.apply(attach), "asset picker selection should use the typed script operation");
+
+    const auto beforeWrongKind = document.session()->snapshot();
+    test::require(!document.apply(project::SetMeshRenderer{"object:hero", project::MeshRenderer{"asset:mover", std::nullopt}}),
+        "mesh renderer must reject a script asset ID");
+    test::require(document.session()->snapshot() == beforeWrongKind,
+        "a rejected wrong-kind picker value must not alter the authored scene");
+
+    const project::MeshRenderer renderer{"asset:mesh", "asset:texture"};
+    test::require(document.apply(project::SetMeshRenderer{"object:hero", renderer}),
+        "mesh and texture picker selections should use the typed renderer operation");
+    test::require(document.session()->snapshot().entities.front().meshRenderer == renderer,
+        "typed inspector selection should store stable mesh and texture asset IDs");
+    test::require(document.undo(), "renderer component edit should participate in undo history");
+    test::require(!document.session()->snapshot().entities.front().meshRenderer,
+        "undo should remove the newly added renderer component");
+    test::require(document.redo(), "renderer component edit should participate in redo history");
+    test::require(document.session()->snapshot().entities.front().meshRenderer == renderer,
+        "redo should restore the renderer asset IDs");
     test::require(document.save(), "editor document should save through SceneSession");
     test::require(!document.isDirty(), "successful save should update the revision baseline");
     test::require(document.session()->snapshot().entities.front().script == project::Script{"asset:mover"},
@@ -79,6 +101,13 @@ void test_editor_document_edit_history_save_reload_and_play_isolation()
     test::require(document.reload(), "reloading a clean saved project should succeed");
     test::require(document.session()->snapshot().entities.front().script == project::Script{"asset:mover"},
         "saved scene should round-trip the stable script asset ID");
+    test::require(document.session()->snapshot().entities.front().meshRenderer == renderer,
+        "saved scene should round-trip stable mesh and texture asset IDs");
+#ifdef _WIN32
+    test::require(editor::runNativeControlSmokeTest(fixture.root / "project.json",
+        std::filesystem::current_path() / "build/editor-check/editor-controls.bmp"),
+        "native editor controls should create, lay out, and apply typed picker selections");
+#endif
 
     const auto authoredBeforePlay = document.session()->snapshot().entities.front().transform->position;
     test::require(document.play(), "editor should start an isolated runtime");

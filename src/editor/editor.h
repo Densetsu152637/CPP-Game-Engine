@@ -50,4 +50,8 @@ namespace editor
     // Opens the native editor UI. On platforms without a native implementation,
     // prints an explicit unsupported-platform diagnostic and returns nonzero.
     int run(const std::filesystem::path& manifest);
+    // Creates the native controls in-process, verifies their layout and picker behavior,
+    // and optionally captures only that test window to a BMP file.
+    bool runNativeControlSmokeTest(const std::filesystem::path& manifest,
+        const std::filesystem::path& screenshot = {});
 }
