@@ -349,6 +349,132 @@ The same command API can serve scripts, a future GUI, CI, and an AI bridge.
 That shared base is the main reason to make CLI behavior and schemas stable
 before building several independent interfaces.
 
+## Planned extensions: renderer, Lua ECS, and mobile platforms
+
+The milestones below extend the implemented Windows-oriented version 1. They
+are **planned**, not shipped: the current-state table above remains the evidence
+for implemented behavior. Keep each platform and backend claim tied to the
+actual build and runtime checks listed in its gate.
+
+### 7. Separate renderer contracts from backend execution
+
+**Outcome:** engine code can prepare and submit rendering work through a
+backend-neutral interface, and worker threads can record independent work
+without violating backend or resource lifetime rules. Vulkan remains the first
+backend; this phase does not claim portability to another graphics API.
+
+Define backend-neutral frame, command-list, resource-description, capability,
+and diagnostic contracts before moving Vulkan-specific objects behind them.
+Expose a capability query for required and optional features. Return a stable
+feature identifier and actionable diagnostic when initialization or a requested
+draw cannot proceed. Keep backend feature checks close to the backend, while
+allowing project/runtime code to select a supported rendering path before
+opening a confusing blank window.
+
+Replace raw lifetime assumptions with persistent renderer resource handles.
+Handles need a resource kind and generation (or equivalent stale-handle
+protection), explicit creation/destruction ownership, and documented behavior
+when a resource is replaced or the device is lost. Define which thread may
+create, update, destroy, and resolve each resource. Frame snapshots must retain
+all referenced resources until GPU execution completes; callers must not need
+to keep temporary CPU descriptions or shader objects alive unless the contract
+explicitly says so.
+
+Specify command recording, queue submission, and synchronization separately.
+Document which work can run concurrently, which queues own each submission,
+how dependencies and fences/semaphores establish completion, how frame reuse
+waits for completion, and how cancellation, resize, shutdown, and device loss
+retire pending work. Keep window/surface operations on their required owner
+thread. Do not infer safety from the existing ECS render-job thread pool: its
+jobs currently finish before caller-thread frame coordination.
+
+**Done gate:** backend-neutral contract tests build without Vulkan headers or an
+SDK; the Vulkan implementation passes the existing smoke and validation checks
+plus repeated multithreaded recording/submission, resize, cancellation,
+resource-replacement, shutdown, and reinitialization checks. Tests must catch
+stale resource handles and prove resources are not reused before their fence
+signals. Vulkan feature queries must report both supported and unsupported
+capabilities with stable diagnostics. A second backend is a separate gate
+before claiming more than one graphics backend.
+
+### 8. Allow Lua-defined typed components and ECS systems
+
+**Outcome:** project scripts can register bounded component types and systems
+through a typed host API while ECS storage, views, and scheduled-job caches stay
+coherent across structural changes and script reloads.
+
+Build on the component/property registration layer in phase 1. Define stable,
+versioned type and property names; allowed scalar/vector/enum/reference types;
+defaults and validation; per-project registration limits; and how duplicate,
+unknown, and incompatible registrations fail. Store authored values in dense
+component storage with a documented alignment, relocation, and destruction
+contract. Lua receives typed values or checked proxies, never arbitrary C++
+memory, object layouts, or pointers into storage that may move.
+
+Let Lua register named systems with explicit read/write component sets,
+execution phase or wall, ordering constraints, and lifecycle ownership. Validate
+access declarations and conflicts before scheduling. Define what happens when a
+component schema changes while systems or scenes use it, and how reload removes
+or replaces registrations without leaving stale callbacks or storage behind.
+
+Route structural mutations from Lua through a command buffer applied at a
+documented tick boundary. Commands cover component registration where allowed,
+entity/component creation and removal, and system registration/removal. Validate
+the full batch before commit, or document and test the precise partial-apply
+behavior on failure. Coalesce query/cache generation changes where possible,
+but ensure all affected view matches, query caches, and cached executable job
+batches are invalidated before the next read or dispatch. Stale entity and
+component handles must fail safely after destruction, dense-storage relocation,
+or reload.
+
+**Done gate:** tests first populate and reuse view/query and scheduler caches,
+then perform Lua-authored structural changes and verify the next tick sees each
+matching entity exactly once with no removed entity or system retained. Cover
+dense-storage growth/relocation, component removal, invalid batches, conflicting
+system access declarations, reload/unload cleanup, stale handles, and failed
+callbacks. Repeated identical fixed-tick fixtures produce the same normalized
+component state. Existing static project validation reports invalid component
+and system declarations before runtime execution.
+
+### 9. Verify iOS and Android as supported targets
+
+**Outcome:** iOS and Android become declared targets only after their complete
+toolchain, platform integration, packaging, and runtime gates pass. This phase
+does not imply that desktop builds or cross-compilation alone establish mobile
+compatibility.
+
+Add a versioned platform-support manifest and a `platform check` command (names
+are proposed) that report each target's status, required compiler and SDK,
+deployment/API target, enabled native extensions, build configuration, and
+missing prerequisites. The command should distinguish implemented, build-
+verified, and device-verified status and point to the failed check. CI must use
+clean builds for every target marked build-verified; manifests and reports must
+not promote a target automatically when a prerequisite is absent.
+
+Audit and implement platform-specific window/surface creation, input and
+application lifecycle hooks, filesystem and asset lookup, thread restrictions,
+and packaging. Document the Vulkan instance/device extensions and surface
+requirements actually selected on each OS, including any portability or native
+surface integration needed by the chosen SDK/window path. Where Vulkan is not
+available or not selected, name the supported backend and its verified feature
+set rather than silently falling back. Handle suspend/resume, orientation or
+resize, context/device recreation, app storage paths, and asset packaging in
+the runtime contract. Record signing, provisioning, deployment-target, and
+store-package steps as external release prerequisites when CI cannot validate
+them.
+
+**Done gate:** clean iOS and Android CI jobs build the project and package the
+sample with documented toolchain/SDK versions. Each target launches on a named
+simulator/emulator or physical device, loads packaged assets from the installed
+app, accepts its declared input, renders a known sample through the selected
+backend, and survives suspend/resume plus orientation/resize and renderer
+recreation. Where pixel readback is unavailable, report that limitation and
+verify rendering through an explicitly documented device-side signal. The
+platform check command agrees with CI evidence, and the support matrix names
+the exact tested OS/runtime/device class. Until those gates pass, preserve the
+current Windows-active, Linux-unvalidated, macOS/Wayland-unconfigured status
+and mark iOS/Android unsupported or unverified.
+
 ## First implementable vertical slice
 
 The recommended first feature is **scene file â†’ headless validation and load â†’
