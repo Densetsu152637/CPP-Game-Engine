@@ -37,6 +37,12 @@ $unknown = Invoke-Result @('run', $manifest, '--headless', '--input', 'typo:0') 
 if ($unknown.result.diagnostics[0].code -ne 'command.input.unknown' -or $unknown.result.diagnostics[0].path -ne '--input') { throw 'Unknown input diagnostic changed' }
 $missing = Invoke-Result @('project', 'validate', (Join-Path $scratch 'missing.json')) 1
 if (!$missing.result.diagnostics[0].code) { throw 'Missing diagnostic code' }
+$unsupportedPlatform = Invoke-Result @('platform', 'check', 'unknown') 2
+if ($unsupportedPlatform.result.diagnostics[0].code -ne 'command.arguments') { throw 'Unknown platform diagnostic changed' }
+if ($IsWindows -or $PSVersionTable.PSEdition -eq 'Desktop') {
+    $iosCheck = Invoke-Result @('platform', 'check', 'ios', '--format', 'json') 1
+    if ($iosCheck.result.target -ne 'ios' -or $iosCheck.result.readyToBuild -ne $false) { throw 'Windows iOS platform check must report missing prerequisites' }
+}
 $scriptPath = Join-Path $project 'scripts/player.lua'
 $originalScript = Get-Content -LiteralPath $scriptPath -Raw
 try {

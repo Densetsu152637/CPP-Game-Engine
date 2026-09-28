@@ -4,6 +4,7 @@
 #include "tooling/iteration.h"
 #include "editor/editor.h"
 #include "automation/mcp.h"
+#include "platform/platform_check.h"
 #include "rendering/content.h"
 #include "rendering/camera.h"
 #include "rendering/material.h"
@@ -226,6 +227,21 @@ std::optional<int> runCommands(int argc, char** argv) {
             return editor::run(argv[2]);
         }
         if (command == "run") return runProject(Arguments(argc, argv, 2));
+        if (command == "platform") {
+            if (argc < 3 || std::string(argv[2]) != "check") throw std::invalid_argument("Usage: CPPGameEngine platform check <android|ios> [--format json]");
+            command = "platform check";
+            const Arguments args(argc, argv, 3);
+            args.require(1, {});
+            if (args.positional[0] != "android" && args.positional[0] != "ios")
+                throw std::invalid_argument("Platform target must be android or ios");
+            const auto report = platform::checkPlatform(args.positional[0]);
+            if (!report.readyToBuild())
+                for (const auto& diagnostic : report.diagnostics)
+                    if (diagnostic.kind == platform::DiagnosticKind::Missing || diagnostic.kind == platform::DiagnosticKind::Unsupported)
+                        std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+            std::cout << project::resultJson(report.readyToBuild(), command, report.toJson()) << '\n';
+            return report.readyToBuild() ? 0 : 1;
+        }
         if ((command != "project" && command != "scene") || argc < 3) throw std::invalid_argument("Expected project, scene, run, editor, or mcp command");
         command += " " + std::string(argv[2]);
         const Arguments args(argc, argv, 3);
