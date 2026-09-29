@@ -11,7 +11,7 @@ project = Path(sys.argv[1])
 pbxproj = (project / "project.pbxproj").read_text(encoding="utf-8")
 
 
-def target(name: str, product: str) -> tuple[str, str, str]:
+def target(name: str, product: str, product_type: str) -> tuple[str, str, str]:
     pattern = rf"(?m)^\s*([A-Fa-f0-9]{{24}}) /\* {re.escape(name)} \*/ = \{{\s*isa = PBXNativeTarget;"
     matches = list(re.finditer(pattern, pbxproj))
     if len(matches) != 1:
@@ -20,8 +20,12 @@ def target(name: str, product: str) -> tuple[str, str, str]:
     product_reference = re.search(r"\bproductReference\s*=\s*([A-Fa-f0-9]{24})\b", body)
     if not product_reference:
         raise RuntimeError(f"Xcode target {name} has no productReference")
-    # CMake may label the productReference comment with the target name rather
-    # than its .app/.xctest filename. Follow the ID to its PBXFileReference.
+    type_match = re.search(r'\bproductType\s*=\s*"?([^";]+)"?\s*;', body)
+    actual_type = type_match.group(1) if type_match else "missing"
+    if actual_type != product_type:
+        raise RuntimeError(f"Xcode target {name} has product type {actual_type}, expected {product_type}")
+    # CMake labels the product file reference with its bare target name; Xcode
+    # applies .app/.xctest from the product type and bundle settings.
     file_pattern = (
         rf"(?m)^\s*{product_reference.group(1)} /\* [^*]+ \*/ = "
         rf"\{{\s*isa = PBXFileReference;"
@@ -32,13 +36,14 @@ def target(name: str, product: str) -> tuple[str, str, str]:
     file_body = pbxproj[file_matches[0].end():].split("};", 1)[0]
     path_match = re.search(r'\bpath\s*=\s*(?:"([^"]+)"|([^;]+))\s*;', file_body)
     actual = (path_match.group(1) or path_match.group(2)).strip() if path_match else "missing"
-    if actual != product:
-        raise RuntimeError(f"Xcode target {name} has product path {actual}, expected {product}")
+    if actual not in (name, product):
+        raise RuntimeError(f"Xcode target {name} has unexpected product path {actual}")
     return name, product, matches[0].group(1)
 
 
-app = target("CPPGameEngineMobile", "CPPGameEngineMobile.app")
-tests = target("CPPGameEngineMobileUITests", "CPPGameEngineMobileUITests.xctest")
+app = target("CPPGameEngineMobile", "CPPGameEngineMobile.app", "com.apple.product-type.application")
+tests = target("CPPGameEngineMobileUITests", "CPPGameEngineMobileUITests.xctest",
+               "com.apple.product-type.bundle.ui-testing")
 
 
 def reference(parent: ET.Element, target: tuple[str, str, str]) -> None:
