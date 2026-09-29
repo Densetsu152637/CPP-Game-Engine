@@ -5,6 +5,7 @@
 #include "../ecs/processor.h"
 #include "../scripting/lua_script_system.h"
 
+#include <algorithm>
 #include <cmath>
 #include <deque>
 #include <fstream>
@@ -69,8 +70,9 @@ namespace project
                 if (packed < 0) return false;
                 auto& ecs = simulator.ecs();
                 const Entity entity = find(packed);
-                if (!ecs.hasEntity(entity)) return false;
+                if (!ecs.knowsEntityHandle(entity)) return false;
                 ecs.destroyEntity(entity);
+                spawnedEntities.erase(packed);
                 return true;
             };
             api.set_position = [this](std::int64_t packed, float x, float y, float z)
@@ -78,7 +80,7 @@ namespace project
                 if (packed < 0) return false;
                 auto& ecs = simulator.ecs();
                 const Entity entity = find(packed);
-                if (!ecs.hasEntity(entity)) return false;
+                if (!ecs.knowsEntityHandle(entity)) return false;
                 ecs.setComponent<Position3D>(entity, Vector3f{x, y, z});
                 return true;
             };
@@ -89,6 +91,63 @@ namespace project
                 if (!value) return std::nullopt;
                 const auto& p = value->read();
                 return std::array<float, 3>{p.x, p.y, p.z};
+            };
+            api.register_component = [this](std::string_view name, const std::vector<LuaComponentField>& fields)
+            {
+                std::vector<ecs::DynamicField> schema;
+                schema.reserve(fields.size());
+                for (const auto& field : fields)
+                {
+                    ecs::DynamicFieldType type = ecs::DynamicFieldType::String;
+                    switch (field.type)
+                    {
+                    case LuaComponentFieldType::Number: type = ecs::DynamicFieldType::Number; break;
+                    case LuaComponentFieldType::Boolean: type = ecs::DynamicFieldType::Boolean; break;
+                    case LuaComponentFieldType::String: type = ecs::DynamicFieldType::String; break;
+                    }
+                    schema.push_back({field.name, type});
+                }
+                std::sort(schema.begin(), schema.end(), [](const auto& left, const auto& right)
+                { return left.name < right.name; });
+                return simulator.ecs().registerDynamicComponent(name, schema);
+            };
+            api.has_component_schema = [this](std::string_view name)
+            { return simulator.ecs().hasDynamicComponentSchema(name); };
+            api.unregister_component = [this](std::string_view name)
+            { return simulator.ecs().unregisterDynamicComponent(name); };
+            api.rollback_component_schema = [this](std::string_view name)
+            { return simulator.ecs().rollbackDynamicComponentSchema(name); };
+            api.set_component = [this](std::int64_t packed, std::string_view name, const LuaComponentValues& values)
+            {
+                if (packed < 0) return false;
+                auto& ecs = simulator.ecs();
+                const Entity entity = find(packed);
+                if (!ecs.knowsEntityHandle(entity)) return false;
+                return ecs.setDynamicComponent(entity, name, values);
+            };
+            api.get_component = [this](std::int64_t packed, std::string_view name) -> std::optional<LuaComponentValues>
+            {
+                if (packed < 0) return std::nullopt;
+                return simulator.ecs().getDynamicComponent(find(packed), name);
+            };
+            api.remove_component = [this](std::int64_t packed, std::string_view name)
+            {
+                if (packed < 0) return false;
+                auto& ecs = simulator.ecs();
+                const Entity entity = find(packed);
+                if (!ecs.knowsEntityHandle(entity)) return false;
+                return ecs.removeDynamicComponent(entity, name);
+            };
+            api.query_components = [this](const std::vector<std::string>& all)
+            {
+                std::vector<std::int64_t> result;
+                for (const Entity& entity : simulator.ecs().queryDynamicComponents(all))
+                {
+                    const auto packed = entity.packed();
+                    if (packed <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+                        result.push_back(static_cast<std::int64_t>(packed));
+                }
+                return result;
             };
             return api;
         }
@@ -282,7 +341,7 @@ namespace project
             const auto retired = state.scripts->unloadRetainingOnDestroyFailure(active->second);
             if (!retired)
             {
-                const auto discarded = state.scripts->unload(*candidate);
+                const auto discarded = state.scripts->discardCandidate(*candidate);
                 state.faulted = true;
                 std::string message = "current script teardown failed; previous instance remains active: " + retired.error();
                 if (!discarded) message += "; candidate cleanup reported: " + discarded.error();
@@ -296,11 +355,43 @@ namespace project
             explicit InputScope(Impl& state, const InputSnapshot& snapshot) : owner(state) { owner.input = &snapshot; }
             ~InputScope() { owner.input = nullptr; }
         } inputScope(state, input);
-        const auto updated = state.scripts->update(state.options.fixedDeltaSeconds);
+        auto& ecs = state.simulator.ecs();
+        ecs.beginStructuralDeferral();
+        LuaScriptSystem::Result updated;
+        try
+        {
+            updated = state.scripts->update(state.options.fixedDeltaSeconds);
+        }
+        catch (const std::exception& error)
+        {
+            ecs.endStructuralDeferral();
+            ecs.discardDeferredStructuralChanges();
+            state.faulted = true;
+            return std::unexpected(runtimeError("runtime.script.update", state.project.scene.source, error.what()));
+        }
+        catch (...)
+        {
+            ecs.endStructuralDeferral();
+            ecs.discardDeferredStructuralChanges();
+            state.faulted = true;
+            return std::unexpected(runtimeError("runtime.script.update", state.project.scene.source,
+                "Unknown exception while running Lua callbacks"));
+        }
+        ecs.endStructuralDeferral();
         if (!updated)
         {
+            ecs.discardDeferredStructuralChanges();
             state.faulted = true;
             return std::unexpected(runtimeError("runtime.script.update", state.project.scene.source, updated.error()));
+        }
+        try
+        {
+            ecs.flushDeferredStructuralChanges();
+        }
+        catch (const std::exception& error)
+        {
+            state.faulted = true;
+            return std::unexpected(runtimeError("runtime.ecs.commit", state.project.scene.source, error.what()));
         }
         state.simulator.simulate();
         ++state.ticks;

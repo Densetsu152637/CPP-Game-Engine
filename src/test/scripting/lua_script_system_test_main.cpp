@@ -8,6 +8,8 @@ void test_lua_script_system_validates_lifecycle_and_isolates_scripts();
 void test_lua_script_system_translates_native_exceptions();
 void test_lua_script_system_rejects_reentrant_lifecycle_changes();
 void test_lua_script_system_guards_lua_close_finalizers();
+void test_lua_dynamic_components_and_systems();
+void test_lua_system_access_order_and_schema_ownership();
 
 int main()
 {
@@ -20,6 +22,8 @@ int main()
         test_lua_script_system_translates_native_exceptions();
         test_lua_script_system_rejects_reentrant_lifecycle_changes();
         test_lua_script_system_guards_lua_close_finalizers();
+        test_lua_dynamic_components_and_systems();
+        test_lua_system_access_order_and_schema_ownership();
     }
     catch (const std::exception& error)
     {

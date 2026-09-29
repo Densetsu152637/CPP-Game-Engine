@@ -7,12 +7,17 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include "aliases/component_alias.h"
 #include "core/component_storage_registry.h"
+#include "core/dynamic_component_storage.h"
 #include "core/entity.h"
 #include "core/entity_registry.h"
 #include "core/structural_command_buffer.h"
@@ -153,14 +158,19 @@ class ECS
 
     EntityRegistry m_entities;
     ComponentStorageRegistry m_components;
+    ecs::DynamicComponentStorage m_dynamicComponents;
     std::unordered_map<ecs::ComponentTypeId, TagPool> m_tags;
     size_t m_componentQueryGeneration = 0;
+    bool m_applyingDeferredStructural = false;
+    bool m_deferredComponentQueryDirty = false;
     size_t m_renderQueryGeneration = 0;
     size_t m_tagGeneration = 0;
     StructuralCommandBuffer m_deferredStructuralCommands;
     mutable std::mutex m_structuralMutex;
     size_t m_structuralDeferralDepth = 0;
     size_t m_nextDeferredEntityIndex = 0;
+    bool m_validatingDeferredStructural = false;
+    std::vector<Entity> m_deferredReservedEntities;
 
     static Entity make_handle(const EntityRecord& record, const size_t& index);
     Entity make_handle(const size_t& index) const;
@@ -228,6 +238,11 @@ class ECS
     size_t alive_entity_count() const;
     const ArrayList<EntityRecord>& entity_records() const;
     bool structural_changes_deferred() const;
+    void bumpComponentQueryGeneration()
+    {
+        if (m_applyingDeferredStructural) m_deferredComponentQueryDirty = true;
+        else ++m_componentQueryGeneration;
+    }
     Entity createEntityImmediate();
     Entity reserveEntityForDeferredCreate();
     bool activateDeferredEntity(const Entity& entity);
@@ -353,6 +368,15 @@ public:
     Entity createEntity(ecs::Tag<Tags>...);
     void destroyEntity(const Entity& entity);
     bool hasEntity(const Entity& entity) const;
+    bool knowsEntityHandle(const Entity& entity) const { return is_known_handle(entity); }
+    bool registerDynamicComponent(std::string_view name, const std::vector<ecs::DynamicField>& fields);
+    bool hasDynamicComponentSchema(std::string_view name) const;
+    bool unregisterDynamicComponent(std::string_view name);
+    bool rollbackDynamicComponentSchema(std::string_view name);
+    bool setDynamicComponent(const Entity& entity, std::string_view name, const ecs::DynamicValues& values);
+    std::optional<ecs::DynamicValues> getDynamicComponent(const Entity& entity, std::string_view name) const;
+    bool removeDynamicComponent(const Entity& entity, std::string_view name);
+    std::vector<Entity> queryDynamicComponents(const std::vector<std::string>& all) const;
     void clear();
     void swapSimBuffers();
     void swapRenderBuffers();
@@ -738,13 +762,13 @@ ecs::component_value_t<T>& ECS::emplaceComponentImmediate(const Entity& entity, 
             entity.index
         );
         if (addedToQuery)
-            ++m_componentQueryGeneration;
+            bumpComponentQueryGeneration();
         return stored;
     }
 
     Component& stored = storage<T>().emplace(entity.index, std::forward<U>(component));
     if (addedToQuery)
-        ++m_componentQueryGeneration;
+        bumpComponentQueryGeneration();
     return stored;
 }
 
@@ -794,13 +818,13 @@ ecs::component_value_t<T>& ECS::setComponentImmediate(const Entity& entity, U&& 
             entity.index
         );
         if (addedToQuery)
-            ++m_componentQueryGeneration;
+            bumpComponentQueryGeneration();
         return stored;
     }
 
     Component& stored = storage<T>().emplace(entity.index, std::forward<U>(newComponent));
     if (addedToQuery)
-        ++m_componentQueryGeneration;
+        bumpComponentQueryGeneration();
     return stored;
 }
 
@@ -835,7 +859,7 @@ bool ECS::removeComponentImmediate(const Entity& entity)
             ecs::component_type_id<component_key_t<T>>()
         );
         if (removed)
-            ++m_componentQueryGeneration;
+            bumpComponentQueryGeneration();
         return removed;
     }
 
@@ -844,7 +868,7 @@ bool ECS::removeComponentImmediate(const Entity& entity)
         return false;
 
     pool->erase(entity.index);
-    ++m_componentQueryGeneration;
+    bumpComponentQueryGeneration();
     return true;
 }
 

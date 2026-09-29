@@ -50,6 +50,16 @@ bool EntityRegistry::activateReserved(const Entity& entity)
     ++m_generation;
     return true;
 }
+void EntityRegistry::invalidateReserved(const Entity& entity)
+{
+    if (!entity.valid() || entity.version == 0 || entity.index >= Traits::entity_mask || isValidHandle(entity)) return;
+    if (m_registry.current(static_cast<uint32_t>(entity.index)) != entity.version - 1) return;
+    const auto created = m_registry.create(native(entity));
+    if (created != native(entity)) return;
+    const auto version = m_registry.destroy(created);
+    record(Traits::construct(static_cast<uint32_t>(entity.index), version), false);
+    ++m_generation;
+}
 bool EntityRegistry::destroy(const Entity& entity)
 {
     if (!isValidHandle(entity)) return false;

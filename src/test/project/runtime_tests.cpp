@@ -50,6 +50,62 @@ namespace
         test::require(!runtime.running() && !runtime.position("entity:player"), "stop should discard isolated runtime entities");
     }
 
+    void authoredLuaSystemsUseDeferredSortedSnapshots()
+    {
+        auto project = sample();
+        project.assets.at("asset:player-script").path = "scripts/system_fixture.lua";
+        std::vector<std::string> logs;
+        project::RuntimeOptions options;
+        options.log = [&](std::string_view message) { logs.emplace_back(message); };
+        project::Runtime runtime(std::move(project), std::move(options));
+        test::require(runtime.start().has_value(), "Lua component/system project should start");
+        test::require(runtime.liveEntityCount() == 2, "system fixture should own its authored and spawned entities");
+        const auto authored = runtime.runtimeEntities().at("entity:player");
+        const auto firstTick = runtime.tick();
+        test::require(firstTick.has_value(), firstTick ? "Lua system snapshot should tick" :
+            "Lua system snapshot should tick: " + firstTick.error().front().message);
+        std::vector<std::string> stateLogs;
+        for (const auto& entry : logs)
+            if (entry.starts_with("state:")) stateLogs.push_back(entry);
+        test::require(stateLogs.size() == 2 && stateLogs[0].starts_with("state:" + std::to_string(authored) + ":"),
+            "system should visit its component query in stable packed-entity order");
+        test::require(std::none_of(logs.begin(), logs.end(), [](const auto& entry) { return entry.starts_with("late:"); }),
+            "entities/components added by one system must not enter another query until the tick boundary");
+
+        const auto beforeSecondTickLogs = logs.size();
+        test::require(runtime.tick().has_value(), "deferred structural edits should commit before the next tick");
+        const auto next = logs.begin() + static_cast<std::ptrdiff_t>(beforeSecondTickLogs);
+        test::require(std::count_if(next, logs.end(), [](const auto& entry) { return entry.starts_with("state:"); }) == 1,
+            "a component removed during iteration should be absent from the next query snapshot");
+        test::require(std::count_if(next, logs.end(), [](const auto& entry) { return entry.starts_with("late:"); }) == 1,
+            "new components should enter matching systems after the successful boundary flush");
+        test::require(runtime.liveEntityCount() == 3, "deferred entity creation should become live at the boundary");
+        test::require(runtime.stop().has_value(), "system fixture should cleanly discard all runtime entities");
+        test::require(runtime.liveEntityCount() == 0, "stop should remove dynamic-component entities and their rows");
+    }
+
+    void failedLuaSystemAbortsQueuedStructuralChanges()
+    {
+        auto project = sample();
+        project.assets.at("asset:player-script").path = "scripts/system_abort_fixture.lua";
+        std::vector<std::string> logs;
+        project::RuntimeOptions options;
+        options.log = [&](std::string_view message) { logs.emplace_back(message); };
+        project::Runtime runtime(std::move(project), std::move(options));
+        test::require(runtime.start().has_value(), "abort fixture should start");
+        test::require(!runtime.tick().has_value(), "failing Lua system should fault the runtime");
+        test::require(runtime.liveEntityCount() == 1,
+            "failed system batch must discard queued entity creation instead of partially applying it");
+        test::require(!runtime.running(), "system callback failure should fault the runtime");
+        (void)runtime.stop();
+        test::require(std::any_of(logs.begin(), logs.end(), [](const std::string& entry)
+        {
+            return entry.starts_with("abort-state:") &&
+                std::stod(entry.substr(std::string("abort-state:").size())) == 0.0;
+        }),
+            "queued component value changes should also remain unapplied when a callback batch aborts");
+    }
+
     void stagedReloadIsBoundaryAppliedAndKeepsLastGood()
     {
         project::Runtime runtime(sample());
@@ -203,6 +259,8 @@ int main()
     try
     {
         authoredInputMovesOwner();
+        authoredLuaSystemsUseDeferredSortedSnapshots();
+        failedLuaSystemAbortsQueuedStructuralChanges();
         stagedReloadIsBoundaryAppliedAndKeepsLastGood();
         teardownFailureKeepsOldScriptAndCleansCandidate();
         invalidScriptFailsBeforeRuntimeBecomesActive();

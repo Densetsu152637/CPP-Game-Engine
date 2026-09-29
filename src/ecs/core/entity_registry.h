@@ -19,6 +19,7 @@ class EntityRegistry
 public:
     Entity create();
     bool activateReserved(const Entity& entity);
+    void invalidateReserved(const Entity& entity);
     bool destroy(const Entity& entity);
     void clear();
 

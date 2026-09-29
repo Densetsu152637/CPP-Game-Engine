@@ -2,6 +2,8 @@
 #include <iostream>
 
 #include "test/test_declarations.h"
+void test_dynamic_component_storage_and_deferred_query_coherence();
+void test_render_device_concurrency();
 
 int main()
 {
@@ -72,6 +74,8 @@ int main()
         test_structural_changes_are_deferred_until_wall_finishes();
         test_deferred_destroy_and_component_removal_are_invisible_until_wall_finishes();
         test_scheduler_logging();
+        test_dynamic_component_storage_and_deferred_query_coherence();
+        test_render_device_concurrency();
     }
     catch (const std::exception& exception)
     {

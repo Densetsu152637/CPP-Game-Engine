@@ -4,6 +4,8 @@
 
 #include "ecs.h"
 
+#include <algorithm>
+
 Entity ECS::make_handle(const EntityRecord& record, const size_t& index)
 { return EntityRegistry::makeHandle(record, index); }
 
@@ -18,14 +20,12 @@ bool ECS::is_known_handle(const Entity& entity) const
     if (m_entities.isKnownHandle(entity))
         return true;
 
-    if (!structural_changes_deferred())
+    if (!structural_changes_deferred() && !m_validatingDeferredStructural)
         return false;
 
     std::lock_guard lock(m_structuralMutex);
-    return entity.valid() &&
-        EntityRecord {}.version == entity.version &&
-        entity.index >= m_entities.nextIndex() &&
-        entity.index < m_nextDeferredEntityIndex;
+    return std::find(m_deferredReservedEntities.begin(), m_deferredReservedEntities.end(), entity) !=
+        m_deferredReservedEntities.end();
 }
 
 bool ECS::is_valid_handle(const Entity& entity) const
@@ -59,7 +59,9 @@ Entity ECS::createEntityImmediate()
 Entity ECS::reserveEntityForDeferredCreate()
 {
     std::lock_guard lock(m_structuralMutex);
-    return Entity{ m_nextDeferredEntityIndex++, EntityRecord {}.version };
+    const Entity entity{ m_nextDeferredEntityIndex++, EntityRecord {}.version };
+    m_deferredReservedEntities.push_back(entity);
+    return entity;
 }
 
 bool ECS::activateDeferredEntity(const Entity& entity)
@@ -91,6 +93,7 @@ void ECS::destroyEntityImmediate(const Entity& entity)
         return;
 
     m_components.eraseEntityFromAll(entity.index);
+    if (m_dynamicComponents.eraseEntity(entity)) bumpComponentQueryGeneration();
     remove_tags_for_entity(entity.index);
     m_entities.destroy(entity);
 }
@@ -98,6 +101,83 @@ void ECS::destroyEntityImmediate(const Entity& entity)
 bool ECS::hasEntity(const Entity& entity) const
 {
     return is_valid_handle(entity);
+}
+
+bool ECS::registerDynamicComponent(const std::string_view name, const std::vector<ecs::DynamicField>& fields)
+{
+    const bool existed = m_dynamicComponents.hasSchema(name);
+    const bool registered = m_dynamicComponents.registerComponent(name, fields);
+    if (registered && !existed) bumpComponentQueryGeneration();
+    return registered;
+}
+
+bool ECS::hasDynamicComponentSchema(const std::string_view name) const
+{ return m_dynamicComponents.hasSchema(name); }
+
+bool ECS::unregisterDynamicComponent(const std::string_view name)
+{
+    const bool removed = m_dynamicComponents.unregisterComponent(name);
+    if (removed) bumpComponentQueryGeneration();
+    return removed;
+}
+
+bool ECS::rollbackDynamicComponentSchema(const std::string_view name)
+{
+    const bool removed = m_dynamicComponents.unregisterComponent(name, true);
+    if (removed) bumpComponentQueryGeneration();
+    return removed;
+}
+
+bool ECS::setDynamicComponent(const Entity& entity, const std::string_view name, const ecs::DynamicValues& values)
+{
+    if (!is_known_handle(entity) || !m_dynamicComponents.validate(name, values)) return false;
+    const std::string componentName(name);
+    if (structural_changes_deferred())
+    {
+        m_deferredStructuralCommands.enqueueValidated(
+        [this, entity] { return is_known_handle(entity); },
+        [this, entity, componentName, values]
+        {
+            if (!is_valid_handle(entity)) return;
+            const bool existed = m_dynamicComponents.get(entity, componentName).has_value();
+            if (m_dynamicComponents.set(entity, componentName, values) && !existed) bumpComponentQueryGeneration();
+        });
+        return true;
+    }
+    const bool existed = m_dynamicComponents.get(entity, componentName).has_value();
+    const bool changed = m_dynamicComponents.set(entity, componentName, values);
+    if (changed && !existed) bumpComponentQueryGeneration();
+    return changed;
+}
+
+std::optional<ecs::DynamicValues> ECS::getDynamicComponent(const Entity& entity, const std::string_view name) const
+{
+    if (!is_valid_handle(entity)) return std::nullopt;
+    return m_dynamicComponents.get(entity, name);
+}
+
+bool ECS::removeDynamicComponent(const Entity& entity, const std::string_view name)
+{
+    if (!is_known_handle(entity) || !m_dynamicComponents.hasSchema(name)) return false;
+    const std::string componentName(name);
+    if (structural_changes_deferred())
+    {
+        m_deferredStructuralCommands.enqueue([this, entity, componentName]
+        {
+            if (is_valid_handle(entity) && m_dynamicComponents.remove(entity, componentName)) bumpComponentQueryGeneration();
+        });
+        return true;
+    }
+    const bool removed = m_dynamicComponents.remove(entity, componentName);
+    if (removed) bumpComponentQueryGeneration();
+    return removed;
+}
+
+std::vector<Entity> ECS::queryDynamicComponents(const std::vector<std::string>& all) const
+{
+    auto result = m_dynamicComponents.query(all);
+    result.erase(std::remove_if(result.begin(), result.end(), [this](const Entity& entity) { return !is_valid_handle(entity); }), result.end());
+    return result;
 }
 
 void ECS::clear()
@@ -118,8 +198,9 @@ void ECS::clearImmediate()
 {
     m_entities.clear();
     m_components.clearPools();
+    m_dynamicComponents.clear();
     m_tags.clear();
-    ++m_componentQueryGeneration;
+    bumpComponentQueryGeneration();
     ++m_renderQueryGeneration;
     ++m_tagGeneration;
 }
@@ -273,11 +354,41 @@ void ECS::flushDeferredStructuralChanges()
         throw std::logic_error("Cannot flush ECS structural changes while deferral is still active");
 
     auto commands = m_deferredStructuralCommands.drain();
-    for (auto& command : commands)
-        command();
+    m_validatingDeferredStructural = true;
+    try
+    {
+        for (const auto& command : commands)
+            if (!command.validate()) throw std::runtime_error("Deferred ECS structural command validation failed; no commands were applied");
+    }
+    catch (...)
+    {
+        m_validatingDeferredStructural = false;
+        discardDeferredStructuralChanges();
+        throw;
+    }
+    m_validatingDeferredStructural = false;
+    m_applyingDeferredStructural = true;
+    m_deferredComponentQueryDirty = false;
+    try
+    {
+        for (auto& command : commands) command.apply();
+    }
+    catch (...)
+    {
+        m_applyingDeferredStructural = false;
+        if (m_deferredComponentQueryDirty) ++m_componentQueryGeneration;
+        m_deferredComponentQueryDirty = false;
+        throw;
+    }
+    m_applyingDeferredStructural = false;
+    if (m_deferredComponentQueryDirty) ++m_componentQueryGeneration;
+    m_deferredComponentQueryDirty = false;
+    m_deferredReservedEntities.clear();
 }
 
 void ECS::discardDeferredStructuralChanges()
 {
     m_deferredStructuralCommands.clear();
+    for (const Entity& entity : m_deferredReservedEntities) m_entities.invalidateReserved(entity);
+    m_deferredReservedEntities.clear();
 }
