@@ -51,21 +51,40 @@ jobs:
         run: bash mobile/android/build.sh
       - name: Boot emulator and verify touch, rendering, and lifecycle
         shell: bash
+        timeout-minutes: 15
         run: |
           set -euo pipefail
           avdmanager="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
+          emulator="$ANDROID_HOME/emulator/emulator"
+          adb="$ANDROID_HOME/platform-tools/adb"
           "$avdmanager" create avd --force --name cpp-game-engine-ci \
             --package "system-images;android-${ANDROID_API};google_apis;x86_64" \
             --device pixel_2 <<< 'no'
-          "$ANDROID_HOME/emulator/emulator" -avd cpp-game-engine-ci \
+          if [[ ! -e /dev/kvm ]]; then
+            echo 'GitHub runner has no /dev/kvm; Android Emulator VM acceleration is unavailable' >&2
+            exit 1
+          fi
+          sudo chmod 666 /dev/kvm
+          "$emulator" -accel-check
+          "$emulator" -avd cpp-game-engine-ci \
             -no-window -no-audio -no-boot-anim -no-snapshot \
-            -gpu swiftshader_indirect -accel on \
+            -gpu swiftshader -accel on -no-metrics \
             > "$RUNNER_TEMP/android-emulator.log" 2>&1 &
-          adb="$ANDROID_HOME/platform-tools/adb"
-          "$adb" wait-for-device
-          for attempt in $(seq 1 90); do
+          emulator_pid=$!
+          if ! timeout 120s "$adb" wait-for-device; then
+            echo 'ADB did not see the emulator within 120 seconds' >&2
+            timeout 20s "$adb" devices -l || true
+            cat "$RUNNER_TEMP/android-emulator.log" || true
+            exit 1
+          fi
+          for attempt in $(seq 1 60); do
             booted="$($adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
             [[ "$booted" == 1 ]] && break
+            if ! kill -0 "$emulator_pid" 2>/dev/null; then
+              echo 'Android emulator exited before boot completed' >&2
+              cat "$RUNNER_TEMP/android-emulator.log" || true
+              exit 1
+            fi
             sleep 2
           done
           [[ "${booted:-}" == 1 ]] || { cat "$RUNNER_TEMP/android-emulator.log"; exit 1; }
@@ -109,6 +128,21 @@ jobs:
           PY
           test -s "$RUNNER_TEMP/android-screen.png"
           file "$RUNNER_TEMP/android-screen.png"
+      - name: Collect Android emulator diagnostics
+        if: always()
+        shell: bash
+        timeout-minutes: 3
+        run: |
+          set +e
+          adb="$ANDROID_HOME/platform-tools/adb"
+          timeout 20s "$adb" devices -l > "$RUNNER_TEMP/android-adb-devices.txt" 2>&1
+          timeout 20s "$adb" logcat -d -v threadtime > "$RUNNER_TEMP/android-logcat-final.txt" 2>&1
+          timeout 20s "$adb" shell getprop sys.boot_completed > "$RUNNER_TEMP/android-boot-state.txt" 2>&1
+          timeout 20s "$adb" shell dumpsys activity processes > "$RUNNER_TEMP/android-activity.txt" 2>&1
+          timeout 20s "$adb" shell dumpsys SurfaceFlinger > "$RUNNER_TEMP/android-surfaceflinger.txt" 2>&1
+          timeout 20s "$adb" shell ls -la /data/tombstones > "$RUNNER_TEMP/android-tombstones.txt" 2>&1
+          timeout 20s "$adb" shell dumpsys dropbox --print data_app_native_crash > "$RUNNER_TEMP/android-native-crashes.txt" 2>&1
+          exit 0
       - name: Save Android build and emulator evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -121,6 +155,13 @@ jobs:
             ${{ runner.temp }}/android-features.txt
             ${{ runner.temp }}/android-logcat.txt
             ${{ runner.temp }}/android-screen.png
+            ${{ runner.temp }}/android-adb-devices.txt
+            ${{ runner.temp }}/android-logcat-final.txt
+            ${{ runner.temp }}/android-boot-state.txt
+            ${{ runner.temp }}/android-activity.txt
+            ${{ runner.temp }}/android-surfaceflinger.txt
+            ${{ runner.temp }}/android-tombstones.txt
+            ${{ runner.temp }}/android-native-crashes.txt
 
   ios-simulator:
     runs-on: macos-15
