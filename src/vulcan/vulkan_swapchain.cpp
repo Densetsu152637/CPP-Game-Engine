@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace vulkan
@@ -14,6 +15,16 @@ namespace vulkan
     namespace
     {
 #ifdef CPP_GAME_ENGINE_USE_VULKAN
+        void require_surface_query(VkResult result, const char* operation)
+        {
+            if (result == VK_ERROR_SURFACE_LOST_KHR)
+                throw VulkanSurfaceLost(std::string(operation) + ": Vulkan surface lost");
+            if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_INCOMPLETE)
+                throw VulkanSwapchainOutOfDate(std::string(operation) + ": Vulkan surface changed during query");
+            if (result != VK_SUCCESS)
+                throw std::runtime_error(std::string(operation) + ": Vulkan error " + std::to_string(result));
+        }
+
         rendering::PixelFormat to_rendering_format(const VkFormat format)
         {
             switch (format)
@@ -260,10 +271,11 @@ namespace vulkan
         createInfo.clipped = VK_TRUE;
         createInfo.oldSwapchain = VK_NULL_HANDLE;
 
-        if (VK_SUCCESS != vkCreateSwapchainKHR(device, &createInfo, nullptr, &m_swapchain))
+        const VkResult created = vkCreateSwapchainKHR(device, &createInfo, nullptr, &m_swapchain);
+        if (created != VK_SUCCESS)
         {
             m_device = {};
-            throw std::runtime_error("Failed to create Vulkan swapchain");
+            require_surface_query(created, "Create Vulkan swapchain");
         }
 
         uint32_t actualImageCount = 0;
@@ -361,41 +373,42 @@ namespace vulkan
         VulkanSwapchainSupportDetails details;
 
 #ifdef CPP_GAME_ENGINE_USE_VULKAN
-        vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+        require_surface_query(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
             physicalDevice,
             surface,
             &details.capabilities
-        );
+        ), "Query Vulkan surface capabilities");
 
         uint32_t formatCount = 0;
-        vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount, nullptr);
+        require_surface_query(vkGetPhysicalDeviceSurfaceFormatsKHR(
+            physicalDevice, surface, &formatCount, nullptr), "Count Vulkan surface formats");
         if (formatCount > 0)
         {
             details.formats.resize(formatCount);
-            vkGetPhysicalDeviceSurfaceFormatsKHR(
+            require_surface_query(vkGetPhysicalDeviceSurfaceFormatsKHR(
                 physicalDevice,
                 surface,
                 &formatCount,
                 details.formats.data()
-            );
+            ), "Query Vulkan surface formats");
         }
 
         uint32_t presentModeCount = 0;
-        vkGetPhysicalDeviceSurfacePresentModesKHR(
+        require_surface_query(vkGetPhysicalDeviceSurfacePresentModesKHR(
             physicalDevice,
             surface,
             &presentModeCount,
             nullptr
-        );
+        ), "Count Vulkan present modes");
         if (presentModeCount > 0)
         {
             details.presentModes.resize(presentModeCount);
-            vkGetPhysicalDeviceSurfacePresentModesKHR(
+            require_surface_query(vkGetPhysicalDeviceSurfacePresentModesKHR(
                 physicalDevice,
                 surface,
                 &presentModeCount,
                 details.presentModes.data()
-            );
+            ), "Query Vulkan present modes");
         }
 #else
         (void)physicalDevice;

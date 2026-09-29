@@ -5,6 +5,8 @@
 #pragma once
 
 #include <cstdint>
+#include <stdexcept>
+#include <stdexcept>
 #include <vector>
 
 #ifdef CPP_GAME_ENGINE_USE_VULKAN
@@ -35,6 +37,18 @@ struct VkSurfaceFormatKHR
 
 namespace vulkan
 {
+    class VulkanSurfaceLost final : public std::runtime_error
+    {
+    public:
+        using std::runtime_error::runtime_error;
+    };
+
+    class VulkanSwapchainOutOfDate final : public std::runtime_error
+    {
+    public:
+        using std::runtime_error::runtime_error;
+    };
+
     struct VulkanQueueFamilyIndices
     {
         uint32_t graphicsFamily = 0;

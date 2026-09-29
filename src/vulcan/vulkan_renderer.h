@@ -89,6 +89,7 @@ namespace vulkan
         size_t m_renderCallCount = 0;
         bool m_frameActive = false;
         bool m_initialized = false;
+        bool m_surfaceLost = false;
         bool m_portabilitySubset = false;
 
         void createInstance(const VulkanRendererConfig& config);
@@ -97,6 +98,7 @@ namespace vulkan
         void createLogicalDevice(const VulkanRendererConfig& config);
         void createSwapchain(const rendering::SwapchainConfig& config);
         void recreateSwapchain();
+        void abandonSurface();
         void createFrameSync();
         void destroyFrameSync();
         bool framebufferReady() const;
@@ -122,6 +124,10 @@ namespace vulkan
 #endif
         void initialize(IVulkanSurfaceProvider& surfaceProvider, const VulkanRendererConfig& config = {});
         void shutdown();
+        // Render-owner-thread platform signal; WSI surface-loss results call this
+        // internally. A new backend/device must be built after a lost surface.
+        void invalidateSurface();
+        bool surfaceLost() const { return m_surfaceLost; }
 
         bool beginRenderFrame() override;
         void endRenderFrame() override;

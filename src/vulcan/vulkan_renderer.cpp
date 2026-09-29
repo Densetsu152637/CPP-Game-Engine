@@ -190,6 +190,7 @@ namespace vulkan
           m_renderCallCount(other.m_renderCallCount),
           m_frameActive(other.m_frameActive),
           m_initialized(other.m_initialized),
+          m_surfaceLost(other.m_surfaceLost),
           m_portabilitySubset(other.m_portabilitySubset)
     {
         other.m_window = nullptr;
@@ -210,6 +211,7 @@ namespace vulkan
         other.m_renderCallCount = 0;
         other.m_frameActive = false;
         other.m_initialized = false;
+        other.m_surfaceLost = false;
     }
 
     VulkanRenderer& VulkanRenderer::operator=(VulkanRenderer&& other) noexcept
@@ -240,6 +242,7 @@ namespace vulkan
         m_renderCallCount = other.m_renderCallCount;
         m_frameActive = other.m_frameActive;
         m_initialized = other.m_initialized;
+        m_surfaceLost = other.m_surfaceLost;
         m_portabilitySubset = other.m_portabilitySubset;
 
         other.m_window = nullptr;
@@ -260,6 +263,7 @@ namespace vulkan
         other.m_renderCallCount = 0;
         other.m_frameActive = false;
         other.m_initialized = false;
+        other.m_surfaceLost = false;
         return *this;
     }
 
@@ -576,7 +580,7 @@ namespace vulkan
     void VulkanRenderer::recreateSwapchain()
     {
 #ifdef CPP_GAME_ENGINE_USE_VULKAN
-        if (nullptr == m_device)
+        if (nullptr == m_device || m_surfaceLost)
             return;
 
         try
@@ -590,6 +594,14 @@ namespace vulkan
             if (framebufferReady())
                 createSwapchain(m_swapchainConfig);
         }
+        catch (const VulkanSurfaceLost&)
+        {
+            abandonSurface();
+        }
+        catch (const VulkanSwapchainOutOfDate&)
+        {
+            // The native window may still be changing. Retry on a later frame.
+        }
         catch (...)
         {
             shutdown();
@@ -597,6 +609,36 @@ namespace vulkan
         }
 #endif
     }
+
+    void VulkanRenderer::abandonSurface()
+    {
+#ifdef CPP_GAME_ENGINE_USE_VULKAN
+        if (m_surfaceLost) return;
+        if (m_frameActive)
+            throw std::logic_error("Cannot invalidate a Vulkan surface during an active frame");
+        // A failed present still enqueues its semaphore wait. Keep the device and
+        // persistent resources, but retire every WSI object after the queue drains.
+        if (m_device)
+            require_vk(vkDeviceWaitIdle(m_device), "Wait after Vulkan surface loss");
+        if (m_gpu)
+        {
+            m_gpu->draws.clear();
+            m_gpu->destroyTargets();
+        }
+        m_swapchain.reset();
+        if (m_instance && m_surface)
+            vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
+#endif
+        m_surface = {};
+        m_currentFrame.active = false;
+        m_info.hasSurface = false;
+        m_info.hasSwapchain = false;
+        m_info.swapchain = {};
+        m_surfaceLost = true;
+    }
+
+    void VulkanRenderer::invalidateSurface()
+    { abandonSurface(); }
 
     void VulkanRenderer::createFrameSync()
     {
@@ -703,6 +745,7 @@ namespace vulkan
         m_renderCallCount = 0;
         m_frameActive = false;
         m_initialized = false;
+        m_surfaceLost = false;
     }
 
     bool VulkanRenderer::beginRenderFrame()
@@ -713,6 +756,9 @@ namespace vulkan
 
         if (m_frameActive)
             throw std::logic_error("Cannot begin a Vulkan render frame while another frame is active");
+
+        if (m_surfaceLost)
+            return false;
 
         if (!framebufferReady())
             return false;
@@ -729,7 +775,7 @@ namespace vulkan
         const VkResult result = vkAcquireNextImageKHR(
             m_device,
             m_swapchain.handle(),
-            UINT64_MAX,
+            50'000'000, // Bound shutdown latency while a mobile surface disappears.
             m_imageAvailableSemaphore,
             VK_NULL_HANDLE,
             &imageIndex
@@ -740,6 +786,13 @@ namespace vulkan
             recreateSwapchain();
             return false;
         }
+        if (VK_ERROR_SURFACE_LOST_KHR == result)
+        {
+            abandonSurface();
+            return false;
+        }
+        if (VK_TIMEOUT == result)
+            return false;
 
         if (VK_SUCCESS != result && VK_SUBOPTIMAL_KHR != result)
             throw std::runtime_error("Failed to acquire a Vulkan swapchain image");
@@ -802,7 +855,9 @@ namespace vulkan
             const VkResult result = vkQueuePresentKHR(m_presentQueue, &presentInfo);
             m_currentFrame.active = false;
             m_frameActive = false;
-            if (VK_ERROR_OUT_OF_DATE_KHR == result || VK_SUBOPTIMAL_KHR == result ||
+            if (VK_ERROR_SURFACE_LOST_KHR == result)
+                abandonSurface();
+            else if (VK_ERROR_OUT_OF_DATE_KHR == result || VK_SUBOPTIMAL_KHR == result ||
                 (VK_SUCCESS == result && m_gpu->suboptimal))
                 recreateSwapchain();
             else

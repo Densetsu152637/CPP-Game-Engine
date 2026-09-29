@@ -363,6 +363,11 @@ namespace
             while (glfwGetTime() < until && !glfwWindowShouldClose(window))
                 glfwWaitEventsTimeout(0.1);
         }
+        renderer.invalidateSurface();
+        if (!renderer.surfaceLost() || renderer.surface() != VK_NULL_HANDLE ||
+            renderer.swapchain().valid() || renderer.beginRenderFrame())
+            throw std::runtime_error("Lost Vulkan surface did not suspend frame acquisition");
+        renderer.invalidateSurface(); // Repeated lifecycle notification is harmless.
     }
 
     void runDeviceBackend(GLFWwindow* window, const std::filesystem::path& directory,
@@ -462,7 +467,7 @@ int main(int argc, char** argv)
         glfwDestroyWindow(window);
         glfwTerminate();
         if (validationErrors != 0) throw std::runtime_error("Vulkan validation errors were reported");
-        std::cout << "Vulkan smoke passed: draw snapshots, shader lifetime, sparse sets, invalid inputs, cancel, resize, move, reinitialize"
+        std::cout << "Vulkan smoke passed: draw snapshots, shader lifetime, sparse sets, invalid inputs, cancel, resize, surface loss, move, reinitialize"
                   << (validation ? " (validation enabled)\n" : " (validation disabled)\n");
         return 0;
     }
