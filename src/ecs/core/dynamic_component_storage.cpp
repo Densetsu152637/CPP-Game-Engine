@@ -39,6 +39,17 @@ namespace ecs
         return true;
     }
 
+    size_t DynamicComponentStorage::pruneEmptySchemas()
+    {
+        size_t removed = 0;
+        for (auto it = m_columns.begin(); it != m_columns.end(); )
+        {
+            if (it->second.entities.empty()) { it = m_columns.erase(it); ++removed; }
+            else ++it;
+        }
+        return removed;
+    }
+
     bool DynamicComponentStorage::set(const Entity& entity, const std::string_view name, const DynamicValues& values)
     {
         auto found = m_columns.find(std::string(name));

@@ -128,6 +128,11 @@ bool ECS::rollbackDynamicComponentSchema(const std::string_view name)
     return removed;
 }
 
+void ECS::pruneEmptyDynamicComponentSchemas()
+{
+    if (m_dynamicComponents.pruneEmptySchemas() != 0) bumpComponentQueryGeneration();
+}
+
 bool ECS::setDynamicComponent(const Entity& entity, const std::string_view name, const ecs::DynamicValues& values)
 {
     if (!is_known_handle(entity) || !m_dynamicComponents.validate(name, values)) return false;

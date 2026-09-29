@@ -3,6 +3,9 @@
 #include "tooling/iteration.h"
 
 #include <algorithm>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <thread>
 #include <vector>
@@ -82,6 +85,54 @@ namespace
         test::require(runtime.liveEntityCount() == 3, "deferred entity creation should become live at the boundary");
         test::require(runtime.stop().has_value(), "system fixture should cleanly discard all runtime entities");
         test::require(runtime.liveEntityCount() == 0, "stop should remove dynamic-component entities and their rows");
+    }
+
+    void restartPrunesOldScriptSchemasAndSystems()
+    {
+        const auto fixture = std::filesystem::current_path() / "build" /
+            ("runtime-restart-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directories(fixture);
+        const auto source = fixture / "player.lua";
+        struct Cleanup
+        {
+            std::filesystem::path file, directory;
+            ~Cleanup() { std::error_code ignored; std::filesystem::remove(file, ignored);
+                std::filesystem::remove(directory, ignored); }
+        } cleanup{source, fixture};
+        const auto writeScript = [&](std::string_view type, std::string_view value, std::string_view label)
+        {
+            std::ofstream output(source, std::ios::binary | std::ios::trunc);
+            test::require(output.good(), "restart fixture should open its project-local script");
+            output << "assert(engine.register_component('Shape', {value='" << type << "'}))\n"
+                << "return {on_create=function() assert(self.set_component('Shape', {value=" << value << "})) end,\n"
+                << "systems={{name='shape', all={'Shape'}, reads={'Shape'}, writes={},\n"
+                << "update=function() engine.log('" << label << "') end}}}\n";
+            output.close();
+            test::require(output.good(), "restart fixture should write its project-local script");
+        };
+        writeScript("number", "1", "old-system");
+        auto authored = sample();
+        authored.root = std::filesystem::canonical(fixture);
+        authored.assets.at("asset:player-script").path = "player.lua";
+        std::vector<std::string> logs;
+        project::RuntimeOptions options;
+        options.log = [&](std::string_view message) { logs.emplace_back(message); };
+        project::Runtime runtime(std::move(authored), std::move(options));
+        test::require(runtime.start().has_value() && runtime.tick().has_value(),
+            "first schema version and system should run");
+        test::require(std::count(logs.begin(), logs.end(), "old-system") == 1,
+            "first system should execute exactly once");
+        test::require(runtime.stop().has_value() && runtime.liveEntityCount() == 0 &&
+            runtime.activeScriptCount() == 0, "stop should release scripts and component rows");
+        writeScript("string", "'ready'", "new-system");
+        const auto secondStart = runtime.start();
+        test::require(secondStart.has_value(), secondStart ? "changed schema should load after restart" :
+            "changed schema should load after restart: " + secondStart.error().front().message);
+        test::require(runtime.tick().has_value(), "restarted system should tick");
+        test::require(std::count(logs.begin(), logs.end(), "old-system") == 1 &&
+            std::count(logs.begin(), logs.end(), "new-system") == 1,
+            "restart must not retain the retired system or duplicate the new callback");
+        test::require(runtime.stop().has_value(), "restarted runtime should stop cleanly");
     }
 
     void failedLuaSystemAbortsQueuedStructuralChanges()
@@ -260,6 +311,7 @@ int main()
     {
         authoredInputMovesOwner();
         authoredLuaSystemsUseDeferredSortedSnapshots();
+        restartPrunesOldScriptSchemasAndSystems();
         failedLuaSystemAbortsQueuedStructuralChanges();
         stagedReloadIsBoundaryAppliedAndKeepsLastGood();
         teardownFailureKeepsOldScriptAndCleansCandidate();

@@ -373,6 +373,7 @@ public:
     bool hasDynamicComponentSchema(std::string_view name) const;
     bool unregisterDynamicComponent(std::string_view name);
     bool rollbackDynamicComponentSchema(std::string_view name);
+    void pruneEmptyDynamicComponentSchemas();
     bool setDynamicComponent(const Entity& entity, std::string_view name, const ecs::DynamicValues& values);
     std::optional<ecs::DynamicValues> getDynamicComponent(const Entity& entity, std::string_view name) const;
     bool removeDynamicComponent(const Entity& entity, std::string_view name);

@@ -305,6 +305,7 @@ namespace project
             state.scripts.reset();
             state.scriptInstances.clear();
             state.destroyEntities();
+            state.simulator.ecs().pruneEmptyDynamicComponentSchemas();
             return std::unexpected(runtimeError("runtime.start.failed", state.project.scene.source, error.what()));
         }
     }
@@ -451,6 +452,7 @@ namespace project
         state.scriptInstances.clear();
         state.pendingReloads.clear();
         state.destroyEntities();
+        state.simulator.ecs().pruneEmptyDynamicComponentSchemas();
         state.started = false;
         state.faulted = false;
         state.input = nullptr;

@@ -72,4 +72,12 @@ void test_dynamic_component_storage_and_deferred_query_coherence()
     test::require(rejected, "preflight should reject a handle destroyed before commit");
     test::require(ecs.getDynamicComponent(deferred, "Health").has_value(),
         "a rejected batch must leave unrelated component rows untouched");
+
+    ecs.pruneEmptyDynamicComponentSchemas();
+    test::require(ecs.hasDynamicComponentSchema("Health"),
+        "schema pruning must preserve schemas with live component rows");
+    test::require(ecs.removeDynamicComponent(deferred, "Health"), "last live row should be removable");
+    ecs.pruneEmptyDynamicComponentSchemas();
+    test::require(!ecs.hasDynamicComponentSchema("Health"),
+        "unused schemas should be released after their final row is removed");
 }

@@ -36,6 +36,7 @@ namespace ecs
         bool registerComponent(std::string_view name, const std::vector<DynamicField>& fields);
         bool hasSchema(std::string_view name) const;
         bool unregisterComponent(std::string_view name, bool eraseRows = false);
+        size_t pruneEmptySchemas();
         bool set(const Entity& entity, std::string_view name, const DynamicValues& values);
         bool validate(std::string_view name, const DynamicValues& values) const;
         std::optional<DynamicValues> get(const Entity& entity, std::string_view name) const;
