@@ -5,7 +5,9 @@
 #include "shader.h"
 
 #include <algorithm>
+#ifndef CPP_GAME_ENGINE_MOBILE
 #include <cstdlib>
+#endif
 #include <fstream>
 #include <stdexcept>
 #include <utility>
@@ -33,6 +35,7 @@ namespace rendering
             return bytes;
         }
 
+#ifndef CPP_GAME_ENGINE_MOBILE
         const char* glslc_stage_name(const ShaderStage stage)
         {
             switch (stage)
@@ -58,6 +61,7 @@ namespace rendering
         {
             return "\"" + path.string() + "\"";
         }
+#endif
     }
 
     ShaderUniformWrite capture_uniform_write(
@@ -122,6 +126,13 @@ namespace rendering
         const std::filesystem::path& spirvOutputPath,
         const std::filesystem::path& compilerExecutable
     ) {
+#ifdef CPP_GAME_ENGINE_MOBILE
+        (void)stage;
+        (void)glslPath;
+        (void)spirvOutputPath;
+        (void)compilerExecutable;
+        throw ShaderCompilerUnavailable();
+#else
         const std::string command =
             quote_path(compilerExecutable) +
             " -fshader-stage=" + glslc_stage_name(stage) +
@@ -133,6 +144,7 @@ namespace rendering
             throw std::runtime_error("GLSL compilation failed: " + glslPath.string());
 
         return loadSpirvShader(stage, spirvOutputPath);
+#endif
     }
 
     IShader::IShader(std::string name)

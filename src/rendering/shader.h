@@ -118,6 +118,13 @@ namespace rendering
 
     ShaderSource loadGlslShader(ShaderStage stage, const std::filesystem::path& path);
     ShaderSource loadSpirvShader(ShaderStage stage, const std::filesystem::path& path);
+    class ShaderCompilerUnavailable final : public std::runtime_error
+    {
+    public:
+        ShaderCompilerUnavailable()
+            : std::runtime_error("Runtime GLSL compilation is unavailable on mobile; package SPIR-V shaders at build time") {}
+    };
+
     ShaderSource compileGlslToSpirv(
         ShaderStage stage,
         const std::filesystem::path& glslPath,
