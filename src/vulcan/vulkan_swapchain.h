@@ -8,7 +8,6 @@
 #include <vector>
 
 #ifdef CPP_GAME_ENGINE_USE_VULKAN
-#define GLFW_INCLUDE_VULKAN
 #include <vulkan/vulkan.h>
 #else
 using VkDevice = void*;
@@ -31,8 +30,6 @@ struct VkSurfaceFormatKHR
     uint32_t colorSpace = 0;
 };
 #endif
-
-#include <GLFW/glfw3.h>
 
 #include "../rendering/swapchain.h"
 
@@ -89,7 +86,7 @@ namespace vulkan
             VkPhysicalDevice physicalDevice,
             VkDevice device,
             VkSurfaceKHR surface,
-            GLFWwindow* window,
+            rendering::ImageExtent drawableExtent,
             const VulkanQueueFamilyIndices& queueFamilies,
             const rendering::SwapchainConfig& config
         );
@@ -127,7 +124,7 @@ namespace vulkan
         );
         static VkExtent2D chooseExtent(
             const VkSurfaceCapabilitiesKHR& capabilities,
-            GLFWwindow* window
+            rendering::ImageExtent drawableExtent
         );
     };
 }

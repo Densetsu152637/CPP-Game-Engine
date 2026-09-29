@@ -8,7 +8,9 @@
 #include "rendering/content.h"
 #include "rendering/camera.h"
 #include "rendering/material.h"
-#include "vulcan/vulkan_renderer.h"
+#include "rendering/render_device.h"
+#include "vulcan/vulkan_frame_backend.h"
+#include "vulcan/vulkan_surface_provider.h"
 #include "../third_party/picojson/picojson.h"
 #include <algorithm>
 #include <charconv>
@@ -17,10 +19,12 @@
 #include <filesystem>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -89,18 +93,26 @@ project::Result<void> compileScripts(const project::Project& value) {
 #ifdef CPP_GAME_ENGINE_USE_VULKAN
 class Preview {
     GLFWwindow* window = nullptr;
-    vulkan::VulkanRenderer renderer;
+    std::unique_ptr<vulkan::VulkanGlfwSurfaceProvider> surface;
+    std::unique_ptr<rendering::RenderDevice> device;
     vulkan::VulkanShaderProgram shader{"authored content"};
+    rendering::RenderResourceHandle shaderHandle;
     struct Drawable {
         std::string entityId;
-        rendering::MeshAsset mesh;
-        rendering::Texture2D texture;
+        rendering::RenderResourceHandle mesh;
+        rendering::RenderResourceHandle texture;
     };
     std::vector<Drawable> drawables;
     std::map<std::string, bool> held;
     std::map<std::string, int> keys;
 public:
     Preview(const project::Project& project, const Path& shaders) {
+        struct PendingDrawable {
+            std::string entityId;
+            rendering::MeshAsset mesh;
+            rendering::Texture2D texture;
+        };
+        std::vector<PendingDrawable> pending;
         const std::map<std::string, int> keyCodes{{"Right",GLFW_KEY_RIGHT},{"Left",GLFW_KEY_LEFT},{"Up",GLFW_KEY_UP},{"Down",GLFW_KEY_DOWN},{"Space",GLFW_KEY_SPACE}};
         for (const auto& [action, key] : project.inputActions) {
             const auto code = keyCodes.find(key);
@@ -111,29 +123,49 @@ public:
             if (!entity.meshRenderer) continue;
             auto meshPath = project::resolveAsset(project, entity.meshRenderer->mesh);
             if (!meshPath) throw std::runtime_error("Unable to resolve mesh for " + entity.id);
-            Drawable drawable{entity.id, rendering::loadMeshAsset(*meshPath), {1, 1, {255,255,255,255}}};
+            PendingDrawable drawable{entity.id, rendering::loadMeshAsset(*meshPath), {1, 1, {255,255,255,255}}};
             if (entity.meshRenderer->texture) {
                 auto texturePath = project::resolveAsset(project, *entity.meshRenderer->texture);
                 if (!texturePath) throw std::runtime_error("Unable to resolve texture for " + entity.id);
                 drawable.texture = rendering::loadTexturePpm(*texturePath);
             }
-            drawables.push_back(std::move(drawable));
+            pending.push_back(std::move(drawable));
         }
-        if (drawables.empty()) throw std::runtime_error("Visible preview requires at least one entity with MeshRenderer");
+        if (pending.empty()) throw std::runtime_error("Visible preview requires at least one entity with MeshRenderer");
         shader.addSpirv(rendering::ShaderStage::Vertex, shaders / "mesh_textured.vert.spv");
         shader.addSpirv(rendering::ShaderStage::Fragment, shaders / "mesh_textured.frag.spv");
         if (!glfwInit()) throw std::runtime_error("GLFW initialization failed");
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         window = glfwCreateWindow(960, 600, project.name.c_str(), nullptr, nullptr);
         if (!window) { glfwTerminate(); throw std::runtime_error("GLFW window creation failed"); }
-        try { renderer.initialize(window); }
-        catch (...) { glfwDestroyWindow(window); glfwTerminate(); window = nullptr; throw; }
+        try {
+            surface = std::make_unique<vulkan::VulkanGlfwSurfaceProvider>(window);
+            device = std::make_unique<rendering::RenderDevice>(
+                std::make_unique<vulkan::VulkanFrameBackend>(*surface));
+            shaderHandle = device->createShader(shader);
+            for (const auto& drawable : pending)
+                drawables.push_back({drawable.entityId,
+                    device->createMesh(drawable.mesh.vertexData(), drawable.mesh.layout()),
+                    device->createTexture(drawable.texture)});
+        } catch (...) {
+            device.reset();
+            surface.reset();
+            glfwDestroyWindow(window);
+            window = nullptr;
+            glfwTerminate();
+            throw;
+        }
     }
     ~Preview() {
-        renderer.shutdown();
+        try { if (device) device->shutdown(); }
+        catch (const std::exception& error) { std::cerr << "Renderer shutdown: " << error.what() << '\n'; }
+        catch (...) { std::cerr << "Renderer shutdown failed\n"; }
+        device.reset();
+        surface.reset();
         if (window) glfwDestroyWindow(window);
         glfwTerminate();
     }
+    void finish() { if (device) { device->waitIdle(); device->shutdown(); } }
     bool sample(project::InputSnapshot& input) {
         glfwPollEvents();
         if (glfwWindowShouldClose(window)) return false;
@@ -146,23 +178,22 @@ public:
         }
         return true;
     }
-    void draw(const project::Project& project, const project::Runtime& runtime) {
-        if (!renderer.beginRenderFrame()) return;
-        try {
-            rendering::CameraUniform camera;
-            camera.viewProjection = {0.5f,0,0,0, 0,-0.8f,0,0, 0,0,-0.1f,0, 0,0,0.5f,1};
-            rendering::MaterialUniform material;
-            for (const auto& drawable : drawables) {
-                const auto position = runtime.position(drawable.entityId);
-                if (!position) continue;
-                const std::array<float, 16> model{1,0,0,0, 0,1,0,0, 0,0,1,0, (*position)[0],(*position)[1],(*position)[2],1};
-                renderer.upload(shader, "model", model, runtime.tickCount(), {0,0});
-                renderer.upload(shader, "material", material, runtime.tickCount(), {0,1});
-                renderer.upload(shader, "camera", camera, runtime.tickCount(), {0,2});
-                renderer.drawMesh(shader, drawable.mesh.vertexData(), drawable.mesh.layout(), drawable.texture);
-            }
-            renderer.endRenderFrame();
-        } catch (...) { renderer.cancelRenderFrame(); throw; }
+    void draw(const project::Runtime& runtime) {
+        auto frame = device->makeFrame();
+        rendering::CameraUniform camera;
+        camera.viewProjection = {0.5f,0,0,0, 0,-0.8f,0,0, 0,0,-0.1f,0, 0,0,0.5f,1};
+        rendering::MaterialUniform material;
+        for (const auto& drawable : drawables) {
+            const auto position = runtime.position(drawable.entityId);
+            if (!position) continue;
+            const std::array<float, 16> model{1,0,0,0, 0,1,0,0, 0,0,1,0, (*position)[0],(*position)[1],(*position)[2],1};
+            rendering::DrawCommand draw{shaderHandle, drawable.mesh, drawable.texture};
+            rendering::appendUniform(draw, "model", model, {0,0});
+            rendering::appendUniform(draw, "material", material, {0,1});
+            rendering::appendUniform(draw, "camera", camera, {0,2});
+            frame->record(std::move(draw));
+        }
+        device->submit(frame);
     }
 };
 #endif
@@ -201,7 +232,7 @@ int runProject(const Arguments& args) {
         const auto advanced = runtime.tick(inputs[tick]);
         if (!advanced) return fail("run", advanced.error(), 3);
 #ifdef CPP_GAME_ENGINE_USE_VULKAN
-        if (preview) { preview->draw(*loaded, runtime); std::this_thread::sleep_until(next); }
+        if (preview) { preview->draw(runtime); std::this_thread::sleep_until(next); }
 #endif
     }
     auto scene = loaded->scene;
@@ -210,6 +241,9 @@ int runProject(const Arguments& args) {
     const auto completedTicks = runtime.tickCount();
     auto stopped = runtime.stop();
     if (!stopped) return fail("run", stopped.error(), 3);
+#ifdef CPP_GAME_ENGINE_USE_VULKAN
+    if (preview) preview->finish();
+#endif
     return success("run", "{\"ticks\":" + std::to_string(completedTicks) + ",\"fixed_delta\":0.016666667,\"scene\":" + project::sceneJson(scene) + "}");
 }
 }
@@ -242,7 +276,7 @@ std::optional<int> runCommands(int argc, char** argv) {
             std::cout << project::resultJson(report.readyToBuild(), command, report.toJson()) << '\n';
             return report.readyToBuild() ? 0 : 1;
         }
-        if ((command != "project" && command != "scene") || argc < 3) throw std::invalid_argument("Expected project, scene, run, editor, or mcp command");
+        if ((command != "project" && command != "scene") || argc < 3) throw std::invalid_argument("Expected project, scene, run, platform, editor, or mcp command");
         command += " " + std::string(argv[2]);
         const Arguments args(argc, argv, 3);
         if (command == "project init") {

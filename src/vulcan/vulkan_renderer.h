@@ -10,7 +10,6 @@
 #include <vector>
 
 #ifdef CPP_GAME_ENGINE_USE_VULKAN
-#define GLFW_INCLUDE_VULKAN
 #include <vulkan/vulkan.h>
 #else
 using VkInstance = void*;
@@ -19,7 +18,11 @@ using VkSemaphore = void*;
 using VkDebugReportCallbackEXT = void*;
 #endif
 
+#ifndef CPP_GAME_ENGINE_MOBILE
 #include <GLFW/glfw3.h>
+#else
+struct GLFWwindow;
+#endif
 
 #include "../structs/arraylist.h"
 #include "../rendering/renderer.h"
@@ -27,6 +30,7 @@ using VkDebugReportCallbackEXT = void*;
 #include "../rendering/texture.h"
 #include "vulkan_shader.h"
 #include "vulkan_memory.h"
+#include "vulkan_surface_provider.h"
 #include "vulkan_swapchain.h"
 
 namespace vulkan
@@ -52,6 +56,9 @@ namespace vulkan
         bool hasSurface = false;
         bool hasLogicalDevice = false;
         bool hasSwapchain = false;
+        bool portabilitySubset = false;
+        bool sampledTextures = false;
+        bool depthAttachment = false;
         uint32_t graphicsQueueFamily = 0;
         uint32_t presentQueueFamily = 0;
         rendering::SwapchainInfo swapchain;
@@ -62,6 +69,7 @@ namespace vulkan
         struct GpuState;
         std::unique_ptr<GpuState> m_gpu;
         GLFWwindow* m_window = nullptr;
+        IVulkanSurfaceProvider* m_surfaceProvider = nullptr;
         VkInstance m_instance = {};
         VkDebugReportCallbackEXT m_validationCallback = {};
         VkSurfaceKHR m_surface = {};
@@ -81,9 +89,10 @@ namespace vulkan
         size_t m_renderCallCount = 0;
         bool m_frameActive = false;
         bool m_initialized = false;
+        bool m_portabilitySubset = false;
 
         void createInstance(const VulkanRendererConfig& config);
-        void createSurface(GLFWwindow* window);
+        void createSurface();
         void pickPhysicalDevice(const VulkanRendererConfig& config);
         void createLogicalDevice(const VulkanRendererConfig& config);
         void createSwapchain(const rendering::SwapchainConfig& config);
@@ -108,7 +117,10 @@ namespace vulkan
         VulkanRenderer(VulkanRenderer&& other) noexcept;
         VulkanRenderer& operator=(VulkanRenderer&& other) noexcept;
 
+#ifndef CPP_GAME_ENGINE_MOBILE
         void initialize(GLFWwindow* window, const VulkanRendererConfig& config = {});
+#endif
+        void initialize(IVulkanSurfaceProvider& surfaceProvider, const VulkanRendererConfig& config = {});
         void shutdown();
 
         bool beginRenderFrame() override;
@@ -179,5 +191,13 @@ namespace vulkan
             const rendering::VertexLayout& layout,
             const rendering::Texture2D& texture
         );
+
+        // Render-thread-only persistent GPU resources used by RenderDevice.
+        void cacheMesh(uint64_t id, const rendering::SerializedBufferView& vertices,
+            const rendering::VertexLayout& layout);
+        void cacheTexture(uint64_t id, const rendering::Texture2D& texture);
+        void releaseMesh(uint64_t id);
+        void releaseTexture(uint64_t id);
+        void drawCached(VulkanShaderProgram& shader, uint64_t meshId, uint64_t textureId = 0);
     };
 }

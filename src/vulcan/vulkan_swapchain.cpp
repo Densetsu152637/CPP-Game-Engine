@@ -172,7 +172,7 @@ namespace vulkan
         const VkPhysicalDevice physicalDevice,
         const VkDevice device,
         const VkSurfaceKHR surface,
-        GLFWwindow* window,
+        const rendering::ImageExtent drawableExtent,
         const VulkanQueueFamilyIndices& queueFamilies,
         const rendering::SwapchainConfig& config
     ) {
@@ -185,9 +185,6 @@ namespace vulkan
 
         if (nullptr == surface)
             throw std::invalid_argument("Cannot create a Vulkan swapchain with a null surface");
-
-        if (nullptr == window)
-            throw std::invalid_argument("Cannot create a Vulkan swapchain without a GLFWwindow");
 
         if (!queueFamilies.complete())
             throw std::invalid_argument("Cannot create a Vulkan swapchain without graphics and present queues");
@@ -204,7 +201,7 @@ namespace vulkan
             support.presentModes,
             config.preferredPresentMode
         );
-        const VkExtent2D extent = chooseExtent(support.capabilities, window);
+        const VkExtent2D extent = chooseExtent(support.capabilities, drawableExtent);
         if (0 == extent.width || 0 == extent.height)
         {
             m_device = {};
@@ -289,7 +286,7 @@ namespace vulkan
         (void)physicalDevice;
         (void)device;
         (void)surface;
-        (void)window;
+        (void)drawableExtent;
         (void)queueFamilies;
         (void)config;
         throw std::runtime_error("Vulkan swapchains require CPP_GAME_ENGINE_USE_VULKAN");
@@ -459,19 +456,15 @@ namespace vulkan
 
     VkExtent2D VulkanSwapchain::chooseExtent(
         const VkSurfaceCapabilitiesKHR& capabilities,
-        GLFWwindow* window
+        const rendering::ImageExtent drawableExtent
     ) {
 #ifdef CPP_GAME_ENGINE_USE_VULKAN
         if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max())
             return capabilities.currentExtent;
 
-        int width = 0;
-        int height = 0;
-        glfwGetFramebufferSize(window, &width, &height);
-
         VkExtent2D extent {
-            static_cast<uint32_t>(std::max(width, 0)),
-            static_cast<uint32_t>(std::max(height, 0))
+            drawableExtent.width,
+            drawableExtent.height
         };
         extent.width = std::clamp(
             extent.width,
@@ -486,7 +479,7 @@ namespace vulkan
         return extent;
 #else
         (void)capabilities;
-        (void)window;
+        (void)drawableExtent;
         return {};
 #endif
     }

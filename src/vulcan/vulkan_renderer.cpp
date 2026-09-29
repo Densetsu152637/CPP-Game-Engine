@@ -4,6 +4,7 @@
 
 #include "vulkan_renderer.h"
 
+#include <algorithm>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -16,6 +17,7 @@ namespace vulkan
     namespace
     {
 #ifdef CPP_GAME_ENGINE_USE_VULKAN
+#ifndef CPP_GAME_ENGINE_MOBILE
         std::vector<const char*> glfw_required_instance_extensions()
         {
             uint32_t extensionCount = 0;
@@ -25,6 +27,7 @@ namespace vulkan
 
             return std::vector<const char*>(extensions, extensions + extensionCount);
         }
+#endif
 
         bool validation_layer_available(const char* layerName)
         {
@@ -74,6 +77,53 @@ namespace vulkan
             return extensions;
         }
 
+        bool instance_extension_available(const char* name)
+        {
+            uint32_t count = 0;
+            if (vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr) != VK_SUCCESS)
+                return false;
+            std::vector<VkExtensionProperties> properties(count);
+            if (vkEnumerateInstanceExtensionProperties(nullptr, &count, properties.data()) != VK_SUCCESS)
+                return false;
+            for (const auto& property : properties)
+                if (std::strcmp(property.extensionName, name) == 0) return true;
+            return false;
+        }
+
+        bool device_extension_available(VkPhysicalDevice device, const char* name)
+        {
+            uint32_t count = 0;
+            if (vkEnumerateDeviceExtensionProperties(device, nullptr, &count, nullptr) != VK_SUCCESS)
+                return false;
+            std::vector<VkExtensionProperties> properties(count);
+            if (vkEnumerateDeviceExtensionProperties(device, nullptr, &count, properties.data()) != VK_SUCCESS)
+                return false;
+            for (const auto& property : properties)
+                if (std::strcmp(property.extensionName, name) == 0) return true;
+            return false;
+        }
+
+        bool supports_sampled_rgba(VkPhysicalDevice device)
+        {
+            VkFormatProperties properties {};
+            vkGetPhysicalDeviceFormatProperties(device, VK_FORMAT_R8G8B8A8_UNORM, &properties);
+            return (properties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) != 0 &&
+                (properties.optimalTilingFeatures & VK_FORMAT_FEATURE_TRANSFER_DST_BIT) != 0;
+        }
+
+        bool supports_depth_attachment(VkPhysicalDevice device)
+        {
+            for (VkFormat format : { VK_FORMAT_D32_SFLOAT, VK_FORMAT_D24_UNORM_S8_UINT,
+                VK_FORMAT_D32_SFLOAT_S8_UINT })
+            {
+                VkFormatProperties properties {};
+                vkGetPhysicalDeviceFormatProperties(device, format, &properties);
+                if (properties.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)
+                    return true;
+            }
+            return false;
+        }
+
         bool device_supports_extensions(
             const VkPhysicalDevice device,
             const std::vector<const char*>& requiredExtensions
@@ -120,6 +170,7 @@ namespace vulkan
     VulkanRenderer::VulkanRenderer(VulkanRenderer&& other) noexcept
         : m_gpu(std::move(other.m_gpu)),
           m_window(other.m_window),
+          m_surfaceProvider(other.m_surfaceProvider),
           m_instance(other.m_instance),
           m_validationCallback(std::exchange(other.m_validationCallback, {})),
           m_surface(other.m_surface),
@@ -138,9 +189,12 @@ namespace vulkan
           m_nextFrameIndex(other.m_nextFrameIndex),
           m_renderCallCount(other.m_renderCallCount),
           m_frameActive(other.m_frameActive),
-          m_initialized(other.m_initialized)
+          m_initialized(other.m_initialized),
+          m_portabilitySubset(other.m_portabilitySubset)
     {
         other.m_window = nullptr;
+        other.m_surfaceProvider = nullptr;
+        other.m_portabilitySubset = false;
         other.m_instance = {};
         other.m_surface = {};
         other.m_physicalDevice = {};
@@ -166,6 +220,7 @@ namespace vulkan
         shutdown();
         m_gpu = std::move(other.m_gpu);
         m_window = other.m_window;
+        m_surfaceProvider = other.m_surfaceProvider;
         m_instance = other.m_instance;
         m_validationCallback = std::exchange(other.m_validationCallback, {});
         m_surface = other.m_surface;
@@ -185,8 +240,11 @@ namespace vulkan
         m_renderCallCount = other.m_renderCallCount;
         m_frameActive = other.m_frameActive;
         m_initialized = other.m_initialized;
+        m_portabilitySubset = other.m_portabilitySubset;
 
         other.m_window = nullptr;
+        other.m_surfaceProvider = nullptr;
+        other.m_portabilitySubset = false;
         other.m_instance = {};
         other.m_surface = {};
         other.m_physicalDevice = {};
@@ -205,6 +263,7 @@ namespace vulkan
         return *this;
     }
 
+#ifndef CPP_GAME_ENGINE_MOBILE
     void VulkanRenderer::initialize(GLFWwindow* window, const VulkanRendererConfig& config)
     {
         if (m_initialized)
@@ -222,7 +281,7 @@ namespace vulkan
         try
         {
             createInstance(config);
-            createSurface(window);
+            createSurface();
             pickPhysicalDevice(config);
             createLogicalDevice(config);
             createFrameSync();
@@ -240,15 +299,57 @@ namespace vulkan
         throw std::runtime_error("VulkanRenderer requires CPP_GAME_ENGINE_USE_VULKAN");
 #endif
     }
+#endif
+
+    void VulkanRenderer::initialize(IVulkanSurfaceProvider& surfaceProvider, const VulkanRendererConfig& config)
+    {
+        if (m_initialized)
+            throw std::logic_error("VulkanRenderer is already initialized");
+#ifdef CPP_GAME_ENGINE_USE_VULKAN
+        m_surfaceProvider = &surfaceProvider;
+        m_swapchainConfig = config.swapchain;
+        try
+        {
+            createInstance(config);
+            createSurface();
+            pickPhysicalDevice(config);
+            createLogicalDevice(config);
+            createFrameSync();
+            createSwapchain(config.swapchain);
+            m_initialized = true;
+        }
+        catch (...)
+        {
+            shutdown();
+            throw;
+        }
+#else
+        (void)surfaceProvider;
+        (void)config;
+        throw std::runtime_error("VulkanRenderer requires CPP_GAME_ENGINE_USE_VULKAN");
+#endif
+    }
 
     void VulkanRenderer::createInstance(const VulkanRendererConfig& config)
     {
 #ifdef CPP_GAME_ENGINE_USE_VULKAN
-        std::vector<const char*> extensions = glfw_required_instance_extensions();
+        std::vector<const char*> extensions;
+        if (m_surfaceProvider)
+            extensions = m_surfaceProvider->requiredInstanceExtensions();
+#ifndef CPP_GAME_ENGINE_MOBILE
+        else
+            extensions = glfw_required_instance_extensions();
+#endif
         for (const char* extension : config.extraInstanceExtensions)
             append_unique_extension(extensions, extension);
         if (config.validationCallback)
             append_unique_extension(extensions, VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
+#ifdef VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME
+        const bool portabilityEnumeration = instance_extension_available(
+            VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+        if (portabilityEnumeration)
+            append_unique_extension(extensions, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+#endif
 
         std::vector<const char*> validationLayers;
         if (config.enableValidationLayers)
@@ -270,6 +371,10 @@ namespace vulkan
 
         VkInstanceCreateInfo createInfo {};
         createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+#ifdef VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME
+        if (portabilityEnumeration)
+            createInfo.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+#endif
         VkDebugReportCallbackCreateInfoEXT diagnostics { VK_STRUCTURE_TYPE_DEBUG_REPORT_CALLBACK_CREATE_INFO_EXT };
         diagnostics.flags = VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT;
         diagnostics.pfnCallback = config.validationCallback;
@@ -297,18 +402,23 @@ namespace vulkan
 #endif
     }
 
-    void VulkanRenderer::createSurface(GLFWwindow* window)
+    void VulkanRenderer::createSurface()
     {
 #ifdef CPP_GAME_ENGINE_USE_VULKAN
         if (nullptr == m_instance)
             throw std::logic_error("Cannot create a Vulkan surface before the instance");
 
-        if (VK_SUCCESS != glfwCreateWindowSurface(m_instance, window, nullptr, &m_surface))
+        if (m_surfaceProvider)
+            m_surface = m_surfaceProvider->createSurface(m_instance);
+#ifndef CPP_GAME_ENGINE_MOBILE
+        else if (VK_SUCCESS != glfwCreateWindowSurface(m_instance, m_window, nullptr, &m_surface))
             throw std::runtime_error("Failed to create Vulkan window surface");
+#endif
+        if (m_surface == VK_NULL_HANDLE)
+            throw std::runtime_error("Surface provider returned a null Vulkan surface");
 
         m_info.hasSurface = true;
 #else
-        (void)window;
 #endif
     }
 
@@ -344,7 +454,14 @@ namespace vulkan
             if (!VulkanSwapchain::querySupport(device, m_surface).usable())
                 continue;
 
+            if (!supports_sampled_rgba(device) || !supports_depth_attachment(device))
+                continue;
+
             m_physicalDevice = device;
+            m_portabilitySubset = device_extension_available(device, "VK_KHR_portability_subset");
+            m_info.portabilitySubset = m_portabilitySubset;
+            m_info.sampledTextures = true;
+            m_info.depthAttachment = true;
             m_queueFamilies = queueFamilies;
             m_info.graphicsQueueFamily = queueFamilies.graphicsFamily;
             m_info.presentQueueFamily = queueFamilies.presentFamily;
@@ -385,7 +502,9 @@ namespace vulkan
         }
 
         VkPhysicalDeviceFeatures deviceFeatures {};
-        const std::vector<const char*> extensions = required_device_extensions(config);
+        std::vector<const char*> extensions = required_device_extensions(config);
+        if (m_portabilitySubset)
+            append_unique_extension(extensions, "VK_KHR_portability_subset");
 
         VkDeviceCreateInfo createInfo {};
         createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -417,11 +536,23 @@ namespace vulkan
             return;
         }
 
+        rendering::ImageExtent extent;
+        if (m_surfaceProvider)
+            extent = m_surfaceProvider->drawableExtent();
+#ifndef CPP_GAME_ENGINE_MOBILE
+        else
+        {
+            int width = 0, height = 0;
+            glfwGetFramebufferSize(m_window, &width, &height);
+            extent = { static_cast<uint32_t>(std::max(width, 0)),
+                static_cast<uint32_t>(std::max(height, 0)) };
+        }
+#endif
         m_swapchain.create(
             m_physicalDevice,
             m_device,
             m_surface,
-            m_window,
+            extent,
             m_queueFamilies,
             config
         );
@@ -442,11 +573,11 @@ namespace vulkan
         try
         {
             require_vk(vkDeviceWaitIdle(m_device), "Wait before swapchain recreation");
-            destroyFrameSync();
+            m_gpu->draws.clear();
+            m_gpu->destroyTargets();
             m_swapchain.reset();
             m_info.hasSwapchain = false;
             m_info.swapchain = {};
-            createFrameSync();
             if (framebufferReady())
                 createSwapchain(m_swapchainConfig);
         }
@@ -487,6 +618,9 @@ namespace vulkan
     bool VulkanRenderer::framebufferReady() const
     {
 #ifdef CPP_GAME_ENGINE_USE_VULKAN
+        if (m_surfaceProvider)
+            return m_surfaceProvider->drawableExtent().valid();
+#ifndef CPP_GAME_ENGINE_MOBILE
         if (nullptr == m_window || glfwGetWindowAttrib(m_window, GLFW_ICONIFIED))
             return false;
 
@@ -494,6 +628,9 @@ namespace vulkan
         int height = 0;
         glfwGetFramebufferSize(m_window, &width, &height);
         return width > 0 && height > 0;
+#else
+        return false;
+#endif
 #else
         return false;
 #endif
@@ -538,6 +675,8 @@ namespace vulkan
 #endif
 
         m_window = nullptr;
+        m_surfaceProvider = nullptr;
+        m_portabilitySubset = false;
         m_instance = {};
         m_validationCallback = {};
         m_surface = {};
@@ -773,6 +912,87 @@ namespace vulkan
         (void)layout;
         (void)texture;
         throw std::runtime_error("Vulkan textured mesh draws require CPP_GAME_ENGINE_USE_VULKAN");
+#endif
+    }
+
+    void VulkanRenderer::cacheMesh(uint64_t id, const rendering::SerializedBufferView& vertices,
+        const rendering::VertexLayout& layout)
+    {
+#ifdef CPP_GAME_ENGINE_USE_VULKAN
+        if (!m_initialized || m_frameActive || !id)
+            throw std::logic_error("Mesh cache changes require an idle initialized renderer");
+        if (vertices.empty() || !vertices.data || !layout.valid() ||
+            vertices.elementStride != layout.stride ||
+            vertices.elementCount > std::numeric_limits<uint32_t>::max() ||
+            vertices.elementCount > std::numeric_limits<size_t>::max() / layout.stride ||
+            vertices.byteSize != vertices.elementCount * layout.stride)
+            throw std::invalid_argument("Cached mesh data does not match vertex layout");
+        rendering::GpuBufferDescription description;
+        description.byteSize = vertices.byteSize;
+        description.usage = rendering::GpuBufferUsage::Vertex;
+        description.memoryUsage = rendering::GpuMemoryUsage::CpuToGpu;
+        auto buffer = m_memoryManager.createVulkanBuffer(description);
+        m_memoryManager.writeBuffer(*buffer, vertices);
+        m_gpu->cachedMeshes[id] = { std::move(buffer), layout,
+            static_cast<uint32_t>(vertices.elementCount) };
+#else
+        (void)id; (void)vertices; (void)layout;
+        throw std::runtime_error("Vulkan mesh cache requires CPP_GAME_ENGINE_USE_VULKAN");
+#endif
+    }
+
+    void VulkanRenderer::cacheTexture(uint64_t id, const rendering::Texture2D& texture)
+    {
+#ifdef CPP_GAME_ENGINE_USE_VULKAN
+        if (!m_initialized || m_frameActive || !id)
+            throw std::logic_error("Texture cache changes require an idle initialized renderer");
+        if (!texture.valid()) throw std::invalid_argument("Cached texture requires RGBA8 pixels");
+        m_gpu->cachedTextures[id] = m_gpu->createSampledTexture(texture, m_memoryManager,
+            m_graphicsQueue, m_queueFamilies.graphicsFamily);
+#else
+        (void)id; (void)texture;
+        throw std::runtime_error("Vulkan texture cache requires CPP_GAME_ENGINE_USE_VULKAN");
+#endif
+    }
+
+    void VulkanRenderer::releaseMesh(uint64_t id)
+    {
+#ifdef CPP_GAME_ENGINE_USE_VULKAN
+        m_gpu->cachedMeshes.erase(id);
+#else
+        (void)id;
+#endif
+    }
+
+    void VulkanRenderer::releaseTexture(uint64_t id)
+    {
+#ifdef CPP_GAME_ENGINE_USE_VULKAN
+        m_gpu->cachedTextures.erase(id);
+#else
+        (void)id;
+#endif
+    }
+
+    void VulkanRenderer::drawCached(VulkanShaderProgram& shader, uint64_t meshId, uint64_t textureId)
+    {
+#ifdef CPP_GAME_ENGINE_USE_VULKAN
+        if (!m_initialized || !m_frameActive)
+            throw std::logic_error("Cached draws require an active render frame");
+        const auto mesh = m_gpu->cachedMeshes.find(meshId);
+        if (mesh == m_gpu->cachedMeshes.end()) throw std::out_of_range("Unknown cached mesh");
+        const GpuState::SampledTexture* texture = nullptr;
+        if (textureId)
+        {
+            const auto found = m_gpu->cachedTextures.find(textureId);
+            if (found == m_gpu->cachedTextures.end()) throw std::out_of_range("Unknown cached texture");
+            texture = found->second.get();
+        }
+        m_gpu->draw(shader, m_memoryManager, nullptr, &mesh->second.layout, nullptr,
+            m_graphicsQueue, m_queueFamilies.graphicsFamily, &mesh->second, texture);
+        ++m_renderCallCount;
+#else
+        (void)shader; (void)meshId; (void)textureId;
+        throw std::runtime_error("Vulkan cached draws require CPP_GAME_ENGINE_USE_VULKAN");
 #endif
     }
 }

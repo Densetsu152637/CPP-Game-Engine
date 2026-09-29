@@ -1,7 +1,9 @@
 // Standalone GPU smoke test; requires compiled sample shaders and a Vulkan device.
 #include "vulcan/vulkan_renderer.h"
+#include "vulcan/vulkan_frame_backend.h"
 #include "rendering/camera.h"
 #include "rendering/material.h"
+#include "rendering/render_device.h"
 
 #include <array>
 #include <atomic>
@@ -61,7 +63,8 @@ namespace
     }
 
     // Uses only public native handles; does not alter the renderer's frame state.
-    void verifyPixels(vulkan::VulkanRenderer& renderer, const std::vector<bool>& drawn)
+    void verifyPixels(vulkan::VulkanRenderer& renderer, const std::vector<bool>& drawn,
+        bool texturedMesh = false)
     {
         const auto support = vulkan::VulkanSwapchain::querySupport(renderer.physicalDevice(), renderer.surface());
         const auto& swapchain = renderer.swapchain();
@@ -192,20 +195,30 @@ namespace
             };
             const auto left = pixel(extent.width * 3 / 10, extent.height / 2);
             const auto right = pixel(extent.width * 7 / 10, extent.height / 2);
-            const auto clear = pixel(extent.width / 2, extent.height / 2);
+            const auto center = pixel(extent.width / 2, extent.height / 2);
+            const auto clear = pixel(extent.width / 10, extent.height / 10);
             std::ofstream artifact("build/vulkan-readback.ppm", std::ios::binary);
             artifact << "P6\n" << extent.width << ' ' << extent.height << "\n255\n";
             for (uint32_t y = 0; y < extent.height; ++y)
                 for (uint32_t x = 0; x < extent.width; ++x)
                     for (const auto channel : pixel(x, y)) artifact.put(static_cast<char>(channel));
             vkUnmapMemory(device, buffer->memory());
-            if (!(left[0] > 200 && left[1] < 180 && left[2] < 150 &&
-                right[0] < 150 && right[1] > 160 && right[2] > 200 &&
-                clear[0] < 100 && clear[1] < 100 && clear[2] < 120))
-                throw std::runtime_error("GPU pixels do not contain independent orange/cyan triangles on clear background");
-            std::cout << "GPU pixel verification passed on image " << index << ": left RGB "
-                << left[0] << ',' << left[1] << ',' << left[2] << "; right RGB "
-                << right[0] << ',' << right[1] << ',' << right[2] << "; clear RGB "
+            const bool expected = texturedMesh
+                ? (center[0] < 100 && center[1] > 140 && center[2] > 200 &&
+                    clear[0] < 100 && clear[1] < 100 && clear[2] < 120)
+                : (left[0] > 200 && left[1] < 180 && left[2] < 150 &&
+                    right[0] < 150 && right[1] > 160 && right[2] > 200 &&
+                    center[0] < 100 && center[1] < 100 && center[2] < 120);
+            if (!expected)
+                throw std::runtime_error(texturedMesh
+                    ? "GPU pixels do not contain the textured mesh on a clear background"
+                    : "GPU pixels do not contain independent orange/cyan triangles on clear background");
+            std::cout << "GPU pixel verification passed on image " << index
+                << (texturedMesh ? " (RenderDevice)" : " (direct renderer)")
+                << ": left RGB " << left[0] << ',' << left[1] << ',' << left[2]
+                << "; right RGB " << right[0] << ',' << right[1] << ',' << right[2]
+                << "; center RGB " << center[0] << ',' << center[1] << ',' << center[2]
+                << "; clear RGB "
                 << clear[0] << ',' << clear[1] << ',' << clear[2] << '\n';
             return;
         }
@@ -351,6 +364,64 @@ namespace
                 glfwWaitEventsTimeout(0.1);
         }
     }
+
+    void runDeviceBackend(GLFWwindow* window, const std::filesystem::path& directory,
+        const vulkan::VulkanRendererConfig& config)
+    {
+        vulkan::VulkanGlfwSurfaceProvider surface(window);
+        bool verifiedPixels = false;
+        auto probe = [&](vulkan::VulkanRenderer& renderer, uint32_t imageIndex)
+        {
+            if (verifiedPixels) return;
+            std::vector<bool> drawn(renderer.swapchain().images().size(), false);
+            drawn.at(imageIndex) = true;
+            verifyPixels(renderer, drawn, true);
+            verifiedPixels = true;
+        };
+        rendering::RenderDevice device(std::make_unique<vulkan::VulkanFrameBackend>(surface, config, probe));
+        const auto capabilities = device.capabilities();
+        if (capabilities.backendName != "vulkan" || capabilities.parallelRecording ||
+            !capabilities.sampledTextures || !capabilities.depthAttachment)
+            throw std::runtime_error("Vulkan frame backend reported incorrect capabilities");
+
+        auto shaderSource = makeMeshShader(directory);
+        auto shader = device.createShader(shaderSource);
+        const std::array<std::array<float, 5>, 3> vertices {{
+            {{0.0f, -0.6f, 0.0f, 0.5f, 1.0f}},
+            {{0.6f, 0.6f, 0.0f, 1.0f, 0.0f}},
+            {{-0.6f, 0.6f, 0.0f, 0.0f, 0.0f}}
+        }};
+        const rendering::VertexLayout layout { sizeof(float) * 5,
+            {{0, rendering::VertexAttributeFormat::Float3, 0},
+             {1, rendering::VertexAttributeFormat::Float2, sizeof(float) * 3}} };
+        auto mesh = device.createMesh(rendering::serialized_buffer_view(vertices.data(), vertices.size()), layout);
+        auto texture = device.createTexture({1, 1, {26, 179, 255, 255}});
+        const rendering::CameraUniform camera;
+        const rendering::MaterialUniform material;
+        std::array<float, 16> transform { 0.5f,0,0,0, 0,0.5f,0,0, 0,0,1,0, 0,0,0,1 };
+        for (unsigned frameIndex = 0; frameIndex < 4; ++frameIndex)
+        {
+            auto frame = device.makeFrame();
+            rendering::DrawCommand draw {shader, mesh, texture};
+            rendering::appendUniform(draw, "transform", transform, {0,0});
+            rendering::appendUniform(draw, "material", material, {0,1});
+            rendering::appendUniform(draw, "camera", camera, {0,2});
+            frame->record(std::move(draw));
+            device.wait(device.submit(frame));
+            if (frameIndex == 1)
+            {
+                glfwSetWindowSize(window, 360, 220);
+                glfwPollEvents();
+            }
+            transform[12] += 0.1f;
+        }
+        device.destroy(texture);
+        device.destroy(mesh);
+        device.destroy(shader);
+        device.shutdown();
+        if (!verifiedPixels) throw std::runtime_error("Vulkan frame backend pixel check did not run");
+        std::cout << "Vulkan frame backend passed: persistent resources, queued frames, and release\n";
+    }
 }
 #endif
 
@@ -387,6 +458,7 @@ int main(int argc, char** argv)
             renderer.shutdown();
             renderer.shutdown();
         }
+        runDeviceBackend(window, directory, config);
         glfwDestroyWindow(window);
         glfwTerminate();
         if (validationErrors != 0) throw std::runtime_error("Vulkan validation errors were reported");

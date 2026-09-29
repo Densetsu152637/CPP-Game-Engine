@@ -90,6 +90,14 @@ namespace vulkan
         std::vector<VkSemaphore> rendered;
         std::map<std::string, std::unique_ptr<Pipeline>> pipelines;
         std::vector<std::unique_ptr<Draw>> draws;
+        struct CachedMesh
+        {
+            std::unique_ptr<VulkanBuffer> buffer;
+            rendering::VertexLayout layout;
+            uint32_t vertexCount = 0;
+        };
+        std::map<uint64_t, CachedMesh> cachedMeshes;
+        std::map<uint64_t, std::unique_ptr<SampledTexture>> cachedTextures;
         bool suboptimal = false;
 
         ~GpuState()
@@ -97,6 +105,8 @@ namespace vulkan
             // Owner waits for the device before destroying or rebuilding this state.
             if (commands) vkDestroyCommandPool(device, commands, nullptr);
             draws.clear();
+            cachedMeshes.clear();
+            cachedTextures.clear();
             destroyTargets();
             if (completed) vkDestroyFence(device, completed, nullptr);
         }
@@ -562,9 +572,13 @@ namespace vulkan
             const rendering::VertexLayout* vertexLayout = nullptr,
             const rendering::Texture2D* texture = nullptr,
             VkQueue graphicsQueue = VK_NULL_HANDLE,
-            uint32_t graphicsQueueFamily = 0)
+            uint32_t graphicsQueueFamily = 0,
+            const CachedMesh* cachedMesh = nullptr,
+            const SampledTexture* cachedTexture = nullptr)
         {
-            if ((vertices == nullptr) != (vertexLayout == nullptr))
+            const bool hasVertices = vertices || cachedMesh;
+            const bool textured = texture || cachedTexture;
+            if (hasVertices != (vertexLayout != nullptr) || (vertices && cachedMesh) || (texture && cachedTexture))
                 throw std::invalid_argument("Vulkan mesh data and vertex layout must be provided together");
             if (vertices && (vertices->empty() || !vertexLayout->valid() ||
                 vertices->elementStride != vertexLayout->stride ||
@@ -572,7 +586,7 @@ namespace vulkan
                 vertices->elementCount > std::numeric_limits<size_t>::max() / vertexLayout->stride ||
                 vertices->byteSize != vertices->elementCount * vertexLayout->stride))
                 throw std::invalid_argument("Vulkan mesh data does not match its explicit vertex layout");
-            if (texture && !vertices)
+            if (textured && !hasVertices)
                 throw std::invalid_argument("Textured Vulkan draws require vertex-buffer mesh data");
             if (vertexLayout && (vertexLayout->stride > limits.maxVertexInputBindingStride ||
                 vertexLayout->attributes.size() > limits.maxVertexInputAttributes))
@@ -583,7 +597,7 @@ namespace vulkan
                         attribute.offset > limits.maxVertexInputAttributeOffset)
                         throw std::invalid_argument("Vulkan mesh attribute exceeds device vertex input limits");
             auto uniforms = uniformLayout(shader);
-            auto& program = pipeline(shader, uniforms, vertexLayout, texture != nullptr);
+            auto& program = pipeline(shader, uniforms, vertexLayout, textured);
             auto draw = std::make_unique<Draw>(device);
             if (texture)
                 draw->textures.push_back(createSampledTexture(*texture, memory, graphicsQueue, graphicsQueueFamily));
@@ -593,7 +607,7 @@ namespace vulkan
                 std::vector<VkDescriptorPoolSize> sizes;
                 if (!uniforms.empty())
                     sizes.push_back({ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, static_cast<uint32_t>(uniforms.size()) });
-                if (texture)
+                if (textured)
                     sizes.push_back({ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1 });
                 VkDescriptorPoolCreateInfo pool { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
                 pool.maxSets = static_cast<uint32_t>(sets.size());
@@ -618,10 +632,11 @@ namespace vulkan
                     vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
                     draw->buffers.push_back(std::move(buffer));
                 }
-                if (texture)
+                if (textured)
                 {
-                    VkDescriptorImageInfo imageInfo { draw->textures.back()->sampler,
-                        draw->textures.back()->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+                    const SampledTexture* boundTexture = cachedTexture ? cachedTexture : draw->textures.back().get();
+                    VkDescriptorImageInfo imageInfo { boundTexture->sampler,
+                        boundTexture->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
                     VkWriteDescriptorSet write { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
                     write.dstSet = sets[0];
                     write.dstBinding = 3;
@@ -647,12 +662,14 @@ namespace vulkan
             if (!sets.empty())
                 vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_GRAPHICS, program.layout, 0,
                     static_cast<uint32_t>(sets.size()), sets.data(), 0, nullptr);
-            if (vertices)
+            if (hasVertices)
             {
-                const VkBuffer buffer = draws.back()->buffers.back()->handle();
+                const VkBuffer buffer = cachedMesh ? cachedMesh->buffer->handle() :
+                    draws.back()->buffers.back()->handle();
                 const VkDeviceSize offset = 0;
                 vkCmdBindVertexBuffers(command, 0, 1, &buffer, &offset);
-                vkCmdDraw(command, static_cast<uint32_t>(vertices->elementCount), 1, 0, 0);
+                vkCmdDraw(command, cachedMesh ? cachedMesh->vertexCount :
+                    static_cast<uint32_t>(vertices->elementCount), 1, 0, 0);
             }
             else vkCmdDraw(command, 3, 1, 0, 0);
         }
