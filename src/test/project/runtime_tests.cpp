@@ -106,7 +106,10 @@ namespace
             output << "assert(engine.register_component('Shape', {value='" << type << "'}))\n"
                 << "return {on_create=function() assert(self.set_component('Shape', {value=" << value << "})) end,\n"
                 << "systems={{name='shape', all={'Shape'}, reads={'Shape'}, writes={},\n"
-                << "update=function() engine.log('" << label << "') end}}}\n";
+                << "update=function() engine.log('" << label << "') end},\n"
+                << "{name='position', all={'Position3D'}, reads={'Position3D'}, writes={},\n"
+                << "update=function(entity) if engine.get_position(entity) then engine.log('position-"
+                << label << "') end end}}}\n";
             output.close();
             test::require(output.good(), "restart fixture should write its project-local script");
         };
@@ -122,6 +125,8 @@ namespace
             "first schema version and system should run");
         test::require(std::count(logs.begin(), logs.end(), "old-system") == 1,
             "first system should execute exactly once");
+        test::require(std::count(logs.begin(), logs.end(), "position-old-system") == 1,
+            "a Position3D query should visit the authored native component");
         test::require(runtime.stop().has_value() && runtime.liveEntityCount() == 0 &&
             runtime.activeScriptCount() == 0, "stop should release scripts and component rows");
         writeScript("string", "'ready'", "new-system");
@@ -130,7 +135,9 @@ namespace
             "changed schema should load after restart: " + secondStart.error().front().message);
         test::require(runtime.tick().has_value(), "restarted system should tick");
         test::require(std::count(logs.begin(), logs.end(), "old-system") == 1 &&
-            std::count(logs.begin(), logs.end(), "new-system") == 1,
+            std::count(logs.begin(), logs.end(), "new-system") == 1 &&
+            std::count(logs.begin(), logs.end(), "position-old-system") == 1 &&
+            std::count(logs.begin(), logs.end(), "position-new-system") == 1,
             "restart must not retain the retired system or duplicate the new callback");
         test::require(runtime.stop().has_value(), "restarted runtime should stop cleanly");
     }
@@ -253,6 +260,62 @@ namespace
             "syntax validation failure must happen before temporary ECS instantiation");
     }
 
+    void invalidDeclarationsFailBeforeWorldCreation()
+    {
+        const auto fixture = std::filesystem::current_path() / "build" /
+            ("runtime-declaration-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directories(fixture);
+        const auto source = fixture / "player.lua";
+        const auto firstSource = fixture / "first.lua";
+        struct Cleanup
+        {
+            std::filesystem::path file, firstFile, directory;
+            ~Cleanup() { std::error_code ignored; std::filesystem::remove(file, ignored);
+                std::filesystem::remove(firstFile, ignored);
+                std::filesystem::remove(directory, ignored); }
+        } cleanup{source, firstSource, fixture};
+        { std::ofstream output(firstSource, std::ios::binary);
+            output << "return {on_create=function() engine.log('first-created') end}\n";
+            output.close(); test::require(output.good(), "first declaration fixture should be writable"); }
+        const auto write = [&](std::string_view reads)
+        {
+            std::ofstream output(source, std::ios::binary | std::ios::trunc);
+            output << "assert(engine.register_component('Bad', {value='number'}))\n"
+                << "return {on_create=function() engine.log('created') end,\n"
+                << "systems={{name='bad', all={'Bad'}, reads=" << reads
+                << ", writes={}, update=function() end}}}\n";
+            output.close();
+            test::require(output.good(), "declaration fixture should be writable");
+        };
+        write("{}");
+        auto authored = sample();
+        authored.root = std::filesystem::canonical(fixture);
+        authored.assets.at("asset:player-script").path = "first.lua";
+        authored.assets.emplace("asset:second-script", project::Asset{
+            "asset:second-script", "player.lua", "script"});
+        auto second = authored.scene.entities.front();
+        second.id = "entity:second";
+        second.name = "Second Script";
+        second.script->asset = "asset:second-script";
+        authored.scene.entities.push_back(std::move(second));
+        std::vector<std::string> logs;
+        project::RuntimeOptions options;
+        options.log = [&](std::string_view message) { logs.emplace_back(message); };
+        project::Runtime runtime(std::move(authored), std::move(options));
+        const auto invalid = runtime.start();
+        test::require(!invalid && invalid.error().front().code == "runtime.script.declaration" &&
+            runtime.liveEntityCount() == 0 && logs.empty(),
+            "malformed declarations must fail before entities or on_create callbacks run");
+        write("{'Bad'}");
+        test::require(runtime.start().has_value() && runtime.tick().has_value(),
+            "a corrected declaration should start after preflight rejection");
+        test::require(std::count(logs.begin(), logs.end(), "created") == 1,
+            "successful start should invoke on_create once");
+        test::require(std::count(logs.begin(), logs.end(), "first-created") == 1,
+            "valid earlier script should first receive on_create after all declarations pass");
+        test::require(runtime.stop().has_value(), "corrected declaration runtime should stop");
+    }
+
     void onCreateFailureCleansScriptAndSpawnedEntities()
     {
         auto project = sample();
@@ -317,6 +380,7 @@ int main()
         teardownFailureKeepsOldScriptAndCleansCandidate();
         invalidScriptFailsBeforeRuntimeBecomesActive();
         invalidLuaFailsDuringSetupAndCleansScene();
+        invalidDeclarationsFailBeforeWorldCreation();
         onCreateFailureCleansScriptAndSpawnedEntities();
         mutationIsOwnerThreadBound();
         std::cout << "[PASS] authored project runtime tests\n";

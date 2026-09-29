@@ -403,3 +403,154 @@ void test_lua_system_access_order_and_schema_ownership()
         !ecs.getDynamicComponent(owner, "ReplacementOnly"),
         "discarding a prepared replacement should clear its candidate-only schema and rows");
 }
+
+void test_lua_position_access_declarations()
+{
+    const auto exercise = [](std::string_view callback, std::string_view reads,
+        std::string_view writes, const bool allowed, int expectedReads, int expectedWrites)
+    {
+        int readCalls = 0, writeCalls = 0;
+        EngineScriptApi api;
+        api.query_components = [](const std::vector<std::string>&)
+        { return std::vector<std::int64_t>{1}; };
+        api.get_position = [&](std::int64_t)
+        { ++readCalls; return std::optional<std::array<float, 3>>{{1.0f, 2.0f, 3.0f}}; };
+        api.set_position = [&](std::int64_t, float, float, float)
+        { ++writeCalls; return true; };
+        LuaScriptSystem scripts(std::move(api));
+        const std::string source = "return {systems={{name='position', all={'Health'}, reads=" +
+            std::string(reads) + ", writes=" + std::string(writes) +
+            ", update=function(entity) " + std::string(callback) + " end}}}";
+        const auto loaded = scripts.load_string(source, LuaScriptContext{.owner = 1}, "position_access");
+        test::require(loaded.has_value(), "position access test system should parse");
+        const auto result = scripts.update(0.01f);
+        test::require(result.has_value() == allowed, "position APIs should enforce declared system access");
+        test::require(readCalls == expectedReads && writeCalls == expectedWrites,
+            "rejected position access should not call the native host");
+    };
+    exercise("engine.get_position(entity)", "{'Health'}", "{}", false, 0, 0);
+    exercise("engine.set_position(entity, 1, 2, 3)", "{'Health'}", "{}", false, 0, 0);
+    exercise("self.get_position()", "{'Health'}", "{}", false, 0, 0);
+    exercise("self.set_position(1, 2, 3)", "{'Health'}", "{}", false, 0, 0);
+    exercise("engine.get_position(entity); self.get_position(); "
+        "engine.set_position(entity, 1, 2, 3); self.set_position(1, 2, 3)",
+        "{'Health', 'Position3D'}", "{'Position3D'}", true, 2, 2);
+
+    EngineScriptApi api;
+    api.query_components = [](const std::vector<std::string>&)
+    { return std::vector<std::int64_t>{1}; };
+    LuaScriptSystem scripts(std::move(api));
+    const auto writer = scripts.load_string(R"lua(return {systems={{name='writer',
+        all={'Health'}, reads={'Health'}, writes={'Position3D'},
+        update=function() end}}})lua", "position_writer");
+    const auto reader = scripts.load_string(R"lua(return {systems={{name='reader',
+        all={'Health'}, reads={'Health','Position3D'}, writes={},
+        update=function() end}}})lua", "position_reader");
+    test::require(writer && !reader && reader.error().find("conflicting") != std::string::npos,
+        "unordered same-phase Position3D read/write conflict must be rejected");
+}
+
+void test_lua_project_declaration_preflight()
+{
+    using Sources = std::vector<std::pair<std::string, std::string>>;
+    const auto valid = LuaScriptSystem::validate_declarations(Sources{{R"lua(
+        assert(engine.register_component('Health', {hp='number'}))
+        return {on_create=function() error('must not execute during validation') end,
+            systems={{name='heal', all={'Health'}, reads={'Health','Position3D'},
+                writes={'Health'}, phase=1, order=2, update=function() end}}}
+    )lua", "@valid.lua"}}, std::filesystem::current_path());
+    test::require(valid.has_value(), "declaration preflight should inspect valid systems without running on_create");
+    const auto badAccess = LuaScriptSystem::validate_declarations(Sources{{R"lua(
+        assert(engine.register_component('Health', {hp='number'}))
+        return {systems={{name='bad', all={'Health'}, reads={}, writes={}, update=function() end}}}
+    )lua", "@bad-access.lua"}}, std::filesystem::current_path());
+    test::require(!badAccess && badAccess.error().starts_with("@bad-access.lua: "),
+        "invalid system access should report its source path");
+    const auto badPhase = LuaScriptSystem::validate_declarations(Sources{{R"lua(
+        assert(engine.register_component('Health', {hp='number'}))
+        return {systems={{name='bad', all={'Health'}, reads={'Health'}, writes={},
+            phase='late', update=function() end}}}
+    )lua", "@bad-phase.lua"}}, std::filesystem::current_path());
+    test::require(!badPhase && badPhase.error().find("phase") != std::string::npos,
+        "noninteger system phases should fail declaration preflight");
+    const auto conflict = LuaScriptSystem::validate_declarations(Sources{
+        {R"lua(assert(engine.register_component('Health', {hp='number'}))
+            return {systems={{name='first', all={'Health'}, reads={}, writes={'Health'},
+                update=function() end}}})lua", "@first.lua"},
+        {R"lua(return {systems={{name='second', all={'Health'}, reads={'Health'}, writes={},
+            update=function() end}}})lua", "@second.lua"}}, std::filesystem::current_path());
+    test::require(!conflict && conflict.error().starts_with("@second.lua: "),
+        "cross-script same-phase conflicts should identify the second declaration");
+    const auto blockedIo = LuaScriptSystem::validate_declarations(Sources{{
+        "os.execute('echo forbidden'); return {}", "@unsafe.lua"}}, std::filesystem::current_path());
+    test::require(!blockedIo, "declaration preflight should not expose host OS APIs");
+    const auto allowedLog = LuaScriptSystem::validate_declarations(Sources{{
+        "print('print log'); io.write('io log\\n'); io.stdout:write('stream log\\n'); return {}",
+        "@logging.lua"}}, std::filesystem::current_path());
+    test::require(allowedLog.has_value(), "top-level log calls should validate without writing output");
+    const auto blockedFile = LuaScriptSystem::validate_declarations(Sources{{
+        "io.open('outside.txt', 'w'); return {}", "@file-io.lua"}}, std::filesystem::current_path());
+    test::require(!blockedFile, "preflight must not expose file I/O while accepting log calls");
+    const std::string paritySource = R"lua(
+        assert(os == nil and io.open == nil and package == nil and debug == nil and load == nil)
+        print('print log')
+        io.write('io log\n')
+        io.stdout:write('stream log\n')
+        return {}
+    )lua";
+    const auto root = std::filesystem::current_path();
+    const std::string rootChunk = "@" + (root / "safe-root.lua").string();
+    test::require(LuaScriptSystem::validate_declarations(Sources{{paritySource, rootChunk}}, root).has_value(),
+        "preflight should accept safe top-level branches and silent logging");
+    std::vector<std::string> runtimeLogs;
+    EngineScriptApi safeHost;
+    safeHost.module_root = root;
+    safeHost.log = [&](std::string_view message) { runtimeLogs.emplace_back(message); };
+    safeHost.redirect_standard_output = true;
+    LuaScriptSystem safeRuntime(std::move(safeHost));
+    test::require(safeRuntime.load_string(paritySource, rootChunk).has_value() &&
+        runtimeLogs.size() == 3 && runtimeLogs[0] == "print log" &&
+        runtimeLogs[1].starts_with("io log") && runtimeLogs[2].starts_with("stream log"),
+        "runtime should take the same restricted branch and route safe log writes");
+    test::require(!safeRuntime.load_string("io.open('outside.txt', 'w'); return {}", rootChunk),
+        "runtime root scripts must reject file I/O just like preflight");
+    const auto bounded = LuaScriptSystem::validate_declarations(Sources{{
+        "while true do end; return {}", "@loop.lua"}}, std::filesystem::current_path());
+    test::require(!bounded && bounded.error().find("instruction limit") != std::string::npos,
+        "declaration preflight should bound top-level execution");
+
+    const auto directory = std::filesystem::current_path() / "build" / "declaration-module-fixture";
+    const auto scriptDirectory = directory / "scripts";
+    const auto sharedDirectory = directory / "shared";
+    std::filesystem::create_directories(scriptDirectory);
+    std::filesystem::create_directories(sharedDirectory);
+    const auto module = sharedDirectory / "helper.lua";
+    struct Cleanup
+    {
+        std::filesystem::path file, shared, scripts, directory;
+        ~Cleanup() { std::error_code ignored; std::filesystem::remove(file, ignored);
+            std::filesystem::remove(shared, ignored); std::filesystem::remove(scripts, ignored);
+            std::filesystem::remove(directory, ignored); }
+    } cleanup{module, sharedDirectory, scriptDirectory, directory};
+    { std::ofstream output(module, std::ios::binary | std::ios::trunc);
+        output << "assert(os == nil); return { system_name='from-module' }\n";
+        output.close(); test::require(output.good(), "local module fixture should be writable"); }
+    const std::string source = R"lua(
+        local helper = require('shared.helper')
+        assert(engine.register_component('Health', {hp='number'}))
+        return {systems={{name=helper.system_name, all={'Health'}, reads={'Health'},
+            writes={}, update=function() end}}}
+    )lua";
+    const auto scriptName = "@" + (scriptDirectory / "main.lua").string();
+    const auto localModule = LuaScriptSystem::validate_declarations(Sources{{source, scriptName}}, directory);
+    test::require(localModule.has_value(), "preflight should allow a sibling module inside the project root");
+    EngineScriptApi runtimeApi;
+    runtimeApi.module_root = directory;
+    runtimeApi.register_component = [](std::string_view, const std::vector<LuaComponentField>&) { return true; };
+    LuaScriptSystem runtimeScripts(std::move(runtimeApi));
+    test::require(runtimeScripts.load_string(source, scriptName).has_value(),
+        "runtime and preflight should load the same project-local module source");
+    const auto traversal = LuaScriptSystem::validate_declarations(Sources{{
+        "require('..escape'); return {}", scriptName}}, directory);
+    test::require(!traversal, "project module resolver must reject traversal-like module names");
+}

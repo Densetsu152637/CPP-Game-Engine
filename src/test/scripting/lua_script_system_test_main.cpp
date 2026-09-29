@@ -10,6 +10,8 @@ void test_lua_script_system_rejects_reentrant_lifecycle_changes();
 void test_lua_script_system_guards_lua_close_finalizers();
 void test_lua_dynamic_components_and_systems();
 void test_lua_system_access_order_and_schema_ownership();
+void test_lua_position_access_declarations();
+void test_lua_project_declaration_preflight();
 
 int main()
 {
@@ -24,6 +26,8 @@ int main()
         test_lua_script_system_guards_lua_close_finalizers();
         test_lua_dynamic_components_and_systems();
         test_lua_system_access_order_and_schema_ownership();
+        test_lua_position_access_declarations();
+        test_lua_project_declaration_preflight();
     }
     catch (const std::exception& error)
     {

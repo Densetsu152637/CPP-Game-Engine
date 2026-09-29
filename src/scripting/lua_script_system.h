@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <expected>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -45,6 +46,8 @@ struct EngineScriptApi
     std::function<std::vector<std::int64_t>(const std::vector<std::string>&)> query_components;
     // Project CLI mode routes ordinary Lua output away from machine-readable stdout.
     bool redirect_standard_output = false;
+    // When set, require resolves only modules within this project root.
+    std::filesystem::path module_root;
 };
 
 // Per-instance capabilities supplied to an entity-owned script. The owner is
@@ -75,6 +78,10 @@ public:
     LoadResult load_file(const std::string& path, LuaScriptContext context);
     // Parse/compile source without executing its chunk or lifecycle callbacks.
     Result validate_string(std::string_view source, std::string_view chunk_name = "script");
+    // Validate top-level schemas and system declarations in a restricted Lua
+    // state without constructing entities or invoking lifecycle callbacks.
+    static Result validate_declarations(const std::vector<std::pair<std::string, std::string>>& scripts,
+        const std::filesystem::path& project_root);
     LoadResult load_string(std::string_view source, std::string_view chunk_name = "script");
     LoadResult load_string(std::string_view source, LuaScriptContext context, std::string_view chunk_name = "script");
     Result update(float delta_seconds);

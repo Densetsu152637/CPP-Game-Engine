@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <cstdlib>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <limits>
 #include <map>
@@ -34,10 +36,16 @@ struct LuaScriptSystem::Impl
         LuaScriptContext context;
         std::vector<System> systems;
         std::vector<std::string> registrations;
+        std::filesystem::path module_directory;
     };
 
-    lua_State* state = luaL_newstate();
+    lua_State* state = nullptr;
     EngineScriptApi api;
+    bool declaration_validation = false;
+    size_t validation_bytes = 0;
+    int validation_hook_ticks = 0;
+    std::filesystem::path module_root, module_directory;
+    std::map<std::string, int> project_modules;
     // Preserve load order for predictable update and teardown behavior.
     std::map<std::uint64_t, Script> scripts;
     std::uint64_t next_id = 1;
@@ -45,6 +53,17 @@ struct LuaScriptSystem::Impl
     bool closed = false;
     const LuaScriptContext* active_context = nullptr;
     const System* active_system = nullptr;
+    bool allows_read(const std::string_view component) const
+    {
+        if (!active_system) return true;
+        return std::find(active_system->reads.begin(), active_system->reads.end(), component) != active_system->reads.end() ||
+            std::find(active_system->writes.begin(), active_system->writes.end(), component) != active_system->writes.end();
+    }
+    bool allows_write(const std::string_view component) const
+    {
+        return !active_system ||
+            std::find(active_system->writes.begin(), active_system->writes.end(), component) != active_system->writes.end();
+    }
     struct Registration { std::string name; bool created; };
     std::vector<Registration>* loading_registrations = nullptr;
     std::map<std::string, size_t> schema_owners;
@@ -63,11 +82,52 @@ struct LuaScriptSystem::Impl
         return lua_pcall(state, argument_count, result_count, 0);
     }
 
-    explicit Impl(EngineScriptApi services) : api(std::move(services))
+    static void* limited_allocator(void* context, void* pointer, size_t oldSize, size_t newSize)
     {
+        auto& owner = *static_cast<Impl*>(context);
+        if (!pointer) oldSize = 0;
+        if (newSize == 0)
+        {
+            std::free(pointer);
+            owner.validation_bytes -= oldSize;
+            return nullptr;
+        }
+        constexpr size_t limit = 16 * 1024 * 1024;
+        if (newSize > oldSize && newSize - oldSize > limit - owner.validation_bytes) return nullptr;
+        void* result = std::realloc(pointer, newSize);
+        if (result) owner.validation_bytes = owner.validation_bytes - oldSize + newSize;
+        return result;
+    }
+
+    static void validation_hook(lua_State* lua, lua_Debug*)
+    {
+        auto* owner = *static_cast<Impl**>(lua_getextraspace(lua));
+        if (++owner->validation_hook_ticks > 200)
+            luaL_error(lua, "declaration validation instruction limit exceeded");
+    }
+
+    explicit Impl(EngineScriptApi services, const bool validateDeclarations = false)
+        : api(std::move(services)), declaration_validation(validateDeclarations)
+    {
+        if (!api.module_root.empty()) module_root = std::filesystem::weakly_canonical(api.module_root);
+        state = declaration_validation ? lua_newstate(limited_allocator, this) : luaL_newstate();
         if (state)
         {
             luaL_openlibs(state);
+            *static_cast<Impl**>(lua_getextraspace(state)) = this;
+            if (declaration_validation)
+            {
+                for (const char* name : {"io", "os", "package", "debug", "require", "dofile",
+                    "loadfile", "load", "collectgarbage", "print"})
+                { lua_pushnil(state); lua_setglobal(state, name); }
+                lua_sethook(state, validation_hook, LUA_MASKCOUNT, 1000);
+            }
+            if (declaration_validation || !module_root.empty())
+            {
+                lua_pushlightuserdata(state, this);
+                lua_pushcclosure(state, validation_require, 1);
+                lua_setglobal(state, "require");
+            }
             if (api.redirect_standard_output)
             {
                 lua_pushlightuserdata(state, this);
@@ -92,6 +152,152 @@ struct LuaScriptSystem::Impl
     static Impl* from_upvalue(lua_State* lua)
     {
         return static_cast<Impl*>(lua_touserdata(lua, lua_upvalueindex(1)));
+    }
+
+    static int silent_validation_log(lua_State*) { return 0; }
+
+    static int project_io_write(lua_State* lua)
+    {
+        return invoke(lua, [&]
+        {
+            auto* self = from_upvalue(lua);
+            std::array<char, 4096> output{};
+            size_t used = 0;
+            const int first = lua_istable(lua, 1) ? 2 : 1;
+            for (int index = first; index <= lua_gettop(lua); ++index)
+            {
+                size_t length = 0;
+                const char* value = luaL_tolstring(lua, index, &length);
+                while (length != 0)
+                {
+                    const size_t count = std::min(length, output.size() - used);
+                    std::memcpy(output.data() + used, value, count);
+                    used += count;
+                    value += count;
+                    length -= count;
+                    if (used == output.size())
+                    {
+                        if (self->api.log) self->api.log(std::string_view(output.data(), used));
+                        used = 0;
+                    }
+                }
+                lua_pop(lua, 1);
+            }
+            if (used != 0 && self->api.log) self->api.log(std::string_view(output.data(), used));
+            return 0;
+        });
+    }
+
+    void push_root_safe_globals()
+    {
+        lua_newtable(state);
+        for (const char* name : {"assert", "error", "ipairs", "pairs", "next", "pcall", "xpcall",
+            "select", "tonumber", "tostring", "type", "rawequal", "rawget", "rawset",
+            "rawlen", "setmetatable", "getmetatable", "math", "string", "table", "utf8",
+            "require", "_VERSION"})
+        {
+            lua_getglobal(state, name);
+            lua_setfield(state, -2, name);
+        }
+        if (declaration_validation) lua_pushcfunction(state, silent_validation_log);
+        else { lua_pushlightuserdata(state, this); lua_pushcclosure(state, print_to_log, 1); }
+        lua_setfield(state, -2, "print");
+        lua_newtable(state);
+        if (declaration_validation) lua_pushcfunction(state, silent_validation_log);
+        else { lua_pushlightuserdata(state, this); lua_pushcclosure(state, project_io_write, 1); }
+        lua_setfield(state, -2, "write");
+        for (const char* stream : {"stdout", "stderr"})
+        {
+            lua_newtable(state);
+            if (declaration_validation) lua_pushcfunction(state, silent_validation_log);
+            else { lua_pushlightuserdata(state, this); lua_pushcclosure(state, project_io_write, 1); }
+            lua_setfield(state, -2, "write");
+            lua_setfield(state, -2, stream);
+        }
+        lua_setfield(state, -2, "io");
+        lua_pushvalue(state, -1);
+        lua_setfield(state, -2, "_G");
+    }
+
+    static int validation_require(lua_State* lua)
+    {
+        return invoke(lua, [&]
+        {
+            auto* self = from_upvalue(lua);
+            if (lua_type(lua, 1) != LUA_TSTRING)
+                throw std::runtime_error("require expects a module name string");
+            size_t length = 0;
+            const char* rawName = lua_tolstring(lua, 1, &length);
+            std::string module(rawName, length);
+            if (module.empty() || module.find("..") != std::string::npos ||
+                module.front() == '.' || module.back() == '.' ||
+                module.find_first_of("/\\:") != std::string::npos)
+                throw std::runtime_error("module path is invalid");
+            std::replace(module.begin(), module.end(), '.', '/');
+            auto withinRoot = [&](const std::filesystem::path& path)
+            {
+                const auto relative = path.lexically_relative(self->module_root);
+                return !relative.empty() && !relative.is_absolute() && *relative.begin() != "..";
+            };
+            std::filesystem::path resolved;
+            for (const auto& candidate : {self->module_directory / (module + ".lua"),
+                self->module_directory / module / "init.lua",
+                self->module_root / (module + ".lua"), self->module_root / module / "init.lua"})
+            {
+                std::error_code error;
+                const auto canonical = std::filesystem::canonical(candidate, error);
+                if (!error && withinRoot(canonical) && std::filesystem::is_regular_file(canonical))
+                { resolved = canonical; break; }
+            }
+            if (resolved.empty()) throw std::runtime_error("module is missing or outside the project root: " + module);
+            const std::string key = resolved.generic_string();
+            if (const auto found = self->project_modules.find(key); found != self->project_modules.end())
+            {
+                lua_rawgeti(lua, LUA_REGISTRYINDEX, found->second);
+                return 1;
+            }
+            std::ifstream file(resolved, std::ios::binary);
+            if (!file) throw std::runtime_error("unable to open module: " + key);
+            const std::string source((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            if (file.bad()) throw std::runtime_error("unable to read module: " + key);
+            if (source.size() > 1024 * 1024) throw std::runtime_error("module exceeds the 1 MiB source limit: " + key);
+            if (luaL_loadbuffer(lua, source.data(), source.size(), ("@" + key).c_str()) != LUA_OK)
+                throw std::runtime_error(self->pop_error());
+            // Give modules the same restricted globals in preflight and at
+            // runtime, so validation cannot resolve a different module path
+            // or take an OS-dependent branch before gameplay begins.
+            lua_newtable(lua);
+            for (const char* name : {"assert", "error", "ipairs", "pairs", "next", "pcall", "xpcall",
+                "select", "tonumber", "tostring", "type", "rawequal", "rawget", "rawset",
+                "rawlen", "setmetatable", "getmetatable", "math", "string", "table", "utf8",
+                "coroutine", "require"})
+            {
+                lua_getglobal(lua, name);
+                lua_setfield(lua, -2, name);
+            }
+            lua_pushvalue(lua, -1);
+            lua_setfield(lua, -2, "_G");
+            lua_setupvalue(lua, -2, 1);
+            const auto previousDirectory = self->module_directory;
+            self->module_directory = resolved.parent_path();
+            const auto previousHook = lua_gethook(lua);
+            const int previousMask = lua_gethookmask(lua);
+            const int previousCount = lua_gethookcount(lua);
+            if (!self->declaration_validation && !previousHook)
+            {
+                self->validation_hook_ticks = 0;
+                lua_sethook(lua, validation_hook, LUA_MASKCOUNT, 1000);
+            }
+            const int status = self->protected_call(0, 1);
+            if (!self->declaration_validation && !previousHook)
+                lua_sethook(lua, previousHook, previousMask, previousCount);
+            self->module_directory = previousDirectory;
+            if (status != LUA_OK) throw std::runtime_error(self->pop_error());
+            if (lua_isnil(lua, -1)) { lua_pop(lua, 1); lua_pushboolean(lua, true); }
+            lua_pushvalue(lua, -1);
+            self->project_modules.emplace(key, luaL_ref(lua, LUA_REGISTRYINDEX));
+            return 1;
+        });
     }
 
     static int print_to_log(lua_State* lua)
@@ -202,6 +408,8 @@ struct LuaScriptSystem::Impl
         return invoke(lua, [&]
         {
             auto* self = from_upvalue(lua);
+            if (!self->allows_write("Position3D"))
+                return luaL_error(lua, "system wrote an undeclared Position3D component");
             if (!self->api.set_position) return luaL_error(lua, "engine.set_position is unavailable");
             const bool changed = self->api.set_position(entity_arg(lua, 1),
                 static_cast<float>(luaL_checknumber(lua, 2)),
@@ -217,6 +425,8 @@ struct LuaScriptSystem::Impl
         return invoke(lua, [&]
         {
             auto* self = from_upvalue(lua);
+            if (!self->allows_read("Position3D"))
+                return luaL_error(lua, "system read an undeclared Position3D component");
             const auto position = self->api.get_position
                 ? self->api.get_position(entity_arg(lua, 1)) : std::nullopt;
             if (!position) { lua_pushnil(lua); return 1; }
@@ -283,6 +493,11 @@ struct LuaScriptSystem::Impl
             if (!self->loading_registrations)
                 return luaL_error(lua, "component schemas can only be registered while loading a script");
             const std::string componentName(name, nameLength);
+            if (componentName == "Position3D")
+            {
+                lua_pushboolean(lua, false);
+                return 1;
+            }
             const bool existed = self->api.has_component_schema && self->api.has_component_schema(componentName);
             const bool registered = self->api.register_component && self->api.register_component(componentName, fields);
             if (registered && std::none_of(self->loading_registrations->begin(), self->loading_registrations->end(),
@@ -356,6 +571,8 @@ struct LuaScriptSystem::Impl
         return invoke(lua, [&]
         {
             auto* self = from_upvalue(lua);
+            if (!self->allows_write("Position3D"))
+                return luaL_error(lua, "system wrote an undeclared Position3D component");
             if (!self->active_context || !self->active_context->owner || !self->api.set_position)
                 return luaL_error(lua, "self position is unavailable");
             const bool changed = self->api.set_position(*self->active_context->owner,
@@ -371,6 +588,8 @@ struct LuaScriptSystem::Impl
         return invoke(lua, [&]
         {
             auto* self = from_upvalue(lua);
+            if (!self->allows_read("Position3D"))
+                return luaL_error(lua, "system read an undeclared Position3D component");
             if (!self->active_context || !self->active_context->owner || !self->api.get_position)
             { lua_pushnil(lua); return 1; }
             const auto position = self->api.get_position(*self->active_context->owner);
@@ -460,9 +679,12 @@ struct LuaScriptSystem::Impl
         struct ContextScope
         {
             Impl& impl; const LuaScriptContext* previous;
-            ContextScope(Impl& owner, const LuaScriptContext& context) : impl(owner), previous(owner.active_context) { impl.active_context = &context; }
-            ~ContextScope() { impl.active_context = previous; }
-        } contextScope(*this, script.context);
+            std::filesystem::path previousDirectory;
+            ContextScope(Impl& owner, const Script& script) : impl(owner),
+                previous(owner.active_context), previousDirectory(owner.module_directory)
+            { impl.active_context = &script.context; impl.module_directory = script.module_directory; }
+            ~ContextScope() { impl.active_context = previous; impl.module_directory = previousDirectory; }
+        } contextScope(*this, script);
         lua_rawgeti(state, LUA_REGISTRYINDEX, script.table_ref);
         lua_pushstring(state, method);
         lua_rawget(state, -2); // avoid executing a Lua __index metamethod outside lua_pcall
@@ -589,16 +811,34 @@ struct LuaScriptSystem::Impl
         return {};
     }
 
+    Result validate_lifecycle(const int tableIndex)
+    {
+        const int table = lua_absindex(state, tableIndex);
+        for (const char* method : {"on_create", "on_update", "on_destroy"})
+        {
+            lua_pushstring(state, method); lua_rawget(state, table);
+            const bool valid = lua_isnil(state, -1) || lua_isfunction(state, -1);
+            lua_pop(state, 1);
+            if (!valid) return std::unexpected(std::string("script lifecycle member '") + method +
+                "' must be a function");
+        }
+        return {};
+    }
+
     Result run_system(const Script& script, const System& system, const float delta)
     {
         if (!api.query_components) return {};
         struct Scope
         {
             Impl& owner; const LuaScriptContext* previousContext; const System* previousSystem;
+            std::filesystem::path previousDirectory;
             Scope(Impl& owner, const Script& script, const System& system) : owner(owner),
-                previousContext(owner.active_context), previousSystem(owner.active_system)
-            { owner.active_context = &script.context; owner.active_system = &system; }
-            ~Scope() { owner.active_context = previousContext; owner.active_system = previousSystem; }
+                previousContext(owner.active_context), previousSystem(owner.active_system),
+                previousDirectory(owner.module_directory)
+            { owner.active_context = &script.context; owner.active_system = &system;
+                owner.module_directory = script.module_directory; }
+            ~Scope() { owner.active_context = previousContext; owner.active_system = previousSystem;
+                owner.module_directory = previousDirectory; }
         } scope(*this, script, system);
         auto entities = api.query_components(system.all);
         std::sort(entities.begin(), entities.end());
@@ -617,6 +857,17 @@ struct LuaScriptSystem::Impl
     LoadResult load(std::string_view source, std::string_view name, LuaScriptContext context = {})
     {
         if (closed || !state) return std::unexpected("Lua runtime is shut down");
+        if (declaration_validation) validation_hook_ticks = 0;
+        if (!module_root.empty())
+        {
+            const std::string chunk(name);
+            const std::filesystem::path sourcePath(chunk.starts_with('@') ? chunk.substr(1) : chunk);
+            module_directory = sourcePath.has_parent_path()
+                ? std::filesystem::weakly_canonical(sourcePath.parent_path()) : module_root;
+            const auto relative = module_directory.lexically_relative(module_root);
+            if (relative.empty() || relative.is_absolute() || *relative.begin() == "..")
+                return std::unexpected("script is outside the project module root");
+        }
         struct RegistrationScope
         {
             Impl& owner;
@@ -675,7 +926,8 @@ struct LuaScriptSystem::Impl
             lua_setfield(state, -2, "input");
         }
         lua_newtable(state);
-        lua_pushglobaltable(state);
+        if (declaration_validation || !module_root.empty()) push_root_safe_globals();
+        else lua_pushglobaltable(state);
         lua_setfield(state, -2, "__index");
         lua_setmetatable(state, -2);
         if (lua_setupvalue(state, -2, 1) == nullptr)
@@ -691,13 +943,15 @@ struct LuaScriptSystem::Impl
             lua_pop(state, 1);
             return std::unexpected("Lua script chunk must return a lifecycle table");
         }
+        const auto lifecycle = validate_lifecycle(-1);
+        if (!lifecycle) { lua_pop(state, 1); return std::unexpected(lifecycle.error()); }
         if (next_id == std::numeric_limits<std::uint64_t>::max())
         {
             lua_pop(state, 1);
             return std::unexpected("Lua script id space exhausted");
         }
 
-        Script script{LuaScriptId{next_id++}, LUA_NOREF, std::move(context), {}, {}};
+        Script script{LuaScriptId{next_id++}, LUA_NOREF, std::move(context), {}, {}, module_directory};
         auto parsedSystems = parse_systems(-1, script);
         if (!parsedSystems)
         {
@@ -708,11 +962,11 @@ struct LuaScriptSystem::Impl
         script.table_ref = luaL_ref(state, LUA_REGISTRYINDEX);
         auto [it, inserted] = scripts.emplace(script.id.value, script);
         (void)inserted;
-        auto created = call(it->second, "on_create");
+        auto created = declaration_validation ? Result{} : call(it->second, "on_create");
         if (!created)
         {
             // Give partially initialized scripts a chance to undo native side effects.
-            (void)call(it->second, "on_destroy");
+            if (!declaration_validation) (void)call(it->second, "on_destroy");
             luaL_unref(state, LUA_REGISTRYINDEX, script.table_ref);
             for (const System& system : script.systems) luaL_unref(state, LUA_REGISTRYINDEX, system.update_ref);
             scripts.erase(it);
@@ -745,7 +999,7 @@ struct LuaScriptSystem::Impl
     {
         auto it = scripts.find(id.value);
         if (it == scripts.end()) return std::unexpected("unknown Lua script id");
-        auto destroyed = call(it->second, "on_destroy");
+        auto destroyed = declaration_validation ? Result{} : call(it->second, "on_destroy");
         if (!destroyed && retainOnDestroyFailure) return destroyed;
         luaL_unref(state, LUA_REGISTRYINDEX, it->second.table_ref);
         for (const System& system : it->second.systems) luaL_unref(state, LUA_REGISTRYINDEX, system.update_ref);
@@ -766,7 +1020,7 @@ struct LuaScriptSystem::Impl
             for (const auto& [id, script] : scripts)
             {
                 (void)id;
-                auto result = call(script, "on_destroy");
+                auto result = declaration_validation ? Result{} : call(script, "on_destroy");
                 if (!result && first_error.empty()) first_error = result.error();
                 release_schemas(script);
             }
@@ -829,6 +1083,56 @@ LuaScriptSystem::Result LuaScriptSystem::validate_string(const std::string_view 
     if (luaL_loadbuffer(impl->state, source.data(), source.size(), name.c_str()) != LUA_OK)
         return std::unexpected(impl->pop_error());
     lua_pop(impl->state, 1);
+    return {};
+}
+
+LuaScriptSystem::Result LuaScriptSystem::validate_declarations(
+    const std::vector<std::pair<std::string, std::string>>& sources,
+    const std::filesystem::path& project_root)
+{
+    std::map<std::string, std::vector<LuaComponentField>> schemas;
+    std::string schemaError;
+    EngineScriptApi api;
+    api.register_component = [&](std::string_view name, const std::vector<LuaComponentField>& fields)
+    {
+        auto ordered = fields;
+        std::sort(ordered.begin(), ordered.end(), [](const auto& left, const auto& right)
+        { return left.name < right.name; });
+        const auto [it, inserted] = schemas.emplace(std::string(name), ordered);
+        if (inserted) return true;
+        const bool matching = it->second.size() == ordered.size() &&
+            std::equal(it->second.begin(), it->second.end(), ordered.begin(),
+                [](const auto& left, const auto& right)
+                { return left.name == right.name && left.type == right.type; });
+        if (!matching) schemaError = "component schema conflicts with another script: " + std::string(name);
+        return matching;
+    };
+    api.has_component_schema = [&](std::string_view name) { return schemas.contains(std::string(name)); };
+    api.unregister_component = api.rollback_component_schema = [&](std::string_view name)
+    { return schemas.erase(std::string(name)) != 0; };
+    api.module_root = project_root;
+    Impl validator(std::move(api), true);
+    if (!validator.state) return std::unexpected("unable to allocate declaration validator");
+    std::map<std::uint64_t, std::string> names;
+    for (const auto& [source, chunkName] : sources)
+    {
+        schemaError.clear();
+        auto loaded = validator.load(source, chunkName, LuaScriptContext{.owner = 1});
+        if (!loaded) return std::unexpected(chunkName + ": " + loaded.error());
+        if (!schemaError.empty()) return std::unexpected(chunkName + ": " + schemaError);
+        names.emplace(loaded->value, chunkName);
+    }
+    for (const auto& [id, script] : validator.scripts)
+    {
+        for (const auto& system : script.systems)
+        {
+            for (const auto* components : {&system.all, &system.reads, &system.writes})
+                for (const auto& name : *components)
+                    if (name != "Position3D" && !schemas.contains(name))
+                        return std::unexpected(names.at(id) + ": system '" + system.name +
+                            "' references an undeclared component: " + name);
+        }
+    }
     return {};
 }
 

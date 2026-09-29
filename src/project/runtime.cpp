@@ -55,6 +55,7 @@ namespace project
                 else std::clog << "[project script] " << message << '\n';
             };
             api.redirect_standard_output = true;
+            api.module_root = project.root;
             api.create_entity = [this]() -> std::int64_t
             {
                 const auto packed = simulator.ecs().createEntity().packed();
@@ -140,9 +141,23 @@ namespace project
             };
             api.query_components = [this](const std::vector<std::string>& all)
             {
-                std::vector<std::int64_t> result;
-                for (const Entity& entity : simulator.ecs().queryDynamicComponents(all))
+                auto& ecs = simulator.ecs();
+                const bool needsPosition = std::find(all.begin(), all.end(), "Position3D") != all.end();
+                std::vector<std::string> dynamicNames;
+                dynamicNames.reserve(all.size());
+                for (const auto& name : all)
+                    if (name != "Position3D") dynamicNames.push_back(name);
+                std::vector<Entity> matching;
+                if (dynamicNames.empty() && needsPosition)
                 {
+                    const auto positioned = ecs.matchingEntities<Position3D>();
+                    matching.assign(positioned.begin(), positioned.end());
+                }
+                else matching = ecs.queryDynamicComponents(dynamicNames);
+                std::vector<std::int64_t> result;
+                for (const Entity& entity : matching)
+                {
+                    if (needsPosition && !ecs.hasComponent<Position3D>(entity)) continue;
                     const auto packed = entity.packed();
                     if (packed <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
                         result.push_back(static_cast<std::int64_t>(packed));
@@ -264,6 +279,19 @@ namespace project
                 return std::unexpected(runtimeError("runtime.script.compile", path, valid.error()));
             }
             scriptSources.emplace(authored.id, std::move(source));
+        }
+        std::vector<std::pair<std::string, std::string>> declarations;
+        for (const SceneEntity& authored : state.project.scene.entities)
+            if (authored.script)
+                declarations.emplace_back(scriptSources.at(authored.id),
+                    "@" + resolvedScripts.at(authored.id).string());
+        const auto checked = LuaScriptSystem::validate_declarations(declarations, state.project.root);
+        if (!checked)
+        {
+            (void)state.scripts->shutdown();
+            state.scripts.reset();
+            return std::unexpected(runtimeError("runtime.script.declaration", state.project.scene.source,
+                checked.error()));
         }
         auto& ecs = state.simulator.ecs();
         try
