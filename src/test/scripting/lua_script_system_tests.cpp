@@ -3,6 +3,7 @@
 #include "../../ecs/ecs.h"
 #include "../test_assertions.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -243,7 +244,7 @@ void test_lua_dynamic_components_and_systems()
     std::vector<std::int64_t> writeOrder;
     std::vector<LuaComponentField> registered;
     EngineScriptApi api;
-    api.register_component = [&](std::string_view name, const std::vector<LuaComponentField>& fields)
+    api.register_component = [&](std::string_view name, const std::vector<LuaComponentField>& fields, std::uint32_t)
     {
         if (name != "Health") return false;
         registered = fields;
@@ -297,7 +298,7 @@ void test_lua_dynamic_components_and_systems()
 
     double ownerValue = 0;
     EngineScriptApi ownerApi;
-    ownerApi.register_component = [](std::string_view, const std::vector<LuaComponentField>&) { return true; };
+    ownerApi.register_component = [](std::string_view, const std::vector<LuaComponentField>&, std::uint32_t) { return true; };
     ownerApi.set_component = [&](std::int64_t entity, std::string_view, const LuaComponentValues& values)
     { if (entity == 91) ownerValue = std::get<double>(values[0].second); return entity == 91; };
     ownerApi.get_component = [&](std::int64_t entity, std::string_view) -> std::optional<LuaComponentValues>
@@ -313,12 +314,84 @@ void test_lua_dynamic_components_and_systems()
     test::require(owner && ownerValue == 8, "entity-owned scripts should access their owner component through self");
 }
 
+void test_lua_versioned_component_registration()
+{
+    std::vector<LuaComponentField> registered;
+    std::uint32_t registeredVersion = 0;
+    EngineScriptApi api;
+    api.register_component = [&](std::string_view name, const std::vector<LuaComponentField>& fields,
+        std::uint32_t version)
+    {
+        if (name != "Vitals") return false;
+        registered = fields;
+        registeredVersion = version;
+        return true;
+    };
+    LuaScriptSystem scripts(std::move(api));
+    const auto loaded = scripts.load_string(R"lua(
+        assert(engine.register_component('Vitals', {
+            hp={type='number', version=2, default=100},
+            active={type='boolean', default=true},
+            label={type='string', default='new'}
+        }, 2))
+        return {}
+    )lua", "versioned_components");
+    test::require(loaded && registeredVersion == 2 && registered.size() == 3,
+        "Lua should forward schema versions and all typed field metadata");
+    const auto hp = std::find_if(registered.begin(), registered.end(), [](const auto& field)
+    { return field.name == "hp"; });
+    const auto active = std::find_if(registered.begin(), registered.end(), [](const auto& field)
+    { return field.name == "active"; });
+    const auto label = std::find_if(registered.begin(), registered.end(), [](const auto& field)
+    { return field.name == "label"; });
+    test::require(hp != registered.end() && hp->version == 2 && hp->default_value == LuaComponentValue{100.0} &&
+        active != registered.end() && active->version == 1 && active->default_value == LuaComponentValue{true} &&
+        label != registered.end() && label->default_value == LuaComponentValue{std::string("new")},
+        "Lua field version and defaults should retain their declared types");
+
+    using Sources = std::vector<std::pair<std::string, std::string>>;
+    const auto root = std::filesystem::current_path();
+    const auto invalidDefault = LuaScriptSystem::validate_declarations(Sources{{
+        "engine.register_component('Bad', {hp={type='number', default='wrong'}}); return {}",
+        "@bad-default.lua"}}, root);
+    const auto invalidVersion = LuaScriptSystem::validate_declarations(Sources{{
+        "engine.register_component('Bad', {hp={type='number', version=3}}, 2); return {}",
+        "@bad-version.lua"}}, root);
+    const auto invalidOption = LuaScriptSystem::validate_declarations(Sources{{
+        "engine.register_component('Bad', {hp={type='number', min=0}}); return {}",
+        "@bad-option.lua"}}, root);
+    test::require(!invalidDefault && !invalidVersion && !invalidOption,
+        "declaration preflight must reject malformed field defaults, versions, and options");
+    const auto conflict = LuaScriptSystem::validate_declarations(Sources{
+        {"engine.register_component('Vitals', {hp={type='number',default=1}}, 1); return {}", "@first.lua"},
+        {"engine.register_component('Vitals', {hp={type='number',default=2}}, 1); return {}", "@second.lua"}}, root);
+    test::require(!conflict && conflict.error().find("second.lua") != std::string::npos,
+        "a changed default under an unchanged schema version must fail the later declaration");
+    const auto typeQuota = LuaScriptSystem::validate_declarations(Sources{{
+        "for i=1,65 do engine.register_component('Type'..i,{value='number'}) end; return {}",
+        "@quota.lua"}}, root);
+    test::require(!typeQuota && typeQuota.error().find("limit") != std::string::npos,
+        "declaration preflight must reject a project-wide type quota overflow");
+    const auto acrossScripts = LuaScriptSystem::validate_declarations(Sources{
+        {"for i=1,64 do engine.register_component('Type'..i,{value='number'}) end; return {}",
+            "@first-quota.lua"},
+        {"engine.register_component('Overflow',{value='number'}); return {}", "@second-quota.lua"}}, root);
+    test::require(!acrossScripts && acrossScripts.error().find("second-quota.lua") != std::string::npos,
+        "a later script must fail when it exceeds the shared project type quota");
+    const auto propertyQuota = LuaScriptSystem::validate_declarations(Sources{{
+        "for i=1,32 do local f={} for j=1,16 do f['f'..j]='number' end "
+        "engine.register_component('Wide'..i,f) end "
+        "engine.register_component('Overflow',{value='number'}); return {}", "@property-quota.lua"}}, root);
+    test::require(!propertyQuota && propertyQuota.error().find("limit") != std::string::npos,
+        "declaration preflight must reject the 513th registered project property");
+}
+
 void test_lua_system_access_order_and_schema_ownership()
 {
     std::set<std::string> schemas;
     std::vector<std::string> events;
     EngineScriptApi api;
-    api.register_component = [&](std::string_view name, const std::vector<LuaComponentField>&)
+    api.register_component = [&](std::string_view name, const std::vector<LuaComponentField>&, std::uint32_t)
     { schemas.insert(std::string(name)); return true; };
     api.has_component_schema = [&](std::string_view name) { return schemas.contains(std::string(name)); };
     api.unregister_component = [&](std::string_view name) { return schemas.erase(std::string(name)) != 0; };
@@ -374,7 +447,7 @@ void test_lua_system_access_order_and_schema_ownership()
     ECS ecs;
     const Entity owner = ecs.createEntity();
     EngineScriptApi native;
-    native.register_component = [&](std::string_view name, const std::vector<LuaComponentField>&)
+    native.register_component = [&](std::string_view name, const std::vector<LuaComponentField>&, std::uint32_t)
     { return ecs.registerDynamicComponent(name, {{"value", ecs::DynamicFieldType::Number}}); };
     native.has_component_schema = [&](std::string_view name)
     { return ecs.hasDynamicComponentSchema(name); };
@@ -562,7 +635,7 @@ void test_lua_project_declaration_preflight()
     test::require(localModule.has_value(), "preflight should allow a sibling module inside the project root");
     EngineScriptApi runtimeApi;
     runtimeApi.module_root = directory;
-    runtimeApi.register_component = [](std::string_view, const std::vector<LuaComponentField>&) { return true; };
+    runtimeApi.register_component = [](std::string_view, const std::vector<LuaComponentField>&, std::uint32_t) { return true; };
     LuaScriptSystem runtimeScripts(std::move(runtimeApi));
     test::require(runtimeScripts.load_string(source, scriptName).has_value(),
         "runtime and preflight should load the same project-local module source");

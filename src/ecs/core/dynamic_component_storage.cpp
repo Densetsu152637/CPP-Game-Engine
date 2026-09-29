@@ -1,23 +1,97 @@
 #include "dynamic_component_storage.h"
 
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 
 namespace ecs
 {
-    bool DynamicComponentStorage::registerComponent(const std::string_view name, const std::vector<DynamicField>& fields)
+    namespace
     {
-        if (name.empty() || fields.empty()) return false;
+        bool validType(const DynamicFieldType type)
+        {
+            return type == DynamicFieldType::Number || type == DynamicFieldType::Boolean ||
+                type == DynamicFieldType::String;
+        }
+
+        bool validName(const std::string_view name)
+        {
+            if (name.empty() || name.size() > max_dynamic_name_bytes) return false;
+            const auto letter = [](const char c) { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'); };
+            if (!letter(name.front()) && name.front() != '_') return false;
+            return std::all_of(name.begin() + 1, name.end(), [&](const char c)
+            { return letter(c) || (c >= '0' && c <= '9') || c == '_'; });
+        }
+
+        bool validValue(const DynamicFieldType type, const DynamicValue& value)
+        {
+            switch (type)
+            {
+            case DynamicFieldType::Number:
+                return std::holds_alternative<double>(value) && std::isfinite(std::get<double>(value));
+            case DynamicFieldType::Boolean: return std::holds_alternative<bool>(value);
+            case DynamicFieldType::String:
+                return std::holds_alternative<std::string>(value) &&
+                    std::get<std::string>(value).size() <= max_dynamic_string_bytes;
+            }
+            return false;
+        }
+
+        std::optional<std::vector<DynamicValue>> orderedValues(
+            const std::vector<DynamicField>& fields, const DynamicValues& values)
+        {
+            if (values.size() > fields.size()) return std::nullopt;
+            std::vector<DynamicValue> ordered;
+            ordered.reserve(fields.size());
+            for (const auto& field : fields)
+            {
+                const auto found = std::find_if(values.begin(), values.end(), [&](const auto& item)
+                { return item.first == field.name; });
+                if (found == values.end())
+                {
+                    if (!field.default_value) return std::nullopt;
+                    ordered.push_back(*field.default_value);
+                }
+                else
+                {
+                    if (!validValue(field.type, found->second)) return std::nullopt;
+                    ordered.push_back(found->second);
+                }
+            }
+            for (size_t i = 0; i < values.size(); ++i)
+            {
+                if (std::none_of(fields.begin(), fields.end(), [&](const auto& field)
+                    { return field.name == values[i].first; })) return std::nullopt;
+                for (size_t j = 0; j < i; ++j)
+                    if (values[j].first == values[i].first) return std::nullopt;
+            }
+            return ordered;
+        }
+    }
+
+    bool DynamicComponentStorage::registerComponent(const std::string_view name,
+        const std::vector<DynamicField>& fields, const std::uint32_t version)
+    {
+        if (!validName(name) || version == 0 || fields.empty() ||
+            fields.size() > max_dynamic_fields_per_component) return false;
         for (size_t i = 0; i < fields.size(); ++i)
         {
-            if (fields[i].name.empty()) return false;
+            if (!validName(fields[i].name) || !validType(fields[i].type) ||
+                fields[i].version == 0 || fields[i].version > version ||
+                (fields[i].default_value && !validValue(fields[i].type, *fields[i].default_value))) return false;
             for (size_t j = 0; j < i; ++j)
                 if (fields[i].name == fields[j].name) return false;
         }
         const auto found = m_columns.find(std::string(name));
-        if (found != m_columns.end()) return found->second.fields == fields;
+        if (found != m_columns.end()) return found->second.version == version && found->second.fields == fields;
+        if (m_columns.size() >= max_dynamic_component_types) return false;
+        size_t propertyCount = fields.size();
+        for (const auto& [registeredName, column] : m_columns)
+        { (void)registeredName; propertyCount += column.fields.size(); }
+        if (propertyCount > max_dynamic_properties_per_project) return false;
         Column column;
         column.fields = fields;
+        column.version = version;
         for (const auto& field : fields)
         {
             if (field.type == DynamicFieldType::Number) column.numbers.emplace_back();
@@ -30,6 +104,20 @@ namespace ecs
 
     bool DynamicComponentStorage::hasSchema(const std::string_view name) const
     { return m_columns.contains(std::string(name)); }
+
+    std::optional<std::uint32_t> DynamicComponentStorage::schemaVersion(const std::string_view name) const
+    {
+        const auto found = m_columns.find(std::string(name));
+        if (found == m_columns.end()) return std::nullopt;
+        return found->second.version;
+    }
+
+    std::optional<std::vector<DynamicField>> DynamicComponentStorage::schemaFields(const std::string_view name) const
+    {
+        const auto found = m_columns.find(std::string(name));
+        if (found == m_columns.end()) return std::nullopt;
+        return found->second.fields;
+    }
 
     bool DynamicComponentStorage::unregisterComponent(const std::string_view name, const bool eraseRows)
     {
@@ -57,21 +145,8 @@ namespace ecs
         Column& column = found->second;
         const auto rowFound = column.rows.find(entity.packed());
         const bool inserting = rowFound == column.rows.end();
-        if (values.size() != column.fields.size()) return false;
-        std::vector<const DynamicValue*> ordered(column.fields.size(), nullptr);
-        for (const auto& [fieldName, value] : values)
-        {
-            const auto field = std::find_if(column.fields.begin(), column.fields.end(), [&](const DynamicField& f) { return f.name == fieldName; });
-            if (field == column.fields.end()) return false;
-            const size_t index = static_cast<size_t>(field - column.fields.begin());
-            if (ordered[index]) return false;
-            const bool typeOk = (field->type == DynamicFieldType::Number && std::holds_alternative<double>(value)) ||
-                (field->type == DynamicFieldType::Boolean && std::holds_alternative<bool>(value)) ||
-                (field->type == DynamicFieldType::String && std::holds_alternative<std::string>(value));
-            if (!typeOk) return false;
-            ordered[index] = &value;
-        }
-        if (std::find(ordered.begin(), ordered.end(), nullptr) != ordered.end()) return false;
+        const auto ordered = orderedValues(column.fields, values);
+        if (!ordered) return false;
         size_t row = 0;
         if (inserting)
         {
@@ -81,7 +156,7 @@ namespace ecs
             size_t numberIndex = 0, booleanIndex = 0, stringIndex = 0;
             for (size_t field = 0; field < column.fields.size(); ++field)
             {
-                const auto& value = *ordered[field];
+                const auto& value = (*ordered)[field];
                 if (column.fields[field].type == DynamicFieldType::Number) column.numbers[numberIndex++].push_back(std::get<double>(value));
                 else if (column.fields[field].type == DynamicFieldType::Boolean) column.booleans[booleanIndex++].push_back(static_cast<uint8_t>(std::get<bool>(value)));
                 else column.strings[stringIndex++].push_back(std::get<std::string>(value));
@@ -95,17 +170,17 @@ namespace ecs
             const auto type = column.fields[field].type;
             if (type == DynamicFieldType::Number)
             {
-                if (ordered[field]) column.numbers[numberIndex][row] = std::get<double>(*ordered[field]);
+                column.numbers[numberIndex][row] = std::get<double>((*ordered)[field]);
                 ++numberIndex;
             }
             else if (type == DynamicFieldType::Boolean)
             {
-                if (ordered[field]) column.booleans[booleanIndex][row] = static_cast<uint8_t>(std::get<bool>(*ordered[field]));
+                column.booleans[booleanIndex][row] = static_cast<uint8_t>(std::get<bool>((*ordered)[field]));
                 ++booleanIndex;
             }
             else
             {
-                if (ordered[field]) column.strings[stringIndex][row] = std::get<std::string>(*ordered[field]);
+                column.strings[stringIndex][row] = std::get<std::string>((*ordered)[field]);
                 ++stringIndex;
             }
         }
@@ -115,18 +190,7 @@ namespace ecs
     bool DynamicComponentStorage::validate(const std::string_view name, const DynamicValues& values) const
     {
         const auto found = m_columns.find(std::string(name));
-        if (found == m_columns.end() || values.size() != found->second.fields.size()) return false;
-        for (size_t i = 0; i < found->second.fields.size(); ++i)
-        {
-            const auto& field = found->second.fields[i];
-            const auto value = std::find_if(values.begin(), values.end(), [&](const auto& item) { return item.first == field.name; });
-            if (value == values.end()) return false;
-            if (std::count_if(values.begin(), values.end(), [&](const auto& item) { return item.first == field.name; }) != 1) return false;
-            if ((field.type == DynamicFieldType::Number && !std::holds_alternative<double>(value->second)) ||
-                (field.type == DynamicFieldType::Boolean && !std::holds_alternative<bool>(value->second)) ||
-                (field.type == DynamicFieldType::String && !std::holds_alternative<std::string>(value->second))) return false;
-        }
-        return true;
+        return found != m_columns.end() && orderedValues(found->second.fields, values).has_value();
     }
 
     std::optional<DynamicValues> DynamicComponentStorage::get(const Entity& entity, const std::string_view name) const

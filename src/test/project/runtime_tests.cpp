@@ -143,6 +143,42 @@ namespace
         test::require(runtime.stop().has_value(), "restarted runtime should stop cleanly");
     }
 
+    void versionedDefaultsReachRuntimeEcs()
+    {
+        const auto fixture = std::filesystem::current_path() / "build" /
+            ("runtime-defaults-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directories(fixture);
+        const auto source = fixture / "player.lua";
+        struct Cleanup
+        {
+            std::filesystem::path file, directory;
+            ~Cleanup() { std::error_code ignored; std::filesystem::remove(file, ignored);
+                std::filesystem::remove(directory, ignored); }
+        } cleanup{source, fixture};
+        { std::ofstream output(source, std::ios::binary);
+            output << "assert(engine.register_component('Vitals', {"
+                "hp={type='number',version=2,default=100},"
+                "active={type='boolean',default=true},"
+                "label={type='string',default='new'}}, 2))\n"
+                "return {on_create=function() "
+                "assert(self.set_component('Vitals', {})); "
+                "local v=self.get_component('Vitals'); "
+                "assert(v.hp==100 and v.active==true and v.label=='new'); "
+                "engine.log('defaults-ok') end}\n";
+            output.close(); test::require(output.good(), "versioned default fixture should be writable"); }
+        auto authored = sample();
+        authored.root = std::filesystem::canonical(fixture);
+        authored.assets.at("asset:player-script").path = "player.lua";
+        std::vector<std::string> logs;
+        project::RuntimeOptions options;
+        options.log = [&](std::string_view message) { logs.emplace_back(message); };
+        project::Runtime runtime(std::move(authored), std::move(options));
+        test::require(runtime.start().has_value() &&
+            std::count(logs.begin(), logs.end(), "defaults-ok") == 1,
+            "runtime bridge should store and return typed Lua property defaults");
+        test::require(runtime.stop().has_value(), "defaulted runtime should stop cleanly");
+    }
+
     void failedLuaSystemAbortsQueuedStructuralChanges()
     {
         auto project = sample();
@@ -386,6 +422,7 @@ int main()
         authoredInputMovesOwner();
         authoredLuaSystemsUseDeferredSortedSnapshots();
         restartPrunesOldScriptSchemasAndSystems();
+        versionedDefaultsReachRuntimeEcs();
         failedLuaSystemAbortsQueuedStructuralChanges();
         stagedReloadIsBoundaryAppliedAndKeepsLastGood();
         teardownFailureKeepsOldScriptAndCleansCandidate();

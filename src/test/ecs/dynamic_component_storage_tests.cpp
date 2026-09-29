@@ -1,6 +1,8 @@
 #include "../../ecs/ecs.h"
 #include "../test_assertions.h"
 
+#include <limits>
+
 void test_dynamic_component_storage_and_deferred_query_coherence()
 {
     ECS ecs;
@@ -80,4 +82,54 @@ void test_dynamic_component_storage_and_deferred_query_coherence()
     ecs.pruneEmptyDynamicComponentSchemas();
     test::require(!ecs.hasDynamicComponentSchema("Health"),
         "unused schemas should be released after their final row is removed");
+
+    DynamicComponentStorage metadata;
+    const std::vector<DynamicField> versioned{
+        {"hp", DynamicFieldType::Number, 2, 100.0},
+        {"active", DynamicFieldType::Boolean, 1, true},
+        {"label", DynamicFieldType::String, 1, std::string("new")}};
+    test::require(metadata.registerComponent("HealthV2", versioned, 2) &&
+        metadata.schemaVersion("HealthV2") == 2 && metadata.schemaFields("HealthV2") == versioned,
+        "registered schema and property versions/defaults should be inspectable");
+    test::require(metadata.registerComponent("HealthV2", versioned, 2) &&
+        !metadata.registerComponent("HealthV2", versioned, 3) &&
+        !metadata.registerComponent("HealthV2", {{"hp", DynamicFieldType::Number, 2, 50.0}}, 2),
+        "only an identical versioned schema should register twice");
+    const Entity defaulted = ecs.createEntity();
+    test::require(metadata.set(defaulted, "HealthV2", {}) &&
+        metadata.get(defaulted, "HealthV2") == DynamicValues{{"hp", 100.0}, {"active", true},
+            {"label", std::string("new")}},
+        "omitted fields should receive typed defaults in dense storage");
+    test::require(metadata.set(defaulted, "HealthV2", {{"hp", 7.0}}) &&
+        metadata.get(defaulted, "HealthV2") == DynamicValues{{"hp", 7.0}, {"active", true},
+            {"label", std::string("new")}},
+        "replacement writes should use defaults for omitted fields");
+    test::require(!metadata.validate("HealthV2", {{"hp", std::numeric_limits<double>::infinity()}}) &&
+        !metadata.validate("HealthV2", {{"hp", false}}) &&
+        !metadata.validate("HealthV2", {{"missing", 1.0}}) &&
+        !metadata.validate("HealthV2", {{"hp", 1.0}, {"hp", 2.0}}),
+        "non-finite, mismatched, unknown, and duplicate property values must fail");
+    test::require(!metadata.registerComponent("InvalidDefault", {{"hp", DynamicFieldType::Number, 1, false}}) &&
+        !metadata.registerComponent("InvalidVersion", {{"hp", DynamicFieldType::Number, 2}}, 1) &&
+        !metadata.registerComponent("bad-name", {{"hp", DynamicFieldType::Number}}),
+        "invalid metadata and unstable names must be rejected");
+
+    DynamicComponentStorage typeQuota;
+    for (size_t i = 0; i < max_dynamic_component_types; ++i)
+        test::require(typeQuota.registerComponent("Type" + std::to_string(i),
+            {{"value", DynamicFieldType::Number}}), "component type quota should permit its boundary");
+    test::require(!typeQuota.registerComponent("Overflow", {{"value", DynamicFieldType::Number}}),
+        "component type quota should reject one additional schema");
+    std::vector<DynamicField> tooManyFields;
+    for (size_t i = 0; i <= max_dynamic_fields_per_component; ++i)
+        tooManyFields.push_back({"field" + std::to_string(i), DynamicFieldType::Number});
+    test::require(!metadata.registerComponent("TooWide", tooManyFields),
+        "per-component property quota should be enforced");
+    DynamicComponentStorage propertyQuota;
+    std::vector<DynamicField> sixteenFields(tooManyFields.begin(), tooManyFields.begin() + 16);
+    for (size_t i = 0; i < max_dynamic_properties_per_project / sixteenFields.size(); ++i)
+        test::require(propertyQuota.registerComponent("Wide" + std::to_string(i), sixteenFields),
+            "project property quota should permit its boundary");
+    test::require(!propertyQuota.registerComponent("OneMore", {{"value", DynamicFieldType::Number}}),
+        "project property quota should reject one additional property");
 }

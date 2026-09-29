@@ -103,10 +103,11 @@ bool ECS::hasEntity(const Entity& entity) const
     return is_valid_handle(entity);
 }
 
-bool ECS::registerDynamicComponent(const std::string_view name, const std::vector<ecs::DynamicField>& fields)
+bool ECS::registerDynamicComponent(const std::string_view name, const std::vector<ecs::DynamicField>& fields,
+    const std::uint32_t version)
 {
     const bool existed = m_dynamicComponents.hasSchema(name);
-    const bool registered = m_dynamicComponents.registerComponent(name, fields);
+    const bool registered = m_dynamicComponents.registerComponent(name, fields, version);
     if (registered && !existed) bumpComponentQueryGeneration();
     return registered;
 }

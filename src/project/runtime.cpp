@@ -93,7 +93,8 @@ namespace project
                 const auto& p = value->read();
                 return std::array<float, 3>{p.x, p.y, p.z};
             };
-            api.register_component = [this](std::string_view name, const std::vector<LuaComponentField>& fields)
+            api.register_component = [this](std::string_view name, const std::vector<LuaComponentField>& fields,
+                std::uint32_t version)
             {
                 std::vector<ecs::DynamicField> schema;
                 schema.reserve(fields.size());
@@ -106,11 +107,11 @@ namespace project
                     case LuaComponentFieldType::Boolean: type = ecs::DynamicFieldType::Boolean; break;
                     case LuaComponentFieldType::String: type = ecs::DynamicFieldType::String; break;
                     }
-                    schema.push_back({field.name, type});
+                    schema.push_back({field.name, type, field.version, field.default_value});
                 }
                 std::sort(schema.begin(), schema.end(), [](const auto& left, const auto& right)
                 { return left.name < right.name; });
-                return simulator.ecs().registerDynamicComponent(name, schema);
+                return simulator.ecs().registerDynamicComponent(name, schema, version);
             };
             api.has_component_schema = [this](std::string_view name)
             { return simulator.ecs().hasDynamicComponentSchema(name); };

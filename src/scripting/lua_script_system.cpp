@@ -1,8 +1,10 @@
 #include "lua_script_system.h"
 #include "lua_source_file.h"
+#include "../ecs/core/dynamic_component_storage.h"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <cstdlib>
 #include <exception>
@@ -18,6 +20,18 @@ extern "C"
 {
 #include <lauxlib.h>
 #include <lualib.h>
+}
+
+namespace
+{
+    bool valid_registration_name(const std::string_view name)
+    {
+        if (name.empty() || name.size() > ecs::max_dynamic_name_bytes) return false;
+        const auto letter = [](const char c) { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'); };
+        if (!letter(name.front()) && name.front() != '_') return false;
+        return std::all_of(name.begin() + 1, name.end(), [&](const char c)
+        { return letter(c) || (c >= '0' && c <= '9') || c == '_'; });
+    }
 }
 
 struct LuaScriptSystem::Impl
@@ -487,33 +501,99 @@ struct LuaScriptSystem::Impl
             auto* self = from_upvalue(lua);
             size_t nameLength = 0; const char* name = luaL_checklstring(lua, 1, &nameLength);
             if (!lua_istable(lua, 2)) return luaL_error(lua, "component schema must be a table");
+            std::uint32_t schemaVersion = 1;
+            if (!lua_isnoneornil(lua, 3))
+            {
+                if (!lua_isinteger(lua, 3) || lua_tointeger(lua, 3) <= 0 ||
+                    static_cast<std::uint64_t>(lua_tointeger(lua, 3)) > std::numeric_limits<std::uint32_t>::max())
+                    throw std::runtime_error("component version must be a positive 32-bit integer");
+                schemaVersion = static_cast<std::uint32_t>(lua_tointeger(lua, 3));
+            }
             std::vector<LuaComponentField> fields;
             lua_pushnil(lua);
             while (lua_next(lua, 2) != 0)
             {
-                if (lua_type(lua, -2) != LUA_TSTRING || lua_type(lua, -1) != LUA_TSTRING)
-                { lua_pop(lua, 2); return luaL_error(lua, "component fields must map names to number, boolean, or string"); }
+                if (lua_type(lua, -2) != LUA_TSTRING)
+                    throw std::runtime_error("component field names must be strings");
+                size_t fieldLength = 0; const char* fieldName = lua_tolstring(lua, -2, &fieldLength);
+                if (!valid_registration_name(std::string_view(fieldName, fieldLength)))
+                    throw std::runtime_error("component field name must be a bounded identifier");
+                LuaComponentField field{std::string(fieldName, fieldLength), LuaComponentFieldType::Number};
+                const int spec = lua_absindex(lua, -1);
+                if (lua_istable(lua, spec))
+                {
+                    lua_pushnil(lua);
+                    while (lua_next(lua, spec) != 0)
+                    {
+                        if (lua_type(lua, -2) != LUA_TSTRING)
+                            throw std::runtime_error("component field options must have string keys");
+                        const std::string_view key(lua_tostring(lua, -2));
+                        if (key != "type" && key != "version" && key != "default")
+                            throw std::runtime_error("unsupported component field option");
+                        lua_pop(lua, 1);
+                    }
+                    lua_pushliteral(lua, "version"); lua_rawget(lua, spec);
+                    if (!lua_isnil(lua, -1))
+                    {
+                        if (!lua_isinteger(lua, -1) || lua_tointeger(lua, -1) <= 0 ||
+                            static_cast<std::uint64_t>(lua_tointeger(lua, -1)) > schemaVersion)
+                            throw std::runtime_error("component field version must be positive and at most the component version");
+                        field.version = static_cast<std::uint32_t>(lua_tointeger(lua, -1));
+                    }
+                    lua_pop(lua, 1);
+                    lua_pushliteral(lua, "type"); lua_rawget(lua, spec);
+                }
+                else lua_pushvalue(lua, spec);
+                if (lua_type(lua, -1) != LUA_TSTRING)
+                    throw std::runtime_error("component field type must be number, boolean, or string");
                 const char* typeName = lua_tostring(lua, -1);
                 LuaComponentFieldType type;
                 if (std::strcmp(typeName, "number") == 0) type = LuaComponentFieldType::Number;
                 else if (std::strcmp(typeName, "boolean") == 0) type = LuaComponentFieldType::Boolean;
                 else if (std::strcmp(typeName, "string") == 0) type = LuaComponentFieldType::String;
-                else { lua_pop(lua, 2); return luaL_error(lua, "unsupported component field type"); }
-                size_t fieldLength = 0; const char* fieldName = lua_tolstring(lua, -2, &fieldLength);
-                fields.push_back({std::string(fieldName, fieldLength), type});
+                else throw std::runtime_error("unsupported component field type");
+                lua_pop(lua, 1);
+                field.type = type;
+                if (lua_istable(lua, spec))
+                {
+                    lua_pushliteral(lua, "default"); lua_rawget(lua, spec);
+                    if (!lua_isnil(lua, -1))
+                    {
+                        if (type == LuaComponentFieldType::Number && lua_type(lua, -1) == LUA_TNUMBER &&
+                            std::isfinite(lua_tonumber(lua, -1)))
+                            field.default_value = static_cast<double>(lua_tonumber(lua, -1));
+                        else if (type == LuaComponentFieldType::Boolean && lua_type(lua, -1) == LUA_TBOOLEAN)
+                            field.default_value = lua_toboolean(lua, -1) != 0;
+                        else if (type == LuaComponentFieldType::String && lua_type(lua, -1) == LUA_TSTRING)
+                        {
+                            size_t length = 0; const char* text = lua_tolstring(lua, -1, &length);
+                            if (length > ecs::max_dynamic_string_bytes)
+                                throw std::runtime_error("component string default is too long");
+                            field.default_value = std::string(text, length);
+                        }
+                        else throw std::runtime_error("component field default has the wrong type or is not finite");
+                    }
+                    lua_pop(lua, 1);
+                }
+                fields.push_back(std::move(field));
+                if (fields.size() > ecs::max_dynamic_fields_per_component)
+                    throw std::runtime_error("component field limit exceeded");
                 lua_pop(lua, 1);
             }
             if (fields.empty()) return luaL_error(lua, "component schema must define at least one field");
             if (!self->loading_registrations)
                 return luaL_error(lua, "component schemas can only be registered while loading a script");
             const std::string componentName(name, nameLength);
+            if (!valid_registration_name(componentName))
+                throw std::runtime_error("component name must be a bounded identifier");
             if (componentName == "Position3D")
             {
                 lua_pushboolean(lua, false);
                 return 1;
             }
             const bool existed = self->api.has_component_schema && self->api.has_component_schema(componentName);
-            const bool registered = self->api.register_component && self->api.register_component(componentName, fields);
+            const bool registered = self->api.register_component &&
+                self->api.register_component(componentName, fields, schemaVersion);
             if (registered && std::none_of(self->loading_registrations->begin(), self->loading_registrations->end(),
                 [&](const Registration& value) { return value.name == componentName; }))
                 self->loading_registrations->push_back({componentName, !existed});
@@ -1103,20 +1183,32 @@ LuaScriptSystem::Result LuaScriptSystem::validate_declarations(
     const std::vector<std::pair<std::string, std::string>>& sources,
     const std::filesystem::path& project_root)
 {
-    std::map<std::string, std::vector<LuaComponentField>> schemas;
+    using DeclaredSchema = std::pair<std::uint32_t, std::vector<LuaComponentField>>;
+    std::map<std::string, DeclaredSchema> schemas;
     std::string schemaError;
     EngineScriptApi api;
-    api.register_component = [&](std::string_view name, const std::vector<LuaComponentField>& fields)
+    api.register_component = [&](std::string_view name, const std::vector<LuaComponentField>& fields,
+        std::uint32_t version)
     {
         auto ordered = fields;
         std::sort(ordered.begin(), ordered.end(), [](const auto& left, const auto& right)
         { return left.name < right.name; });
-        const auto [it, inserted] = schemas.emplace(std::string(name), ordered);
-        if (inserted) return true;
-        const bool matching = it->second.size() == ordered.size() &&
-            std::equal(it->second.begin(), it->second.end(), ordered.begin(),
-                [](const auto& left, const auto& right)
-                { return left.name == right.name && left.type == right.type; });
+        const auto found = schemas.find(std::string(name));
+        if (found == schemas.end())
+        {
+            size_t properties = fields.size();
+            for (const auto& [registeredName, schema] : schemas)
+            { (void)registeredName; properties += schema.second.size(); }
+            if (schemas.size() >= ecs::max_dynamic_component_types ||
+                properties > ecs::max_dynamic_properties_per_project)
+            {
+                schemaError = "project component registration limit exceeded";
+                return false;
+            }
+            schemas.emplace(std::string(name), DeclaredSchema{version, std::move(ordered)});
+            return true;
+        }
+        const bool matching = found->second.first == version && found->second.second == ordered;
         if (!matching) schemaError = "component schema conflicts with another script: " + std::string(name);
         return matching;
     };

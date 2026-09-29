@@ -14,8 +14,22 @@ namespace ecs
 {
     enum class DynamicFieldType { Number, Boolean, String };
     using DynamicValue = std::variant<double, bool, std::string>;
-    struct DynamicField { std::string name; DynamicFieldType type; bool operator==(const DynamicField&) const = default; };
+    // Names and versions identify a stable property contract across script reloads.
+    // A default permits omission only when writing a complete replacement row.
+    struct DynamicField
+    {
+        std::string name;
+        DynamicFieldType type;
+        std::uint32_t version = 1;
+        std::optional<DynamicValue> default_value;
+        bool operator==(const DynamicField&) const = default;
+    };
     using DynamicValues = std::vector<std::pair<std::string, DynamicValue>>;
+    inline constexpr size_t max_dynamic_component_types = 64;
+    inline constexpr size_t max_dynamic_fields_per_component = 32;
+    inline constexpr size_t max_dynamic_properties_per_project = 512;
+    inline constexpr size_t max_dynamic_name_bytes = 64;
+    inline constexpr size_t max_dynamic_string_bytes = 4096;
 
     // Runtime-defined components use dense typed columns. Entity lookup is
     // sparse; iteration touches only rows that own the component.
@@ -26,6 +40,7 @@ namespace ecs
             std::vector<Entity> entities;
             std::unordered_map<std::uint64_t, size_t> rows;
             std::vector<DynamicField> fields;
+            std::uint32_t version = 1;
             std::vector<std::vector<double>> numbers;
             std::vector<std::vector<std::uint8_t>> booleans;
             std::vector<std::vector<std::string>> strings;
@@ -33,8 +48,11 @@ namespace ecs
         std::unordered_map<std::string, Column> m_columns;
 
     public:
-        bool registerComponent(std::string_view name, const std::vector<DynamicField>& fields);
+        bool registerComponent(std::string_view name, const std::vector<DynamicField>& fields,
+            std::uint32_t version = 1);
         bool hasSchema(std::string_view name) const;
+        std::optional<std::uint32_t> schemaVersion(std::string_view name) const;
+        std::optional<std::vector<DynamicField>> schemaFields(std::string_view name) const;
         bool unregisterComponent(std::string_view name, bool eraseRows = false);
         size_t pruneEmptySchemas();
         bool set(const Entity& entity, std::string_view name, const DynamicValues& values);

@@ -369,7 +369,8 @@ public:
     void destroyEntity(const Entity& entity);
     bool hasEntity(const Entity& entity) const;
     bool knowsEntityHandle(const Entity& entity) const { return is_known_handle(entity); }
-    bool registerDynamicComponent(std::string_view name, const std::vector<ecs::DynamicField>& fields);
+    bool registerDynamicComponent(std::string_view name, const std::vector<ecs::DynamicField>& fields,
+        std::uint32_t version = 1);
     bool hasDynamicComponentSchema(std::string_view name) const;
     bool unregisterDynamicComponent(std::string_view name);
     bool rollbackDynamicComponentSchema(std::string_view name);

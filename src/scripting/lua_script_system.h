@@ -22,7 +22,14 @@ struct LuaScriptId
 
 enum class LuaComponentFieldType { Number, Boolean, String };
 using LuaComponentValue = std::variant<double, bool, std::string>;
-struct LuaComponentField { std::string name; LuaComponentFieldType type; };
+struct LuaComponentField
+{
+    std::string name;
+    LuaComponentFieldType type;
+    std::uint32_t version = 1;
+    std::optional<LuaComponentValue> default_value;
+    bool operator==(const LuaComponentField&) const = default;
+};
 using LuaComponentValues = std::vector<std::pair<std::string, LuaComponentValue>>;
 
 // Engine services are injected so scripts do not depend on a particular ECS implementation.
@@ -36,7 +43,7 @@ struct EngineScriptApi
     std::function<std::optional<std::array<float, 3>>(std::int64_t)> get_position;
     // Dynamic components are stored by the host ECS in dense columns. Query
     // results must be sorted by packed entity id and remain a snapshot.
-    std::function<bool(std::string_view, const std::vector<LuaComponentField>&)> register_component;
+    std::function<bool(std::string_view, const std::vector<LuaComponentField>&, std::uint32_t)> register_component;
     std::function<bool(std::string_view)> has_component_schema;
     std::function<bool(std::string_view)> unregister_component;
     std::function<bool(std::string_view)> rollback_component_schema;
