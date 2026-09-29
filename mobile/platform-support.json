@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "status": "authored runtime implementation present; cross-build and GPU runtime gates pending",
+  "targets": {
+    "android": {
+      "minimumOs": "Android API 24",
+      "abi": ["arm64-v8a", "x86_64 (emulator)"],
+      "toolchain": ["Android SDK API 35", "NDK 27.2.12479018", "CMake 3.22.1", "JDK 17", "glslc", "SDL 3.4.16"],
+      "renderer": "Vulkan via SDL3 Android surface",
+      "instanceExtensions": ["VK_KHR_surface", "VK_KHR_android_surface"],
+      "deviceExtensions": ["VK_KHR_swapchain"],
+      "assets": "first-project manifest, scene, scripts, mesh and PPM plus mesh_textured SPIR-V copied into SDL_GetPrefPath private storage",
+      "input": "SDL finger events mapped to project inputActions; right-half touch presses move_right for authored Player Lua",
+      "lifecycle": "SDL event watch immediately pauses rendering on background; foreground rebuilds Vulkan surface and swapchain",
+      "buildGate": "mobile/android/build.sh assembles arm64 and x86_64 debug APKs",
+      "runtimeGate": "Install and launch on a Vulkan-capable API 24+ device; verify rendered frames, touch, pause/resume and rotation",
+      "verified": false
+    },
+    "ios": {
+      "minimumOs": "iOS 14.2",
+      "abi": ["arm64"],
+      "toolchain": ["macOS with Xcode", "CMake 3.28+", "Vulkan SDK iOS package/MoltenVK", "glslc", "SDL 3.4.16"],
+      "renderer": "Vulkan via SDL3 Metal surface and MoltenVK",
+      "instanceExtensions": ["VK_KHR_surface", "VK_EXT_metal_surface", "VK_KHR_portability_enumeration"],
+      "deviceExtensions": ["VK_KHR_swapchain", "VK_KHR_portability_subset when advertised"],
+      "assets": "first-project manifest, scene, scripts, mesh and PPM plus mesh_textured SPIR-V copied into SDL_GetPrefPath private storage",
+      "input": "SDL finger events mapped to project inputActions; right-half touch presses move_right for authored Player Lua",
+      "lifecycle": "SDL event watch immediately pauses rendering on background; foreground rebuilds Vulkan surface and swapchain",
+      "buildGate": "mobile/ios/build.sh builds a no-signing iOS Simulator app",
+      "runtimeGate": "Launch on a MoltenVK-enabled simulator or Metal-capable device; verify rendered frames, touch, pause/resume and rotation",
+      "verified": false
+    }
+  }
+}

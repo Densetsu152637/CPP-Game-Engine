@@ -1,0 +1,5 @@
+/build/
+/android/.deps/
+/android/.gradle/
+/android/app/build/
+/ios/.deps/
