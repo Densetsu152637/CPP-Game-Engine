@@ -33,20 +33,45 @@ else()
 endif()
 
 set(ROOT "${CMAKE_CURRENT_LIST_DIR}/..")
-file(GLOB_RECURSE ENGINE_SOURCES CONFIGURE_DEPENDS
-    "${ROOT}/src/*.cpp"
-    "${ROOT}/third_party/lua/*.c")
-list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/test/")
-list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/third_party/lua/(lua|onelua|ltests)\\.c$")
-list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/(main|commands)\\.cpp$")
-list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/core/display\\.cpp$")
-list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/interaction/(keyboard|mouse)\\.cpp$")
-list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/runtime/glfw_main\\.cpp$")
-list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/platform/platform_check\\.cpp$")
-list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/editor/")
-list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/automation/")
-list(FILTER ENGINE_SOURCES EXCLUDE REGEX "/src/tooling/")
-list(APPEND ENGINE_SOURCES "${ROOT}/src/tooling/iteration.cpp")
+# Compile the authored Project/Runtime path and its complete ECS, Lua, render,
+# and Vulkan dependencies. The legacy desktop Engine/GLFW shell is a separate
+# entry point and cannot be included in Android or iOS translation units.
+set(ENGINE_SOURCES
+    "${ROOT}/src/async/threadpool.cpp"
+    "${ROOT}/src/ecs/ecs.cpp"
+    "${ROOT}/src/ecs/processor.cpp"
+    "${ROOT}/src/ecs/core/dynamic_component_storage.cpp"
+    "${ROOT}/src/ecs/core/entity_registry.cpp"
+    "${ROOT}/src/ecs/jobs/ecs_job_scheduler.cpp"
+    "${ROOT}/src/ecs/rendering/ecs_render_bridge.cpp"
+    "${ROOT}/src/functional/result.cpp"
+    "${ROOT}/src/logging/logger.cpp"
+    "${ROOT}/src/logging/text_colour.cpp"
+    "${ROOT}/src/platform/mobile_main.cpp"
+    "${ROOT}/src/platform/sdl_mobile_window.cpp"
+    "${ROOT}/src/project/project.cpp"
+    "${ROOT}/src/project/runtime.cpp"
+    "${ROOT}/src/rendering/content.cpp"
+    "${ROOT}/src/rendering/render_device.cpp"
+    "${ROOT}/src/rendering/shader.cpp"
+    "${ROOT}/src/rendering/uniform_registry.cpp"
+    "${ROOT}/src/scripting/lua_script_system.cpp"
+    "${ROOT}/src/structs/packed_flags.cpp"
+    "${ROOT}/src/structs/smartstring.cpp"
+    "${ROOT}/src/structs/sparse_bit_field.cpp"
+    "${ROOT}/src/structs/vector.cpp"
+    "${ROOT}/src/tooling/iteration.cpp"
+    "${ROOT}/src/util/string_search.cpp"
+    "${ROOT}/src/util/toolbox.cpp"
+    "${ROOT}/src/vulcan/vulkan_frame_backend.cpp"
+    "${ROOT}/src/vulcan/vulkan_memory.cpp"
+    "${ROOT}/src/vulcan/vulkan_renderer.cpp"
+    "${ROOT}/src/vulcan/vulkan_shader.cpp"
+    "${ROOT}/src/vulcan/vulkan_surface_provider.cpp"
+    "${ROOT}/src/vulcan/vulkan_swapchain.cpp")
+file(GLOB LUA_SOURCES CONFIGURE_DEPENDS "${ROOT}/third_party/lua/*.c")
+list(FILTER LUA_SOURCES EXCLUDE REGEX "/(lua|onelua|ltests)\\.c$")
+list(APPEND ENGINE_SOURCES ${LUA_SOURCES})
 
 if(ANDROID)
     add_library(main SHARED ${ENGINE_SOURCES})
