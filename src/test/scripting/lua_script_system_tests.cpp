@@ -1,4 +1,5 @@
 #include "../../scripting/lua_script_system.h"
+#include "../../scripting/lua_source_file.h"
 #include "../../ecs/ecs.h"
 #include "../test_assertions.h"
 
@@ -536,14 +537,16 @@ void test_lua_project_declaration_preflight()
     std::filesystem::create_directories(sharedDirectory);
     const auto module = sharedDirectory / "helper.lua";
     const auto randomModule = sharedDirectory / "random.lua";
+    const auto oversizedModule = sharedDirectory / "oversized.lua";
     struct Cleanup
     {
-        std::filesystem::path file, randomFile, shared, scripts, directory;
+        std::filesystem::path file, randomFile, oversizedFile, shared, scripts, directory;
         ~Cleanup() { std::error_code ignored; std::filesystem::remove(file, ignored);
             std::filesystem::remove(randomFile, ignored);
+            std::filesystem::remove(oversizedFile, ignored);
             std::filesystem::remove(shared, ignored); std::filesystem::remove(scripts, ignored);
             std::filesystem::remove(directory, ignored); }
-    } cleanup{module, randomModule, sharedDirectory, scriptDirectory, directory};
+    } cleanup{module, randomModule, oversizedModule, sharedDirectory, scriptDirectory, directory};
     { std::ofstream output(module, std::ios::binary | std::ios::trunc);
         output << "assert(os == nil and coroutine == nil and math.random == nil and math.randomseed == nil); "
             "return { system_name='from-module' }\n";
@@ -570,6 +573,20 @@ void test_lua_project_declaration_preflight()
     test::require(!LuaScriptSystem::validate_declarations(Sources{{randomSource, scriptName}}, directory) &&
         !runtimeScripts.load_string(randomSource, scriptName),
         "modules must not call RNG functions in validation or runtime");
+    { std::ofstream output(oversizedModule, std::ios::binary | std::ios::trunc);
+        output.seekp(static_cast<std::streamoff>(scripting::max_lua_source_bytes));
+        output.put('x'); output.close();
+        test::require(output.good(), "oversized module fixture should be writable"); }
+    const std::string oversizedSource = "require('shared.oversized'); return {}";
+    const auto oversizedPreflight = LuaScriptSystem::validate_declarations(
+        Sources{{oversizedSource, scriptName}}, directory);
+    const auto oversizedRuntime = runtimeScripts.load_string(oversizedSource, scriptName);
+    const auto oversizedDirect = runtimeScripts.load_file(oversizedModule.string());
+    test::require(!oversizedPreflight && !oversizedRuntime && !oversizedDirect &&
+        oversizedPreflight.error().find("1 MiB limit") != std::string::npos &&
+        oversizedRuntime.error().find("1 MiB limit") != std::string::npos &&
+        oversizedDirect.error().find("1 MiB limit") != std::string::npos,
+        "oversized modules and direct scripts must be rejected before source allocation");
     const auto traversal = LuaScriptSystem::validate_declarations(Sources{{
         "require('..escape'); return {}", scriptName}}, directory);
     test::require(!traversal, "project module resolver must reject traversal-like module names");

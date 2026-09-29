@@ -1,4 +1,5 @@
 #include "lua_script_system.h"
+#include "lua_source_file.h"
 
 #include <algorithm>
 #include <array>
@@ -6,7 +7,6 @@
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
-#include <fstream>
 #include <limits>
 #include <map>
 #include <set>
@@ -271,12 +271,10 @@ struct LuaScriptSystem::Impl
                 lua_rawgeti(lua, LUA_REGISTRYINDEX, found->second);
                 return 1;
             }
-            std::ifstream file(resolved, std::ios::binary);
-            if (!file) throw std::runtime_error("unable to open module: " + key);
-            const std::string source((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-            if (file.bad()) throw std::runtime_error("unable to read module: " + key);
-            if (source.size() > 1024 * 1024) throw std::runtime_error("module exceeds the 1 MiB source limit: " + key);
-            if (luaL_loadbuffer(lua, source.data(), source.size(), ("@" + key).c_str()) != LUA_OK)
+            const auto source = scripting::read_lua_source_file(resolved);
+            if (!source) throw std::runtime_error(std::string(scripting::lua_source_error_message(source.error())) +
+                ": " + key);
+            if (luaL_loadbuffer(lua, source->data(), source->size(), ("@" + key).c_str()) != LUA_OK)
                 throw std::runtime_error(self->pop_error());
             // Give modules the same restricted globals in preflight and at
             // runtime, so validation cannot resolve a different module path
@@ -1067,11 +1065,10 @@ LuaScriptSystem::LoadResult LuaScriptSystem::load_file(const std::string& path, 
     if (!impl || impl->closed) return std::unexpected("Lua runtime is shut down");
     if (impl->lua_execution_depth != 0) return std::unexpected("cannot load scripts during Lua execution");
     Impl::ExecutionScope execution(*impl);
-    std::ifstream file(path, std::ios::binary);
-    if (!file) return std::unexpected("unable to open Lua script: " + path);
-    std::string source((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    if (file.bad()) return std::unexpected("unable to read Lua script: " + path);
-    return impl->load(source, "@" + path, std::move(context));
+    auto source = scripting::read_lua_source_file(path);
+    if (!source) return std::unexpected(
+        std::string(scripting::lua_source_error_message(source.error())) + ": " + path);
+    return impl->load(*source, "@" + path, std::move(context));
 }
 
 LuaScriptSystem::LoadResult LuaScriptSystem::load_string(const std::string_view source, const std::string_view chunk_name)

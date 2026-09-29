@@ -4,11 +4,11 @@
 #include "../components/alias.h"
 #include "../ecs/processor.h"
 #include "../scripting/lua_script_system.h"
+#include "../scripting/lua_source_file.h"
 
 #include <algorithm>
 #include <cmath>
 #include <deque>
-#include <fstream>
 #include <iterator>
 #include <iostream>
 #include <limits>
@@ -256,29 +256,25 @@ namespace project
         {
             if (!authored.script) continue;
             const auto& path = resolvedScripts.at(authored.id);
-            std::ifstream file(path, std::ios::binary);
-            if (!file)
+            auto source = scripting::read_lua_source_file(path);
+            if (!source)
             {
                 (void)state.scripts->shutdown();
                 state.scripts.reset();
-                return std::unexpected(runtimeError("runtime.script.read", path, "Unable to open referenced Lua script"));
-            }
-            std::string source((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-            if (file.bad())
-            {
-                (void)state.scripts->shutdown();
-                state.scripts.reset();
-                return std::unexpected(runtimeError("runtime.script.read", path, "Unable to read referenced Lua script"));
+                return std::unexpected(runtimeError(
+                    source.error() == scripting::LuaSourceReadError::TooLarge
+                        ? "runtime.script.too_large" : "runtime.script.read",
+                    path, std::string(scripting::lua_source_error_message(source.error()))));
             }
             const std::string chunkName = "@" + path.string();
-            const auto valid = state.scripts->validate_string(source, chunkName);
+            const auto valid = state.scripts->validate_string(*source, chunkName);
             if (!valid)
             {
                 (void)state.scripts->shutdown();
                 state.scripts.reset();
                 return std::unexpected(runtimeError("runtime.script.compile", path, valid.error()));
             }
-            scriptSources.emplace(authored.id, std::move(source));
+            scriptSources.emplace(authored.id, std::move(*source));
         }
         std::vector<std::pair<std::string, std::string>> declarations;
         for (const SceneEntity& authored : state.project.scene.entities)

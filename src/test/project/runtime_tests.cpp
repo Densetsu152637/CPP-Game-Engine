@@ -1,4 +1,5 @@
 #include "project/runtime.h"
+#include "scripting/lua_source_file.h"
 #include "test/test_assertions.h"
 #include "tooling/iteration.h"
 
@@ -314,6 +315,16 @@ namespace
         test::require(std::count(logs.begin(), logs.end(), "first-created") == 1,
             "valid earlier script should first receive on_create after all declarations pass");
         test::require(runtime.stop().has_value(), "corrected declaration runtime should stop");
+        { std::ofstream output(source, std::ios::binary | std::ios::trunc);
+            output.seekp(static_cast<std::streamoff>(scripting::max_lua_source_bytes));
+            output.put('x'); output.close();
+            test::require(output.good(), "oversized root script fixture should be writable"); }
+        logs.clear();
+        const auto oversized = runtime.start();
+        test::require(!oversized && oversized.error().front().code == "runtime.script.too_large" &&
+            oversized.error().front().message.find("1 MiB limit") != std::string::npos &&
+            runtime.liveEntityCount() == 0 && logs.empty(),
+            "oversized attached scripts must fail before ECS creation or Lua callbacks");
     }
 
     void onCreateFailureCleansScriptAndSpawnedEntities()
