@@ -42,7 +42,7 @@ jobs:
             "emulator" \
             "system-images;android-${ANDROID_API};google_apis;x86_64"
           sudo apt-get update
-          sudo apt-get install -y glslc=2023.8-1build1
+          sudo apt-get install -y glslc=2023.8-1build1 python3-pil
           glslc --version
           java -version
           "$ANDROID_HOME/platform-tools/adb" version
@@ -112,17 +112,30 @@ jobs:
             sleep 1
           done
           [[ "$rendered" == true ]] || { cat "$RUNNER_TEMP/android-logcat-start.txt"; exit 1; }
-          "$adb" exec-out screencap -p > "$RUNNER_TEMP/android-before-touch.png"
-          read -r screen_width screen_height tap_x tap_y < <(python3 - "$RUNNER_TEMP/android-before-touch.png" <<'PY'
-          import struct, sys
-          data = open(sys.argv[1], "rb").read(24)
-          if data[:8] != b"\x89PNG\r\n\x1a\n":
-              raise SystemExit("Emulator screenshot is not a PNG")
-          width, height = struct.unpack(">II", data[16:24])
-          if width < 2 or height < 2:
-              raise SystemExit(f"Invalid emulator screen size: {width}x{height}")
-          x, y = width * 3 // 4, height // 2
-          print(width, height, x, y)
+          read -r screen_width screen_height tap_x tap_y < <(/usr/bin/python3 - "$adb" "$RUNNER_TEMP/android-before-touch.png" <<'PY'
+          import io, subprocess, sys, time
+          from PIL import Image
+
+          adb, output = sys.argv[1:]
+          deadline = time.monotonic() + 60
+          while time.monotonic() < deadline:
+              capture = subprocess.run([adb, "exec-out", "screencap", "-p"],
+                                       check=True, capture_output=True, timeout=15)
+              image = Image.open(io.BytesIO(capture.stdout)).convert("RGB")
+              width, height = image.size
+              sample = image.resize((64, 64))
+              cyan_pixels = sum(1 for red, green, blue in sample.getdata()
+                                if blue > 120 and green > red + 40 and blue > red + 60)
+              if cyan_pixels > 10:
+                  with open(output, "wb") as screenshot:
+                      screenshot.write(capture.stdout)
+                  x, y = width * 3 // 4, height // 2
+                  print(width, height, x, y)
+                  print(f"Visible rendered Player mesh detected ({cyan_pixels} cyan sample pixels)", file=sys.stderr)
+                  break
+              time.sleep(1)
+          else:
+              raise SystemExit("No visible rendered Player mesh detected after Vulkan frame marker")
           PY
           )
           echo "Sending authored right-half touch at $tap_x,$tap_y on ${screen_width}x${screen_height} display"
