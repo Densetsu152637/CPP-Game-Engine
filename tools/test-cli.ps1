@@ -57,6 +57,12 @@ try {
         $declaration.result.diagnostics[0].path -ne 'asset:player-script') {
         throw 'Static script declaration diagnostic changed'
     }
+    Set-Content -LiteralPath $scriptPath -Value ('-' * (1048577)) -Encoding ascii
+    $oversized = Invoke-Result @('project', 'validate', $manifest) 1
+    if ($oversized.result.diagnostics[0].code -ne 'project.script.too_large' -or
+        $oversized.result.diagnostics[0].path -ne 'asset:player-script') {
+        throw 'Oversized script diagnostic changed'
+    }
 } finally { Set-Content -LiteralPath $scriptPath -Value $originalScript -Encoding ascii }
 $package = Join-Path $scratch 'package'
 Invoke-Result @('project', 'package', $manifest, $package, '--runtime', $enginePath) | Out-Null

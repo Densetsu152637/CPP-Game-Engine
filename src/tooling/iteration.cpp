@@ -10,6 +10,7 @@
 #include <set>
 #include <sstream>
 #include <system_error>
+#include "scripting/lua_source_file.h"
 #include "../../third_party/picojson/picojson.h"
 
 extern "C"
@@ -406,15 +407,14 @@ namespace tooling
 
     project::Result<void> validateLua(const std::filesystem::path& file)
     {
-        if (!std::filesystem::is_regular_file(file))
-            return std::unexpected(error("script.read.failed", file, "", "Script is missing or not a regular file"));
-        std::ifstream input(file, std::ios::binary);
-        if (!input) return std::unexpected(error("script.read.failed", file, "", "Script cannot be read"));
-        const std::string source{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
-        if (input.bad()) return std::unexpected(error("script.read.failed", file, "", "Script read failed"));
+        const auto source = scripting::read_lua_source_file(file);
+        if (!source)
+            return std::unexpected(error(source.error() == scripting::LuaSourceReadError::TooLarge
+                ? "script.size.invalid" : "script.read.failed", file, "",
+                std::string(scripting::lua_source_error_message(source.error()))));
         lua_State* state = luaL_newstate();
         if (!state) return std::unexpected(error("script.validation.runtime", file, "", "Could not create Lua validation state"));
-        const int status = luaL_loadbuffer(state, source.data(), source.size(), ("@" + file.string()).c_str());
+        const int status = luaL_loadbuffer(state, source->data(), source->size(), ("@" + file.string()).c_str());
         if (status == LUA_OK) { lua_pop(state, 1); lua_close(state); return {}; }
         const char* message = lua_tostring(state, -1);
         const std::string reason = message ? message : "Lua compiler reported an unknown error";
@@ -425,8 +425,12 @@ namespace tooling
     project::Result<StagedScript> stageScriptReload(const std::filesystem::path& file)
     {
         if (auto valid = validateLua(file); !valid) return std::unexpected(valid.error());
-        const auto source = readText(file);
-        return StagedScript{file, source, contentHash(file)};
+        auto source = scripting::read_lua_source_file(file);
+        if (!source)
+            return std::unexpected(error(source.error() == scripting::LuaSourceReadError::TooLarge
+                ? "script.size.invalid" : "script.read.failed", file, "",
+                std::string(scripting::lua_source_error_message(source.error()))));
+        return StagedScript{file, std::move(*source), contentHash(file)};
     }
 
     project::Result<void> stageRuntimeScriptReload(project::Runtime& runtime, std::string_view authoredEntityId,
@@ -454,6 +458,12 @@ namespace tooling
     project::Result<void> validateShaders(const std::filesystem::path& projectRoot,
         const std::filesystem::path& compiler)
     {
+#ifdef CPP_GAME_ENGINE_MOBILE
+        (void)projectRoot;
+        (void)compiler;
+        return std::unexpected(error("shader.compiler.unsupported", {}, "",
+            "On-device GLSL compilation is unavailable; package precompiled SPIR-V shaders"));
+#else
         if (compiler.empty() || !std::filesystem::exists(compiler))
             return std::unexpected(error("shader.compiler.missing", compiler, "", "GLSL compiler was not found; install the Vulkan SDK or pass glslc path"));
         std::error_code rootError;
@@ -492,11 +502,18 @@ namespace tooling
         std::filesystem::remove_all(temp, ec);
         if (!diagnostics.empty()) return std::unexpected(std::move(diagnostics));
         return {};
+#endif
     }
 
     project::Result<std::filesystem::path> importShaders(const std::filesystem::path& projectRoot,
         const std::filesystem::path& compiler)
     {
+#ifdef CPP_GAME_ENGINE_MOBILE
+        (void)projectRoot;
+        (void)compiler;
+        return std::unexpected(error("shader.compiler.unsupported", {}, "",
+            "On-device GLSL compilation is unavailable; package precompiled SPIR-V shaders"));
+#else
         if (compiler.empty() || !std::filesystem::exists(compiler))
             return std::unexpected(error("shader.compiler.missing", compiler, "", "GLSL compiler was not found; install the Vulkan SDK or pass glslc path"));
         std::error_code rootError;
@@ -575,6 +592,7 @@ namespace tooling
         std::filesystem::remove_all(stage, ec);
         if (publishFailed) return std::unexpected(error("shader.import.publish", cache, "", "Could not publish imported shader output"));
         return cache;
+#endif
     }
 
     project::Result<std::filesystem::path> packageProject(const project::Project& project,

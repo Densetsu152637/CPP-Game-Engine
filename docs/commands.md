@@ -71,6 +71,8 @@ not call lifecycle or system callbacks. Both validation and `run` use the same
 restricted project-script globals: safe logging and project-local `require` are
 available, while direct file, OS, network, package, debug, and dynamic loading
 APIs are unavailable. Native host callbacks and logs can still have effects.
+Each Lua source file, including project-local modules, has a 1 MiB size limit;
+oversized project scripts report `project.script.too_large` during validation.
 
 The legacy no-subcommand demo flags remain available for renderer smoke/manual
 comparison. They print human text and are not part of the JSON command contract.

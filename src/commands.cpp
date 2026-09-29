@@ -10,6 +10,7 @@
 #include "rendering/material.h"
 #include "rendering/render_device.h"
 #include "scripting/lua_script_system.h"
+#include "scripting/lua_source_file.h"
 #include "vulcan/vulkan_frame_backend.h"
 #include "vulcan/vulkan_surface_provider.h"
 #include "../third_party/picojson/picojson.h"
@@ -19,9 +20,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <iterator>
 #include <map>
 #include <memory>
 #include <set>
@@ -86,15 +85,17 @@ project::Result<void> compileScripts(const project::Project& value) {
         if (!path) return std::unexpected(path.error());
         try {
             if (asset.kind == "script") {
+                auto source = scripting::read_lua_source_file(*path);
+                if (!source) {
+                    const bool tooLarge = source.error() == scripting::LuaSourceReadError::TooLarge;
+                    return std::unexpected(project::Diagnostics{{tooLarge ? "project.script.too_large" : "project.script.read",
+                        project::Severity::Error, *path, id, std::string(scripting::lua_source_error_message(source.error()))}});
+                }
                 auto valid = tooling::validateLua(*path);
                 if (!valid) return std::unexpected(valid.error());
-                std::ifstream source(*path, std::ios::binary);
-                if (!source) return std::unexpected(project::Diagnostics{{"project.script.read", project::Severity::Error, *path, id, "Unable to open script for declaration validation"}});
-                std::string text((std::istreambuf_iterator<char>(source)), std::istreambuf_iterator<char>());
-                if (source.bad()) return std::unexpected(project::Diagnostics{{"project.script.read", project::Severity::Error, *path, id, "Unable to read script for declaration validation"}});
                 const std::string chunkName = "@" + path->string();
                 scriptOrigins.emplace(chunkName, std::pair<Path, std::string>{*path, id});
-                declarations.emplace_back(std::move(text), chunkName);
+                declarations.emplace_back(std::move(*source), chunkName);
             } else if (asset.kind == "mesh") (void)rendering::loadMeshAsset(*path);
             else if (asset.kind == "texture") (void)rendering::loadTexturePpm(*path);
         } catch (const std::exception& error) {
