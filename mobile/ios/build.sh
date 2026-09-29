@@ -35,3 +35,5 @@ cmake -S "$root/mobile" -B "$root/build/mobile-ios" -G Xcode \
     -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
     -DSDL3_SOURCE_DIR="$deps"
 cmake --build "$root/build/mobile-ios" --config Debug --target CPPGameEngineMobile
+python3 "$root/mobile/ios/write-test-scheme.py" \
+    "$root/build/mobile-ios/CPPGameEngineMobile.xcodeproj"
