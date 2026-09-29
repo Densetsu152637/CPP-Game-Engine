@@ -9,15 +9,19 @@
 #include "rendering/camera.h"
 #include "rendering/material.h"
 #include "rendering/render_device.h"
+#include "scripting/lua_script_system.h"
 #include "vulcan/vulkan_frame_backend.h"
 #include "vulcan/vulkan_surface_provider.h"
 #include "../third_party/picojson/picojson.h"
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <set>
@@ -75,6 +79,8 @@ int success(const std::string& command, const std::string& result = "{}") {
     std::cout << project::resultJson(true, command, result) << '\n'; return 0;
 }
 project::Result<void> compileScripts(const project::Project& value) {
+    std::vector<std::pair<std::string, std::string>> declarations;
+    std::map<std::string, std::pair<Path, std::string>> scriptOrigins;
     for (const auto& [id, asset] : value.assets) {
         auto path = project::resolveAsset(value, id);
         if (!path) return std::unexpected(path.error());
@@ -82,10 +88,32 @@ project::Result<void> compileScripts(const project::Project& value) {
             if (asset.kind == "script") {
                 auto valid = tooling::validateLua(*path);
                 if (!valid) return std::unexpected(valid.error());
+                std::ifstream source(*path, std::ios::binary);
+                if (!source) return std::unexpected(project::Diagnostics{{"project.script.read", project::Severity::Error, *path, id, "Unable to open script for declaration validation"}});
+                std::string text((std::istreambuf_iterator<char>(source)), std::istreambuf_iterator<char>());
+                if (source.bad()) return std::unexpected(project::Diagnostics{{"project.script.read", project::Severity::Error, *path, id, "Unable to read script for declaration validation"}});
+                const std::string chunkName = "@" + path->string();
+                scriptOrigins.emplace(chunkName, std::pair<Path, std::string>{*path, id});
+                declarations.emplace_back(std::move(text), chunkName);
             } else if (asset.kind == "mesh") (void)rendering::loadMeshAsset(*path);
             else if (asset.kind == "texture") (void)rendering::loadTexturePpm(*path);
         } catch (const std::exception& error) {
             return std::unexpected(project::Diagnostics{{"asset.content.invalid", project::Severity::Error, *path, id, error.what()}});
+        }
+    }
+    if (!declarations.empty()) {
+        const auto valid = LuaScriptSystem::validate_declarations(declarations, value.root);
+        if (!valid) {
+            Path file = value.manifest;
+            std::string field = "assets";
+            for (const auto& [chunkName, origin] : scriptOrigins)
+                if (valid.error().starts_with(chunkName + ": ")) {
+                    file = origin.first;
+                    field = origin.second;
+                    break;
+                }
+            return std::unexpected(project::Diagnostics{{"project.script.declaration", project::Severity::Error,
+                file, field, valid.error()}});
         }
     }
     return {};
@@ -142,6 +170,13 @@ public:
             surface = std::make_unique<vulkan::VulkanGlfwSurfaceProvider>(window);
             device = std::make_unique<rendering::RenderDevice>(
                 std::make_unique<vulkan::VulkanFrameBackend>(*surface));
+            const auto capabilities = device->capabilities();
+            for (const auto feature : std::array{rendering::RenderFeature::BackendAvailable,
+                    rendering::RenderFeature::SampledTextures, rendering::RenderFeature::DepthAttachment}) {
+                const auto status = capabilities.feature(feature);
+                if (!status.supported)
+                    throw std::runtime_error(std::string("Authored preview requires ") + status.name + ": " + status.reason);
+            }
             shaderHandle = device->createShader(shader);
             for (const auto& drawable : pending)
                 drawables.push_back({drawable.entityId,

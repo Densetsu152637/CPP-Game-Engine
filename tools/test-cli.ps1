@@ -51,6 +51,12 @@ try {
     Set-Content -LiteralPath $scriptPath -Value 'return { invalid lua' -Encoding ascii
     $invalid = Invoke-Result @('project', 'validate', $manifest) 1
     if (!$invalid.result.diagnostics[0].code) { throw 'Missing script diagnostic' }
+    Set-Content -LiteralPath $scriptPath -Value 'return { systems = {{ name = "Bad", all = {"Missing"}, reads = {}, writes = {}, update = function() end }} }' -Encoding ascii
+    $declaration = Invoke-Result @('project', 'validate', $manifest) 1
+    if ($declaration.result.diagnostics[0].code -ne 'project.script.declaration' -or
+        $declaration.result.diagnostics[0].path -ne 'asset:player-script') {
+        throw 'Static script declaration diagnostic changed'
+    }
 } finally { Set-Content -LiteralPath $scriptPath -Value $originalScript -Encoding ascii }
 $package = Join-Path $scratch 'package'
 Invoke-Result @('project', 'package', $manifest, $package, '--runtime', $enginePath) | Out-Null
