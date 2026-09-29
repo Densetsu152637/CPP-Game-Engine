@@ -8,6 +8,27 @@ smoke test with the Khronos validation layer. Put the SDK `Bin` directory on
 Builds without `VULKAN=1` retain backend-neutral shader and uniform support;
 attempting Vulkan initialization or drawing reports a disabled-backend error.
 
+Desktop rendering goes through `rendering::RenderDevice`. Its backend worker
+creates and owns Vulkan resources and submits GPU frames. Callers create shader,
+mesh, and texture handles from copied descriptions, then record complete draws
+and uniform values in a `RenderCommandBuffer`. Frame recording may run on several
+CPU threads. Use `record(draw, DrawOrderKey{producer, drawIndex})` when draws are
+recorded concurrently and their order matters: submission sorts those keys;
+duplicate keys and mixing keyed with serial records are rejected. Serial
+`record(draw)` keeps call order. `submit` seals the frame; `wait(ticket)` and
+`waitIdle()` establish completion before dependent work or shutdown. The device
+retains resources referenced by queued frames, so temporary CPU descriptions
+may be released after handle creation. Window events still run on the window
+owner's thread through the surface provider.
+
+`device.capabilities().feature(RenderFeature::SampledTextures)` and the other
+named feature queries return support plus a reason when unsupported.
+`diagnostics()` prints all feature statuses. The authored preview requires an
+initialized backend, sampled textures, and a depth attachment and reports the
+specific missing feature before submitting a draw. CPU-parallel recording does
+not imply parallel GPU command encoding; the Vulkan backend encodes on one
+render worker.
+
 The Vulkan backend records a render pass, binds a graphics pipeline and descriptor
 sets, submits to the graphics queue, and presents the result. `render(shader,
 uploads)` retains the procedural triangle used as a renderer smoke fixture.
@@ -54,8 +75,8 @@ location 0 (`Float3`) and UV at location 1 (`Float2`).
 RGB pixels to opaque row-major RGBA8. The loader caps each dimension at 8192 and
 the image at 16,777,216 texels. Vulkan currently samples `R8G8B8A8_UNORM` with
 nearest filtering and repeat addressing. Texture bytes are uploaded synchronously
-when the draw is recorded and retained through frame completion; this simple path
-is intended for the first sample, not high-volume streaming.
+by the Vulkan backend and retained through frame completion. The persistent
+`RenderDevice` path caches texture resources by handle for reuse across frames.
 The authored sample stores `asset:player-mesh` at
 `examples/first-project/assets/player.mesh` and `asset:player-texture` at
 `examples/first-project/assets/player.ppm`.
@@ -76,7 +97,9 @@ Minimized windows skip acquisition. Cancellation discards draws and submits a
 clear frame to consume the acquire semaphore and release the acquired image.
 Initialization/submission failures clean up the device state; initialize again
 before retrying. Keep the GLFW window alive until renderer shutdown, and run frame
-coordination on its owning thread after all render jobs have finished.
+coordination on its owning thread after all render jobs have finished when using
+`VulkanRenderer` directly. With `RenderDevice`, poll window events on that thread
+and use `wait` or `waitIdle` before destroying the surface.
 
 Enable `VulkanRendererConfig::enableValidationLayers` to request the installed
 `VK_LAYER_KHRONOS_validation` layer. This is deliberately an explicit requirement:

@@ -15,6 +15,8 @@ engine project shaders build/my-project/project.json --compiler <path-to-glslc>
 engine project package build/my-project/project.json build/my-package --runtime <engine-executable>
 engine editor build/my-project/project.json
 engine mcp build/my-project
+engine platform check android --format json
+engine platform check ios --format json
 ```
 
 `project init` copies a validated template into a new destination. Asset indexing
@@ -28,6 +30,13 @@ Every ordinary project/scene/run command emits exactly one JSON document to
 stdout, including on failure. `--format json` is optional and is the only format.
 Human diagnostics and script logs go to stderr. MCP instead uses its documented
 [stdio protocol](mcp.md); the native editor has its own window.
+
+`platform check` reports whether this checkout and host have the build tools and
+files for Android or iOS. The JSON result includes `readyToBuild`, backend,
+platform requirements, and coded diagnostics. It exits 1 when a prerequisite is
+missing or the host is unsupported. A successful check does not establish that
+the app launches or presents frames on a device; see the [mobile build guide](../mobile/README.md)
+for the separate runtime gates.
 
 ```json
 {"schema":1,"ok":false,"command":"project validate","result":{"diagnostics":[{"code":"project.read","severity":"error","file":"project.json","path":"","message":"..."}]}}
@@ -56,8 +65,12 @@ opaque white texture when the optional texture reference is omitted.
 For the supplied sample, equal ticks and input produce equal normalized state
 on the same platform. The fixture uses no random values. This is not a guarantee
 for arbitrary Lua programs, external effects, other architectures, logs, or GPU
-pixels. Static validation compiles referenced Lua without running it; `run`
-executes project code and does not sandbox file or network side effects.
+pixels. Static validation compiles referenced Lua and checks top-level component
+and system declarations in a separate restricted, budgeted Lua state. It does
+not call lifecycle or system callbacks. Both validation and `run` use the same
+restricted project-script globals: safe logging and project-local `require` are
+available, while direct file, OS, network, package, debug, and dynamic loading
+APIs are unavailable. Native host callbacks and logs can still have effects.
 
 The legacy no-subcommand demo flags remain available for renderer smoke/manual
 comparison. They print human text and are not part of the JSON command contract.

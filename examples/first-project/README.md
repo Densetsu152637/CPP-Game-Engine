@@ -15,6 +15,23 @@ tick; scripts never poll the window directly.
 The sample runtime's `move_right` action is mapped from the authored
 `inputActions` entry to Right Arrow in visible mode and can be injected directly
 in headless fixtures.
+Project scripts can use Lua math/string/table/UTF-8 helpers, safe logging, and
+`require` for project-local modules. Direct file and OS APIs are unavailable in
+both validation and play.
+
+`player.lua` also declares a typed `PlayerStats` component and initializes it on
+the authored player through `self.set_component`. Its `PlayerStatsTick` system
+queries entities with that component and updates the tick and move counters.
+Each system declares `all`, `reads`, and `writes` component lists, plus an
+`update(entity, delta_seconds)` callback. Conflicting access at the same phase
+and order is rejected when the script loads.
+System queries visit packed entity handles in sorted order. Structural edits
+made during Lua callbacks become visible after the tick's successful boundary;
+if a callback fails, the runtime discards queued ECS edits and faults. Lua-local
+state, logs, and external side effects already performed by a callback cannot be
+rolled back. A component schema remains registered while the Runtime runs, even
+when its script is replaced or fails; identical schemas can be registered by
+other scripts, while conflicting definitions are rejected.
 
 From the repository root, validate and inspect the data with:
 

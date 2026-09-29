@@ -38,6 +38,9 @@ build/debug-vk0/bin/CPPGameEngine editor examples/first-project/project.json
 
 See [command and packaging usage](docs/commands.md), the
 [project/scene contract](docs/project-format.md), and the [read-only MCP adapter](docs/mcp.md).
+Android and iOS builds use the same authored project runtime through SDL3; see
+the [mobile build guide](mobile/README.md) and run `CPPGameEngine platform check android`
+or `CPPGameEngine platform check ios` to inspect host prerequisites.
 The native authoring editor is Windows-only and provides hierarchy, selection,
 typed position/script edits, asset selection, validation, save/reload, undo/redo,
 and isolated play/stop. The editor has no embedded viewport; the visible `run`
