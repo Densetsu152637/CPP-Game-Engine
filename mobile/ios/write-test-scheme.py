@@ -17,13 +17,23 @@ def target(name: str, product: str) -> tuple[str, str, str]:
     if len(matches) != 1:
         raise RuntimeError(f"Expected one Xcode native target named {name}, found {len(matches)}")
     body = pbxproj[matches[0].end():].split("};", 1)[0]
-    product_reference = re.search(
-        r"\bproductReference\s*=\s*[A-Fa-f0-9]{24}\s*/\*\s*([^*]+?)\s*\*/\s*;",
-        body,
+    product_reference = re.search(r"\bproductReference\s*=\s*([A-Fa-f0-9]{24})\b", body)
+    if not product_reference:
+        raise RuntimeError(f"Xcode target {name} has no productReference")
+    # CMake may label the productReference comment with the target name rather
+    # than its .app/.xctest filename. Follow the ID to its PBXFileReference.
+    file_pattern = (
+        rf"(?m)^\s*{product_reference.group(1)} /\* [^*]+ \*/ = "
+        rf"\{{\s*isa = PBXFileReference;"
     )
-    if not product_reference or product_reference.group(1).strip() != product:
-        actual = product_reference.group(1).strip() if product_reference else "missing"
-        raise RuntimeError(f"Xcode target {name} has product {actual}, expected {product}")
+    file_matches = list(re.finditer(file_pattern, pbxproj))
+    if len(file_matches) != 1:
+        raise RuntimeError(f"Xcode target {name} has no unique product file reference")
+    file_body = pbxproj[file_matches[0].end():].split("};", 1)[0]
+    path_match = re.search(r'\bpath\s*=\s*(?:"([^"]+)"|([^;]+))\s*;', file_body)
+    actual = (path_match.group(1) or path_match.group(2)).strip() if path_match else "missing"
+    if actual != product:
+        raise RuntimeError(f"Xcode target {name} has product path {actual}, expected {product}")
     return name, product, matches[0].group(1)
 
 
