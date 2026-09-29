@@ -1,0 +1,218 @@
+name: Mobile builds and launch smoke tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      ANDROID_NDK_VERSION: 27.2.12479018
+      ANDROID_API: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install pinned Android SDK components and shader compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +o pipefail
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          license_status=${PIPESTATUS[1]}
+          set -o pipefail
+          [[ "$license_status" == 0 ]]
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" \
+            "platforms;android-${ANDROID_API}" \
+            "build-tools;35.0.0" \
+            "cmake;3.22.1" \
+            "ndk;${ANDROID_NDK_VERSION}" \
+            "emulator" \
+            "system-images;android-${ANDROID_API};google_apis;x86_64"
+          sudo apt-get update
+          sudo apt-get install -y glslc=2023.8-1build1
+          glslc --version
+          java -version
+          "$ANDROID_HOME/platform-tools/adb" version
+      - name: Build Android APK
+        shell: bash
+        run: bash mobile/android/build.sh
+      - name: Boot emulator and verify touch, rendering, and lifecycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          avdmanager="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
+          "$avdmanager" create avd --force --name cpp-game-engine-ci \
+            --package "system-images;android-${ANDROID_API};google_apis;x86_64" \
+            --device pixel_2 <<< 'no'
+          "$ANDROID_HOME/emulator/emulator" -avd cpp-game-engine-ci \
+            -no-window -no-audio -no-boot-anim -no-snapshot \
+            -gpu swiftshader_indirect -accel on \
+            > "$RUNNER_TEMP/android-emulator.log" 2>&1 &
+          adb="$ANDROID_HOME/platform-tools/adb"
+          "$adb" wait-for-device
+          for attempt in $(seq 1 90); do
+            booted="$($adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+            [[ "$booted" == 1 ]] && break
+            sleep 2
+          done
+          [[ "${booted:-}" == 1 ]] || { cat "$RUNNER_TEMP/android-emulator.log"; exit 1; }
+          "$adb" shell pm list features > "$RUNNER_TEMP/android-features.txt"
+          "$adb" install -r mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          "$adb" shell am start -W -n com.cppgameengine.mobile/.GameActivity
+          sleep 5
+          "$adb" shell input tap 900 960
+          sleep 3
+          "$adb" shell input keyevent KEYCODE_HOME
+          sleep 3
+          "$adb" shell am start -W -n com.cppgameengine.mobile/.GameActivity
+          sleep 5
+          "$adb" shell settings put system accelerometer_rotation 0
+          "$adb" shell settings put system user_rotation 1
+          sleep 3
+          "$adb" shell settings put system user_rotation 0
+          sleep 3
+          "$adb" shell pidof com.cppgameengine.mobile
+          "$adb" exec-out screencap -p > "$RUNNER_TEMP/android-screen.png"
+          "$adb" logcat -d -v threadtime > "$RUNNER_TEMP/android-logcat.txt"
+          python3 - "$RUNNER_TEMP/android-logcat.txt" <<'PY'
+          import re, sys
+          log = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+          assert "MOBILE_STATE event=pause" in log, "app never reported pausing"
+          assert "MOBILE_STATE event=resume" in log, "app never reported resuming"
+          generations = set()
+          moved = False
+          for line in log.splitlines():
+              if "MOBILE_STATE event=frame" not in line or "rendered=1" not in line:
+                  continue
+              gen = re.search(r"generation=(\d+)", line)
+              pos = re.search(r"x=(-?\d+(?:\.\d+)?)", line)
+              if gen:
+                  generations.add(int(gen.group(1)))
+              if pos and float(pos.group(1)) > 0:
+                  moved = True
+          assert moved, "right-side touch did not move and render the authored entity"
+          assert len(generations) >= 2, f"no post-lifecycle rendered generation change: {generations}"
+          print(f"Rendered touch action and generations {sorted(generations)}")
+          PY
+          test -s "$RUNNER_TEMP/android-screen.png"
+          file "$RUNNER_TEMP/android-screen.png"
+      - name: Save Android build and emulator evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-mobile-ci
+          if-no-files-found: warn
+          path: |
+            mobile/android/app/build/outputs/apk/debug/app-debug.apk
+            ${{ runner.temp }}/android-emulator.log
+            ${{ runner.temp }}/android-features.txt
+            ${{ runner.temp }}/android-logcat.txt
+            ${{ runner.temp }}/android-screen.png
+
+  ios-simulator:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      VULKAN_SDK_VERSION: 1.4.357.1
+      VULKAN_SDK_SHA256: cf23e604e6b8b82c18eaba329f5623ea5a309d949a98d49a61a161d576c769a5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Select pinned Xcode and install Vulkan SDK with iOS support
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo xcode-select --switch /Applications/Xcode_26.3.app
+          xcodebuild -version
+          xcrun --sdk iphonesimulator --show-sdk-version
+          archive="$RUNNER_TEMP/vulkansdk-macos-${VULKAN_SDK_VERSION}.zip"
+          curl --fail --location --retry 3 \
+            "https://sdk.lunarg.com/sdk/download/${VULKAN_SDK_VERSION}/mac/vulkansdk-macos-${VULKAN_SDK_VERSION}.zip" \
+            --output "$archive"
+          echo "${VULKAN_SDK_SHA256}  ${archive}" | shasum -a 256 --check
+          mkdir -p "$RUNNER_TEMP/vulkan-installer"
+          unzip -q "$archive" -d "$RUNNER_TEMP/vulkan-installer"
+          installer="$RUNNER_TEMP/vulkan-installer/vulkansdk-macOS-${VULKAN_SDK_VERSION}.app/Contents/MacOS/vulkansdk-macOS-${VULKAN_SDK_VERSION}"
+          "$installer" --root "$RUNNER_TEMP/VulkanSDK/${VULKAN_SDK_VERSION}" \
+            --accept-licenses --default-answer --confirm-command \
+            install com.lunarg.vulkan.core com.lunarg.vulkan.ios copy_only=1
+          echo "VULKAN_SDK=$RUNNER_TEMP/VulkanSDK/${VULKAN_SDK_VERSION}/macOS" >> "$GITHUB_ENV"
+          echo "${RUNNER_TEMP}/VulkanSDK/${VULKAN_SDK_VERSION}/macOS/bin" >> "$GITHUB_PATH"
+          cmake --version
+      - name: Build iOS Simulator app
+        shell: bash
+        run: bash mobile/ios/build.sh
+      - name: Run iOS touch, lifecycle, and Vulkan rendering checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcrun simctl list devices available --json > "$RUNNER_TEMP/simulator-devices.json"
+          simulator_id="$(python3 - "$RUNNER_TEMP/simulator-devices.json" <<'PY'
+          import json, sys
+          data = json.load(open(sys.argv[1], encoding="utf-8"))
+          for runtime, devices in data["devices"].items():
+              if "iOS" not in runtime:
+                  continue
+              for device in devices:
+                  if device.get("isAvailable") and device["name"].startswith("iPhone"):
+                      print(device["udid"])
+                      raise SystemExit(0)
+          raise SystemExit("No available iPhone Simulator runtime was found")
+          PY
+          )"
+          echo "Using iPhone Simulator $simulator_id"
+          xcrun simctl boot "$simulator_id"
+          xcrun simctl bootstatus "$simulator_id" -b
+          xcodebuild test \
+            -project build/mobile-ios/CPPGameEngineMobile.xcodeproj \
+            -scheme CPPGameEngineMobileUITests \
+            -destination "platform=iOS Simulator,id=$simulator_id" \
+            -derivedDataPath "$RUNNER_TEMP/ios-ui-derived" \
+            -resultBundlePath "$RUNNER_TEMP/ios-ui-tests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO | tee "$RUNNER_TEMP/ios-ui-tests.log"
+          xcrun simctl install "$simulator_id" build/mobile-ios/Debug-iphonesimulator/CPPGameEngineMobile.app
+          launch_result="$(xcrun simctl launch "$simulator_id" com.cppgameengine.mobile)"
+          echo "$launch_result"
+          pid="${launch_result##*: }"
+          [[ "$pid" =~ ^[0-9]+$ ]]
+          set +e
+          timeout 15 xcrun simctl launch --console-pty "$simulator_id" com.cppgameengine.mobile \
+            > "$RUNNER_TEMP/ios-console.txt" 2>&1
+          console_status=$?
+          set -e
+          [[ "$console_status" == 0 || "$console_status" == 124 ]]
+          xcrun simctl spawn "$simulator_id" launchctl procinfo "$pid" > "$RUNNER_TEMP/ios-process.txt"
+          xcrun simctl io "$simulator_id" screenshot "$RUNNER_TEMP/ios-simulator.png"
+          xcrun simctl spawn "$simulator_id" log show --last 2m --style compact \
+            --predicate 'process == "CPPGameEngineMobile"' > "$RUNNER_TEMP/ios-app.log" || true
+          grep 'MOBILE_STATE event=frame .*rendered=1' "$RUNNER_TEMP/ios-console.txt"
+          test -s "$RUNNER_TEMP/ios-simulator.png"
+      - name: Save iOS build and simulator evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-simulator-ci
+          if-no-files-found: warn
+          path: |
+            build/mobile-ios/Debug-iphonesimulator/CPPGameEngineMobile.app
+            ${{ runner.temp }}/ios-process.txt
+            ${{ runner.temp }}/ios-ui-tests.log
+            ${{ runner.temp }}/ios-ui-tests.xcresult
+            ${{ runner.temp }}/ios-console.txt
+            ${{ runner.temp }}/ios-simulator.png
+            ${{ runner.temp }}/ios-app.log
+            ${{ runner.temp }}/simulator-devices.json
