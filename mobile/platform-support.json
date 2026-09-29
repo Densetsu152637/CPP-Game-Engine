@@ -17,7 +17,7 @@
       "verified": false
     },
     "ios": {
-      "minimumOs": "iOS 14.2",
+      "minimumOs": "iOS 16.3",
       "abi": ["arm64"],
       "toolchain": ["macOS with Xcode", "CMake 3.28+", "Vulkan SDK iOS package/MoltenVK", "glslc", "SDL 3.4.16"],
       "renderer": "Vulkan via SDL3 Metal surface and MoltenVK",

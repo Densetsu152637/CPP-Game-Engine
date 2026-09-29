@@ -8,6 +8,9 @@ endif()
 if(IOS AND CMAKE_VERSION VERSION_LESS 3.28)
     message(FATAL_ERROR "iOS xcframework linkage requires CMake 3.28 or newer")
 endif()
+if(IOS AND (NOT CMAKE_OSX_DEPLOYMENT_TARGET OR CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS 16.3))
+    message(FATAL_ERROR "iOS 16.3+ deployment target is required by libc++ floating-point std::to_chars")
+endif()
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -53,6 +56,7 @@ set(ENGINE_SOURCES
     "${ROOT}/src/project/runtime.cpp"
     "${ROOT}/src/rendering/content.cpp"
     "${ROOT}/src/rendering/render_device.cpp"
+    "${ROOT}/src/rendering/renderer.cpp"
     "${ROOT}/src/rendering/shader.cpp"
     "${ROOT}/src/rendering/uniform_registry.cpp"
     "${ROOT}/src/scripting/lua_script_system.cpp"

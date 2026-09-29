@@ -150,7 +150,7 @@ namespace platform
         else
         {
             report.rendererBackend = "Vulkan via SDL3 Metal surface and MoltenVK";
-            report.minimumPlatform = "iOS 14.2";
+            report.minimumPlatform = "iOS 16.3";
             report.architecture = "arm64 device/simulator";
             report.instanceExtensions = {"VK_KHR_surface", "VK_EXT_metal_surface", "VK_KHR_portability_enumeration"};
             report.deviceExtensions = {"VK_KHR_swapchain", "VK_KHR_portability_subset when advertised"};
@@ -165,7 +165,7 @@ namespace platform
 #endif
             if (!hasEnvironmentPath("VULKAN_SDK"))
                 add(DiagnosticKind::Missing, "vulkan_sdk", "Set VULKAN_SDK to a Vulkan SDK with iOS MoltenVK frameworks");
-            add(DiagnosticKind::Requirement, "platform", "iOS 14.2+, arm64, Metal-capable device required");
+            add(DiagnosticKind::Requirement, "platform", "iOS 16.3+, arm64, Metal-capable device required");
         }
 
         add(DiagnosticKind::Unverified, "runtime", "Host readiness does not verify launch, surface presentation, or device GPU support");

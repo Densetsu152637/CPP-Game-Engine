@@ -40,7 +40,9 @@ audio, network, or storage permission is requested.
 
 ## iOS
 
-On macOS, install Xcode, CMake 3.28 or newer, and a Vulkan SDK with its **iOS
+The app targets iOS 16.3 or newer, the first simulator release supported by
+this toolchain's floating-point formatting dependency. On macOS, install
+Xcode, CMake 3.28 or newer, and a Vulkan SDK with its **iOS
 development libraries** (including MoltenVK). Set `VULKAN_SDK` to the SDK
 directory containing `iOS/setup-env.sh`, then run:
 

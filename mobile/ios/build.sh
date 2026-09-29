@@ -31,7 +31,7 @@ bash "$root/mobile/prepare-shaders.sh"
 cmake -S "$root/mobile" -B "$root/build/mobile-ios" -G Xcode \
     -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphonesimulator \
     -DCMAKE_OSX_ARCHITECTURES="$(uname -m)" \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET=14.2 \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET=16.3 \
     -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
     -DSDL3_SOURCE_DIR="$deps"
 cmake --build "$root/build/mobile-ios" --config Debug --target CPPGameEngineMobile
