@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "status": "authored runtime implementation present; cross-build and GPU runtime gates pending",
+  "status": "Android API 35 Vulkan emulator runtime verified; iOS simulator runtime pending",
   "targets": {
     "android": {
       "minimumOs": "Android API 24",
@@ -11,10 +11,12 @@
       "deviceExtensions": ["VK_KHR_swapchain"],
       "assets": "first-project manifest, scene, scripts, mesh and PPM plus mesh_textured SPIR-V copied into SDL_GetPrefPath private storage",
       "input": "SDL finger events mapped to project inputActions; right-half touch presses move_right for authored Player Lua",
-      "lifecycle": "SDL event watch immediately pauses rendering on background; foreground rebuilds Vulkan surface and swapchain",
+      "lifecycle": "SDL event watch pauses on focus loss/background; foreground rebuilds Vulkan surface and swapchain after surface loss",
       "buildGate": "mobile/android/build.sh assembles arm64 and x86_64 debug APKs",
-      "runtimeGate": "Install and launch on a Vulkan-capable API 24+ device; verify rendered frames, touch, pause/resume and rotation",
-      "verified": false
+      "runtimeGate": "API 35 x86_64 Vulkan emulator: authored Lua touch changed rendered Player x, Home paused/resumed in the same process, and rotation recreated the surface; physical-device and API 24 runtime checks remain open",
+      "verified": true,
+      "verifiedScope": "Android API 35 x86_64 Vulkan emulator",
+      "verificationEvidence": "https://github.com/Densetsu152637/CPP-Game-Engine/actions/runs/36524614973/job/109264786961"
     },
     "ios": {
       "minimumOs": "iOS 16.3",

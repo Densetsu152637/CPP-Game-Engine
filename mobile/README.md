@@ -17,8 +17,8 @@ and shutdown for simulator/device smoke tests.
 The support manifest is [platform-support.json](platform-support.json).
 `CPPGameEngine platform check android` or `... ios` checks this checkout and the
 current host. Its `readyToBuild` result means local prerequisites are present;
-runtime presentation remains a separate gate. The manifest keeps `verified`
-false until CI and hardware evidence exist.
+runtime presentation remains a separate gate. The manifest records the verified
+scope of each platform separately.
 
 ## Android
 
@@ -34,9 +34,17 @@ adb shell am start -n com.cppgameengine.mobile/.GameActivity
 The script clones SDL release 3.4.16 at its pinned commit and uses SDL's
 Gradle wrapper. Gradle packages the authored project and generated SPIR-V, then
 cross-compiles the same core code through `mobile/CMakeLists.txt` for arm64 and
-x86_64 emulator ABIs. The APK
-declares Vulkan hardware; devices lacking Vulkan cannot install it. No camera,
+x86_64 emulator ABIs. The APK declares Vulkan hardware; devices lacking Vulkan
+cannot install it. No camera,
 audio, network, or storage permission is requested.
+
+[Android CI on an API 35 x86_64 Vulkan emulator](https://github.com/Densetsu152637/CPP-Game-Engine/actions/runs/36524614973/job/109264786961)
+built the APK, rendered the authored mesh, moved the Player through its Lua
+`move_right` action after a right-half touch, and rendered again after Home and
+rotation. The log recorded pause/resume and surface generations 1, 2, and 3;
+the final screenshot shows the rendered mesh. This verifies that emulator
+configuration. Physical devices and the declared API 24 minimum have not yet
+received runtime checks.
 
 ## iOS
 
