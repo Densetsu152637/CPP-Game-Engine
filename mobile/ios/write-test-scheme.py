@@ -11,20 +11,24 @@ project = Path(sys.argv[1])
 pbxproj = (project / "project.pbxproj").read_text(encoding="utf-8")
 
 
-def target_id(name: str) -> str:
-    pattern = rf"(?m)^\s*([A-F0-9]{{24}}) /\* {re.escape(name)} \*/ = \{{\s*isa = PBXNativeTarget;"
-    matches = re.findall(pattern, pbxproj)
+def target(name: str, product: str) -> tuple[str, str, str]:
+    pattern = rf"(?m)^\s*([A-Fa-f0-9]{{24}}) /\* {re.escape(name)} \*/ = \{{\s*isa = PBXNativeTarget;"
+    matches = list(re.finditer(pattern, pbxproj))
     if len(matches) != 1:
         raise RuntimeError(f"Expected one Xcode native target named {name}, found {len(matches)}")
-    return matches[0]
+    body = pbxproj[matches[0].end():].split("};", 1)[0]
+    product_reference = re.search(
+        r"\bproductReference\s*=\s*[A-Fa-f0-9]{24}\s*/\*\s*([^*]+?)\s*\*/\s*;",
+        body,
+    )
+    if not product_reference or product_reference.group(1).strip() != product:
+        actual = product_reference.group(1).strip() if product_reference else "missing"
+        raise RuntimeError(f"Xcode target {name} has product {actual}, expected {product}")
+    return name, product, matches[0].group(1)
 
 
-app = ("CPPGameEngineMobile", "CPPGameEngineMobile.app", target_id("CPPGameEngineMobile"))
-tests = (
-    "CPPGameEngineMobileUITests",
-    "CPPGameEngineMobileUITests.xctest",
-    target_id("CPPGameEngineMobileUITests"),
-)
+app = target("CPPGameEngineMobile", "CPPGameEngineMobile.app")
+tests = target("CPPGameEngineMobileUITests", "CPPGameEngineMobileUITests.xctest")
 
 
 def reference(parent: ET.Element, target: tuple[str, str, str]) -> None:

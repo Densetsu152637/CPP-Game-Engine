@@ -149,7 +149,10 @@ if(IOS)
     set_target_properties(CPPGameEngineMobileUITests PROPERTIES
         BUNDLE TRUE
         XCTEST TRUE
+        BUNDLE_EXTENSION "xctest"
         XCODE_PRODUCT_TYPE "com.apple.product-type.bundle.ui-testing"
+        XCODE_ATTRIBUTE_SDKROOT "iphonesimulator"
+        XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS "iphonesimulator"
         XCODE_ATTRIBUTE_TEST_TARGET_NAME "CPPGameEngineMobile"
         XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.cppgameengine.mobile.uitests"
         XCODE_ATTRIBUTE_GENERATE_INFOPLIST_FILE "YES"
