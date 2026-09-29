@@ -493,10 +493,14 @@ void test_lua_project_declaration_preflight()
     test::require(!blockedFile, "preflight must not expose file I/O while accepting log calls");
     const std::string paritySource = R"lua(
         assert(os == nil and io.open == nil and package == nil and debug == nil and load == nil)
+        assert(math.random == nil and math.randomseed == nil and math.abs(-4) == 4)
         print('print log')
         io.write('io log\n')
         io.stdout:write('stream log\n')
-        return {}
+        return {on_update=function()
+            assert(math.random == nil and math.randomseed == nil and math.floor(1.7) == 1)
+            engine.log('callback-safe')
+        end}
     )lua";
     const auto root = std::filesystem::current_path();
     const std::string rootChunk = "@" + (root / "safe-root.lua").string();
@@ -512,8 +516,14 @@ void test_lua_project_declaration_preflight()
         runtimeLogs.size() == 3 && runtimeLogs[0] == "print log" &&
         runtimeLogs[1].starts_with("io log") && runtimeLogs[2].starts_with("stream log"),
         "runtime should take the same restricted branch and route safe log writes");
+    test::require(safeRuntime.update(0.01f).has_value() && runtimeLogs.back() == "callback-safe",
+        "project callbacks should retain deterministic math while random APIs remain unavailable");
     test::require(!safeRuntime.load_string("io.open('outside.txt', 'w'); return {}", rootChunk),
         "runtime root scripts must reject file I/O just like preflight");
+    const auto randomBranch = LuaScriptSystem::validate_declarations(Sources{{
+        "math.randomseed(1); return {}", rootChunk}}, root);
+    test::require(!randomBranch && !safeRuntime.load_string("math.random(); return {}", rootChunk),
+        "root declarations must not access RNG functions in either Lua state");
     const auto bounded = LuaScriptSystem::validate_declarations(Sources{{
         "while true do end; return {}", "@loop.lua"}}, std::filesystem::current_path());
     test::require(!bounded && bounded.error().find("instruction limit") != std::string::npos,
@@ -525,15 +535,18 @@ void test_lua_project_declaration_preflight()
     std::filesystem::create_directories(scriptDirectory);
     std::filesystem::create_directories(sharedDirectory);
     const auto module = sharedDirectory / "helper.lua";
+    const auto randomModule = sharedDirectory / "random.lua";
     struct Cleanup
     {
-        std::filesystem::path file, shared, scripts, directory;
+        std::filesystem::path file, randomFile, shared, scripts, directory;
         ~Cleanup() { std::error_code ignored; std::filesystem::remove(file, ignored);
+            std::filesystem::remove(randomFile, ignored);
             std::filesystem::remove(shared, ignored); std::filesystem::remove(scripts, ignored);
             std::filesystem::remove(directory, ignored); }
-    } cleanup{module, sharedDirectory, scriptDirectory, directory};
+    } cleanup{module, randomModule, sharedDirectory, scriptDirectory, directory};
     { std::ofstream output(module, std::ios::binary | std::ios::trunc);
-        output << "assert(os == nil); return { system_name='from-module' }\n";
+        output << "assert(os == nil and coroutine == nil and math.random == nil and math.randomseed == nil); "
+            "return { system_name='from-module' }\n";
         output.close(); test::require(output.good(), "local module fixture should be writable"); }
     const std::string source = R"lua(
         local helper = require('shared.helper')
@@ -550,6 +563,13 @@ void test_lua_project_declaration_preflight()
     LuaScriptSystem runtimeScripts(std::move(runtimeApi));
     test::require(runtimeScripts.load_string(source, scriptName).has_value(),
         "runtime and preflight should load the same project-local module source");
+    { std::ofstream output(randomModule, std::ios::binary | std::ios::trunc);
+        output << "math.random(); return {}\n";
+        output.close(); test::require(output.good(), "random module fixture should be writable"); }
+    const std::string randomSource = "require('shared.random'); return {}";
+    test::require(!LuaScriptSystem::validate_declarations(Sources{{randomSource, scriptName}}, directory) &&
+        !runtimeScripts.load_string(randomSource, scriptName),
+        "modules must not call RNG functions in validation or runtime");
     const auto traversal = LuaScriptSystem::validate_declarations(Sources{{
         "require('..escape'); return {}", scriptName}}, directory);
     test::require(!traversal, "project module resolver must reject traversal-like module names");

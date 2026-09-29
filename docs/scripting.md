@@ -40,9 +40,10 @@ system may only read or write the component names it declared. The complete
 sample is [player.lua](../examples/first-project/scripts/player.lua).
 
 Project Runtime scripts execute in a restricted global environment, both during
-declaration validation and play. They may use Lua math, string, table, and UTF-8
+declaration validation and play. They may use deterministic Lua math, string, table, and UTF-8
 helpers, safe `print`/`io.write` logging, and `require` for Lua modules confined
-to the project root. Direct file and OS APIs, the ordinary Lua package loader,
+to the project root. `math.random`, `math.randomseed`, and `coroutine` are unavailable,
+including inside callbacks and required modules. Direct file and OS APIs, the ordinary Lua package loader,
 debug APIs, and dynamic code loading are unavailable. Legacy standalone Engine
 scripts have a separate host contract.
 

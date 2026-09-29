@@ -15,9 +15,11 @@ tick; scripts never poll the window directly.
 The sample runtime's `move_right` action is mapped from the authored
 `inputActions` entry to Right Arrow in visible mode and can be injected directly
 in headless fixtures.
-Project scripts can use Lua math/string/table/UTF-8 helpers, safe logging, and
+Project scripts can use deterministic Lua math/string/table/UTF-8 helpers, safe logging, and
 `require` for project-local modules. Direct file and OS APIs are unavailable in
-both validation and play.
+both validation and play. `math.random`, `math.randomseed`, and `coroutine` are also unavailable
+at the top level and inside callbacks; supply explicit deterministic state if a
+script needs a repeatable sequence.
 
 `player.lua` also declares a typed `PlayerStats` component and initializes it on
 the authored player through `self.set_component`. Its `PlayerStatsTick` system

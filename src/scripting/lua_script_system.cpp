@@ -188,6 +188,20 @@ struct LuaScriptSystem::Impl
         });
     }
 
+    static void push_safe_math(lua_State* lua)
+    {
+        lua_getglobal(lua, "math");
+        lua_newtable(lua);
+        for (const char* name : {"abs", "acos", "asin", "atan", "ceil", "cos", "deg", "exp",
+            "floor", "fmod", "huge", "log", "max", "maxinteger", "min", "mininteger",
+            "modf", "pi", "rad", "sin", "sqrt", "tan", "tointeger", "type", "ult"})
+        {
+            lua_getfield(lua, -2, name);
+            lua_setfield(lua, -2, name);
+        }
+        lua_remove(lua, -2);
+    }
+
     void push_root_safe_globals()
     {
         lua_newtable(state);
@@ -196,7 +210,8 @@ struct LuaScriptSystem::Impl
             "rawlen", "setmetatable", "getmetatable", "math", "string", "table", "utf8",
             "require", "_VERSION"})
         {
-            lua_getglobal(state, name);
+            if (std::strcmp(name, "math") == 0) push_safe_math(state);
+            else lua_getglobal(state, name);
             lua_setfield(state, -2, name);
         }
         if (declaration_validation) lua_pushcfunction(state, silent_validation_log);
@@ -270,9 +285,10 @@ struct LuaScriptSystem::Impl
             for (const char* name : {"assert", "error", "ipairs", "pairs", "next", "pcall", "xpcall",
                 "select", "tonumber", "tostring", "type", "rawequal", "rawget", "rawset",
                 "rawlen", "setmetatable", "getmetatable", "math", "string", "table", "utf8",
-                "coroutine", "require"})
+                "require"})
             {
-                lua_getglobal(lua, name);
+                if (std::strcmp(name, "math") == 0) push_safe_math(lua);
+                else lua_getglobal(lua, name);
                 lua_setfield(lua, -2, name);
             }
             lua_pushvalue(lua, -1);
