@@ -240,7 +240,17 @@ namespace tooling
         for (auto& record : index.assets)
         {
             const auto absolute = root / record.path;
-            const auto source = readText(absolute);
+            std::string source;
+            if (record.kind == "script")
+            {
+                auto script = scripting::read_lua_source_file(absolute);
+                if (!script)
+                    return std::unexpected(error(script.error() == scripting::LuaSourceReadError::TooLarge
+                        ? "asset.script.too_large" : "asset.read.failed", record.path, "",
+                        std::string(scripting::lua_source_error_message(script.error()))));
+                source = std::move(*script);
+            }
+            else if (record.kind == "shader") source = readText(absolute);
             std::vector<std::filesystem::path> references;
             if (record.kind == "shader")
             {

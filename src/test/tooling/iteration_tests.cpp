@@ -131,6 +131,19 @@ void test_asset_index_rejects_shader_include_escape()
         "missing shader compiler should report a stable prerequisite diagnostic");
 }
 
+void test_asset_index_rejects_oversized_lua_source()
+{
+    TempDirectory temp;
+    const auto root = temp.path / "project";
+    write(root / "scripts/large.lua", std::string(1024 * 1024 + 1, '-'));
+    project::Project project;
+    project.root = root;
+    project.assets.emplace("asset:large-script", project::Asset{"asset:large-script", "scripts/large.lua", "script"});
+    const auto result = tooling::buildAssetIndex(project);
+    test::require(!result && result.error().front().code == "asset.script.too_large",
+        "asset indexing should reject a Lua source over 1 MiB before reading it");
+}
+
 void test_lua_validation_compiles_without_executing_and_stages_only_valid_source()
 {
     TempDirectory temp;

@@ -5,6 +5,7 @@
 
 void test_asset_index_is_deterministic_tracks_dependencies_and_roundtrips();
 void test_asset_index_rejects_shader_include_escape();
+void test_asset_index_rejects_oversized_lua_source();
 void test_lua_validation_compiles_without_executing_and_stages_only_valid_source();
 void test_project_template_package_and_runtime_lookup_are_root_scoped();
 
@@ -14,6 +15,7 @@ int main()
     {
         test_asset_index_is_deterministic_tracks_dependencies_and_roundtrips();
         test_asset_index_rejects_shader_include_escape();
+        test_asset_index_rejects_oversized_lua_source();
         test_lua_validation_compiles_without_executing_and_stages_only_valid_source();
         test_project_template_package_and_runtime_lookup_are_root_scoped();
         test_mcp_stdio_initialization_and_tools_list();
