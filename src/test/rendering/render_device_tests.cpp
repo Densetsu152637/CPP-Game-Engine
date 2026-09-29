@@ -38,7 +38,11 @@ namespace
     public:
         explicit FakeBackend(std::shared_ptr<Stats> data) : stats(std::move(data)) {}
         rendering::RenderCapabilities capabilities() const override
-        { return { "fake", false, 1, false }; }
+        {
+            rendering::RenderCapabilities result { "fake", false, 1, false };
+            result.backendReady = true;
+            return result;
+        }
         void initialize() override { stats->owner = std::this_thread::get_id(); }
         void createShader(uint64_t, const rendering::ShaderResource& source) override
         { assertOwner(); test::require(!source.sources.empty(), "shader upload missing"); ++stats->shaders; }
@@ -112,6 +116,26 @@ void test_render_device_concurrency()
     test::require(!device.capabilities().parallelRecording &&
         device.capabilities().maxFramesInFlight == 1,
         "backend capabilities misreport GPU recording or frame capacity");
+    const auto capabilities = device.capabilities();
+    using rendering::RenderFeature;
+    test::require(capabilities.feature(RenderFeature::BackendAvailable).supported &&
+        capabilities.feature(RenderFeature::CpuParallelRecording).supported,
+        "available backend or CPU recording reported unavailable");
+    for (const auto feature : {RenderFeature::GpuParallelEncoding,
+        RenderFeature::PortabilitySubset, RenderFeature::SampledTextures,
+        RenderFeature::DepthAttachment})
+    {
+        const auto status = capabilities.feature(feature);
+        test::require(!status.supported && !status.reason.empty() && status.name[0],
+            "unsupported feature has no typed diagnostic reason");
+    }
+    test::require(capabilities.diagnostics().find("sampled-textures: unsupported") != std::string::npos &&
+        capabilities.diagnostics().find("depth-attachment: unsupported") != std::string::npos,
+        "capability report omitted unsupported rendering features");
+    const rendering::RenderCapabilities disabled;
+    test::require(!disabled.feature(RenderFeature::BackendAvailable).supported &&
+        disabled.feature(RenderFeature::SampledTextures).reason == "No rendering backend is initialized",
+        "disabled backend did not explain unavailable features");
     test::require(stats->owner != std::this_thread::get_id(), "backend initialized on caller thread");
 
     FakeShader shaderSource;
@@ -139,10 +163,15 @@ void test_render_device_concurrency()
                 rendering::DrawCommand draw { shader, mesh, texture };
                 const int value = producer * drawsPerProducer + index;
                 rendering::appendUniform(draw, "value", value, {0, 0});
-                first->record(std::move(draw));
+                first->record(std::move(draw), {static_cast<uint64_t>(producer),
+                    static_cast<uint64_t>(index)});
             }
         });
     for (auto& thread : threads) thread.join();
+    test::require_throws([&] { first->record({shader, mesh, texture}, {0,0}); },
+        "duplicate concurrent draw key was accepted");
+    test::require_throws([&] { first->record({shader, mesh, texture}); },
+        "serial draw was mixed into a keyed frame");
     const auto firstTicket = device.submit(first);
     test::require_throws([&] { device.submit(first); }, "submitted frame was accepted twice");
     test::require_throws([&] { first->record({shader, mesh, texture}); },
@@ -165,9 +194,48 @@ void test_render_device_concurrency()
         test::require(draw.order == index, "concurrent draw merge lost stable order");
         int value = -1;
         std::memcpy(&value, draw.uniforms[0].bytes.data(), sizeof(value));
+        test::require(value == static_cast<int>(index),
+            "keyed concurrent draw merge depended on mutex acquisition order");
         values.insert(value);
     }
     test::require(values.size() == producers * drawsPerProducer, "concurrent draw payloads corrupted");
+    auto mixed = device.makeFrame();
+    mixed->record({shader, mesh, texture});
+    test::require_throws([&] { mixed->record({shader, mesh, texture}, {0,0}); },
+        "keyed draw was mixed into a serial frame");
+
+    // Vary arrival order across rounds; producer/draw keys define one identical
+    // GPU command order regardless of scheduler timing.
+    for (int round = 0; round < 6; ++round)
+    {
+        auto repeat = device.makeFrame();
+        std::vector<std::thread> repeatThreads;
+        for (int producer = producers - 1; producer >= 0; --producer)
+            repeatThreads.emplace_back([&, producer, round] {
+                for (int index = 0; index < drawsPerProducer; ++index)
+                {
+                    if ((round * 13 + producer * 7 + index * 3) % 11 == 0)
+                        std::this_thread::sleep_for(std::chrono::microseconds(30 + round * 7));
+                    rendering::DrawCommand draw {shader, mesh, texture};
+                    const int value = producer * drawsPerProducer + index;
+                    rendering::appendUniform(draw, "value", value, {0,0});
+                    repeat->record(std::move(draw), {static_cast<uint64_t>(producer),
+                        static_cast<uint64_t>(index)});
+                }
+            });
+        for (auto& thread : repeatThreads) thread.join();
+        device.wait(device.submit(repeat));
+        const auto& merged = stats->draws.back();
+        test::require(merged.size() == producers * drawsPerProducer,
+            "repeated concurrent frame lost commands");
+        for (size_t index = 0; index < merged.size(); ++index)
+        {
+            int value = -1;
+            std::memcpy(&value, merged[index].uniforms[0].bytes.data(), sizeof(value));
+            test::require(merged[index].order == index && value == static_cast<int>(index),
+                "repeated concurrent frame changed deterministic command order");
+        }
+    }
 
     // A slow backend must stop a third submission until one of two in-flight
     // frames completes; recording itself remains free to run on worker jobs.

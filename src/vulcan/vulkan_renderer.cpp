@@ -441,6 +441,8 @@ namespace vulkan
 
         std::vector<VkPhysicalDevice> devices(deviceCount);
         vkEnumeratePhysicalDevices(m_instance, &deviceCount, devices.data());
+        bool missingSampledTextures = false;
+        bool missingDepthAttachment = false;
 
         for (const VkPhysicalDevice device : devices)
         {
@@ -454,7 +456,11 @@ namespace vulkan
             if (!VulkanSwapchain::querySupport(device, m_surface).usable())
                 continue;
 
-            if (!supports_sampled_rgba(device) || !supports_depth_attachment(device))
+            const bool sampledTextures = supports_sampled_rgba(device);
+            const bool depthAttachment = supports_depth_attachment(device);
+            missingSampledTextures |= !sampledTextures;
+            missingDepthAttachment |= !depthAttachment;
+            if (!sampledTextures || !depthAttachment)
                 continue;
 
             m_physicalDevice = device;
@@ -468,7 +474,10 @@ namespace vulkan
             return;
         }
 
-        throw std::runtime_error("No Vulkan physical device supports graphics, presentation, and swapchain creation");
+        std::string reason = "No Vulkan physical device supports graphics, presentation, and swapchain creation";
+        if (missingSampledTextures) reason += "; sampled textures unavailable";
+        if (missingDepthAttachment) reason += "; depth attachments unavailable";
+        throw std::runtime_error(reason);
 #else
         (void)config;
 #endif

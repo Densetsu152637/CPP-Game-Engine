@@ -11,9 +11,11 @@ namespace vulkan
 
     rendering::RenderCapabilities VulkanFrameBackend::capabilities() const
     {
-        return { "vulkan", false, 1, m_initialized && m_renderer.info().portabilitySubset,
+        rendering::RenderCapabilities result { "vulkan", false, 1, m_initialized && m_renderer.info().portabilitySubset,
             m_initialized && m_renderer.info().sampledTextures,
             m_initialized && m_renderer.info().depthAttachment };
+        result.backendReady = m_initialized;
+        return result;
     }
 
     void VulkanFrameBackend::initialize()

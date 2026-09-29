@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 
@@ -25,23 +26,106 @@ namespace rendering
     bool RenderResourceHandle::valid() const
     { return m_state && m_state->alive.load(std::memory_order_acquire); }
 
+    namespace
+    {
+        constexpr std::array<RenderFeature, 6> all_features {
+            RenderFeature::BackendAvailable, RenderFeature::CpuParallelRecording,
+            RenderFeature::GpuParallelEncoding, RenderFeature::PortabilitySubset,
+            RenderFeature::SampledTextures, RenderFeature::DepthAttachment
+        };
+
+        void validate_draw(const DrawCommand& draw)
+        {
+            if (!draw.shader.valid() || draw.shader.kind() != RenderResourceKind::Shader)
+                throw std::invalid_argument("Draw requires a live shader handle");
+            if (draw.mesh.id() && (!draw.mesh.valid() || draw.mesh.kind() != RenderResourceKind::Mesh))
+                throw std::invalid_argument("Draw has an invalid mesh handle");
+            if (draw.texture.id() && (!draw.texture.valid() || draw.texture.kind() != RenderResourceKind::Texture || !draw.mesh.id()))
+                throw std::invalid_argument("Textured draw requires a live mesh and texture");
+            for (const auto& uniform : draw.uniforms)
+                if (uniform.name.empty() || uniform.bytes.empty())
+                    throw std::invalid_argument("Draw uniforms require a name and bytes");
+        }
+    }
+
+    RenderFeatureStatus RenderCapabilities::feature(RenderFeature requested) const
+    {
+        const auto index = static_cast<size_t>(requested);
+        if (index >= all_features.size()) throw std::invalid_argument("Unknown render feature");
+        bool supported = false;
+        const char* name = "";
+        const char* fallback = "Backend does not support this feature";
+        switch (requested)
+        {
+            case RenderFeature::BackendAvailable:
+                name = "backend"; supported = backendReady;
+                fallback = "No rendering backend is initialized"; break;
+            case RenderFeature::CpuParallelRecording:
+                name = "cpu-parallel-recording"; supported = backendReady;
+                fallback = "No rendering backend is initialized"; break;
+            case RenderFeature::GpuParallelEncoding:
+                name = "gpu-parallel-encoding"; supported = backendReady && parallelRecording;
+                fallback = "GPU commands are encoded on one render thread"; break;
+            case RenderFeature::PortabilitySubset:
+                name = "portability-subset"; supported = backendReady && portabilitySubset;
+                fallback = "Selected device does not expose VK_KHR_portability_subset"; break;
+            case RenderFeature::SampledTextures:
+                name = "sampled-textures"; supported = backendReady && sampledTextures;
+                fallback = "Backend does not support sampled textures"; break;
+            case RenderFeature::DepthAttachment:
+                name = "depth-attachment"; supported = backendReady && depthAttachment;
+                fallback = "Backend does not support depth attachments"; break;
+        }
+        std::string reason;
+        if (!supported)
+            reason = !backendReady && requested != RenderFeature::BackendAvailable
+                ? "No rendering backend is initialized"
+                : (unsupportedReasons[index].empty() ? fallback : unsupportedReasons[index]);
+        return {requested, name, supported, std::move(reason)};
+    }
+
+    std::string RenderCapabilities::diagnostics() const
+    {
+        std::ostringstream output;
+        for (const auto requested : all_features)
+        {
+            const auto status = feature(requested);
+            output << status.name << ": " << (status.supported ? "supported" : "unsupported");
+            if (!status.supported) output << " (" << status.reason << ')';
+            output << '\n';
+        }
+        return output.str();
+    }
+
     uint64_t RenderCommandBuffer::record(DrawCommand draw)
     {
         std::lock_guard lock(m_mutex);
         if (m_sealed) throw std::logic_error("Cannot record a submitted render frame");
-        if (!draw.shader.valid() || draw.shader.kind() != RenderResourceKind::Shader)
-            throw std::invalid_argument("Draw requires a live shader handle");
-        if (draw.mesh.id() && (!draw.mesh.valid() || draw.mesh.kind() != RenderResourceKind::Mesh))
-            throw std::invalid_argument("Draw has an invalid mesh handle");
-        if (draw.texture.id() && (!draw.texture.valid() || draw.texture.kind() != RenderResourceKind::Texture || !draw.mesh.id()))
-            throw std::invalid_argument("Textured draw requires a live mesh and texture");
-        for (const auto& uniform : draw.uniforms)
-            if (uniform.name.empty() || uniform.bytes.empty())
-                throw std::invalid_argument("Draw uniforms require a name and bytes");
-        draw.order = m_nextOrder++;
+        if (m_explicitOrder || draw.stableOrder)
+            throw std::logic_error("Cannot mix serial and keyed draws in one render frame");
+        validate_draw(draw);
+        draw.order = m_nextOrder;
         const uint64_t order = draw.order;
         m_draws.push_back(std::move(draw));
+        ++m_nextOrder;
         return order;
+    }
+
+    void RenderCommandBuffer::record(DrawCommand draw, DrawOrderKey key)
+    {
+        std::lock_guard lock(m_mutex);
+        if (m_sealed) throw std::logic_error("Cannot record a submitted render frame");
+        if (m_nextOrder != 0)
+            throw std::logic_error("Cannot mix serial and keyed draws in one render frame");
+        if (draw.stableOrder && *draw.stableOrder != key)
+            throw std::invalid_argument("Draw has a conflicting stable order key");
+        validate_draw(draw);
+        if (!m_orderKeys.insert(key).second)
+            throw std::invalid_argument("Duplicate draw order key");
+        draw.stableOrder = key;
+        try { m_draws.push_back(std::move(draw)); }
+        catch (...) { m_orderKeys.erase(key); throw; }
+        m_explicitOrder = true;
     }
 
     size_t RenderCommandBuffer::size() const
@@ -237,6 +321,14 @@ namespace rendering
         job.kind = Job::Kind::Frame;
         job.sequence = m_nextSequence++;
         job.draws = std::move(frame->m_draws);
+        if (frame->m_explicitOrder)
+        {
+            std::sort(job.draws.begin(), job.draws.end(), [](const auto& left, const auto& right) {
+                return *left.stableOrder < *right.stableOrder;
+            });
+            for (size_t index = 0; index < job.draws.size(); ++index)
+                job.draws[index].order = static_cast<uint64_t>(index);
+        }
         frame->m_sealed = true;
         ++m_pendingFrames;
         const uint64_t ticket = job.sequence;

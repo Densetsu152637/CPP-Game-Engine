@@ -1,12 +1,16 @@
 #pragma once
 
 #include <condition_variable>
+#include <array>
+#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <exception>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -38,6 +42,20 @@ namespace rendering
         Texture2D image;
     };
 
+    enum class RenderFeature
+    {
+        BackendAvailable, CpuParallelRecording, GpuParallelEncoding,
+        PortabilitySubset, SampledTextures, DepthAttachment
+    };
+
+    struct RenderFeatureStatus
+    {
+        RenderFeature feature;
+        const char* name;
+        bool supported;
+        std::string reason; // Empty when supported.
+    };
+
     struct RenderCapabilities
     {
         std::string backendName;
@@ -46,6 +64,11 @@ namespace rendering
         bool portabilitySubset = false;
         bool sampledTextures = false;
         bool depthAttachment = false;
+        bool backendReady = false;
+        std::array<std::string, 6> unsupportedReasons;
+
+        RenderFeatureStatus feature(RenderFeature requested) const;
+        std::string diagnostics() const;
     };
 
     class RenderResourceHandle
@@ -70,6 +93,13 @@ namespace rendering
         std::vector<std::byte> bytes;
     };
 
+    struct DrawOrderKey
+    {
+        uint64_t producer = 0;
+        uint64_t draw = 0;
+        auto operator<=>(const DrawOrderKey&) const = default;
+    };
+
     struct DrawCommand
     {
         RenderResourceHandle shader;
@@ -77,6 +107,7 @@ namespace rendering
         RenderResourceHandle texture;
         std::vector<DrawUniform> uniforms;
         uint64_t order = 0;
+        std::optional<DrawOrderKey> stableOrder;
     };
 
     template <typename T>
@@ -91,14 +122,19 @@ namespace rendering
     {
         mutable std::mutex m_mutex;
         std::vector<DrawCommand> m_draws;
+        std::set<DrawOrderKey> m_orderKeys;
         uint64_t m_nextOrder = 0;
+        bool m_explicitOrder = false;
         bool m_sealed = false;
         friend class RenderDevice;
 
     public:
-        // Producers can record in parallel. The lock assigns deterministic merge
-        // order; each command and its uniforms must be complete before record().
+        // Serial convenience path: order follows record() calls. Concurrent callers
+        // must use explicit stable keys for repeatable draw order.
         uint64_t record(DrawCommand draw);
+        // Keys sort lexicographically by producer then draw. Duplicate keys or
+        // mixing keyed and serial calls in one frame are rejected.
+        void record(DrawCommand draw, DrawOrderKey key);
         size_t size() const;
     };
 

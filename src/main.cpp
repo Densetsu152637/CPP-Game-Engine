@@ -92,6 +92,14 @@ int main(int argc, char** argv)
             surface = std::make_unique<vulkan::VulkanGlfwSurfaceProvider>(window);
             device = std::make_unique<rendering::RenderDevice>(
                 std::make_unique<vulkan::VulkanFrameBackend>(*surface));
+            const auto capabilities = device->capabilities();
+            for (const auto feature : std::array{rendering::RenderFeature::BackendAvailable,
+                    rendering::RenderFeature::DepthAttachment})
+            {
+                const auto status = capabilities.feature(feature);
+                if (!status.supported)
+                    throw std::runtime_error(std::string("Visible demo requires ") + status.name + ": " + status.reason);
+            }
             shaderHandle = device->createShader(shader);
         }
 #endif
