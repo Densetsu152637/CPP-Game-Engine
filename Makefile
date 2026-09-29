@@ -35,7 +35,7 @@ CXXFLAGS += /Od /Z7
 CFLAGS += /Od /Z7
 endif
 LDLIBS := user32.lib gdi32.lib shell32.lib
-MKDIR = if not exist "$(subst /,\,$(dir $@))" mkdir "$(subst /,\,$(dir $@))"
+MKDIR = mkdir "$(subst /,\,$(dir $@))" 2>nul || (if exist "$(subst /,\,$(dir $@))" (exit /b 0) else (exit /b 1))
 CREATE_BUILD = if not exist "$(subst /,\,$@)" mkdir "$(subst /,\,$@)"
 SAVE_OPTIONS = fc /B "$(subst /,\,$@)" "$(subst /,\,$@.tmp)" >nul 2>&1 || copy /Y "$(subst /,\,$@.tmp)" "$(subst /,\,$@)" >nul
 REMOVE_OPTIONS = del "$(subst /,\,$@.tmp)"
