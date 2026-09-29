@@ -46,6 +46,9 @@ jobs:
           glslc --version
           java -version
           "$ANDROID_HOME/platform-tools/adb" version
+          export ANDROID_AVD_HOME="$RUNNER_TEMP/android-avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+          echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME" >> "$GITHUB_ENV"
       - name: Build Android APK
         shell: bash
         run: bash mobile/android/build.sh
@@ -57,9 +60,17 @@ jobs:
           avdmanager="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
           emulator="$ANDROID_HOME/emulator/emulator"
           adb="$ANDROID_HOME/platform-tools/adb"
+          export ANDROID_AVD_HOME="$RUNNER_TEMP/android-avd"
+          mkdir -p "$ANDROID_AVD_HOME"
           "$avdmanager" create avd --force --name cpp-game-engine-ci \
             --package "system-images;android-${ANDROID_API};google_apis;x86_64" \
             --device pixel_2 <<< 'no'
+          "$emulator" -list-avds > "$RUNNER_TEMP/android-avd-list.txt"
+          if ! grep -Fxq cpp-game-engine-ci "$RUNNER_TEMP/android-avd-list.txt"; then
+            echo 'AVD creation completed but the emulator cannot list cpp-game-engine-ci' >&2
+            cat "$RUNNER_TEMP/android-avd-list.txt" || true
+            exit 1
+          fi
           if [[ ! -e /dev/kvm ]]; then
             echo 'GitHub runner has no /dev/kvm; Android Emulator VM acceleration is unavailable' >&2
             exit 1
@@ -135,6 +146,7 @@ jobs:
         run: |
           set +e
           adb="$ANDROID_HOME/platform-tools/adb"
+          timeout 20s "$ANDROID_HOME/emulator/emulator" -list-avds > "$RUNNER_TEMP/android-avd-list-diagnostics.txt" 2>&1
           timeout 20s "$adb" devices -l > "$RUNNER_TEMP/android-adb-devices.txt" 2>&1
           timeout 20s "$adb" logcat -d -v threadtime > "$RUNNER_TEMP/android-logcat-final.txt" 2>&1
           timeout 20s "$adb" shell getprop sys.boot_completed > "$RUNNER_TEMP/android-boot-state.txt" 2>&1
@@ -162,6 +174,8 @@ jobs:
             ${{ runner.temp }}/android-surfaceflinger.txt
             ${{ runner.temp }}/android-tombstones.txt
             ${{ runner.temp }}/android-native-crashes.txt
+            ${{ runner.temp }}/android-avd-list.txt
+            ${{ runner.temp }}/android-avd-list-diagnostics.txt
 
   ios-simulator:
     runs-on: macos-15
