@@ -100,6 +100,11 @@ target_include_directories(${APP_TARGET} PRIVATE
     "${ROOT}/third_party/glfw/include")
 target_compile_definitions(${APP_TARGET} PRIVATE
     CPP_GAME_ENGINE_USE_VULKAN=1 CPP_GAME_ENGINE_MOBILE=1 ENTT_USE_ATOMIC=1)
+if(IOS)
+    # Lua's iOS configuration replaces unavailable system() in loslib.c and
+    # selects the supported POSIX/Darwin interfaces for its C library.
+    target_compile_definitions(${APP_TARGET} PRIVATE LUA_USE_IOS=1)
+endif()
 target_link_libraries(${APP_TARGET} PRIVATE SDL3::SDL3 Vulkan::Vulkan)
 
 if(ANDROID)
