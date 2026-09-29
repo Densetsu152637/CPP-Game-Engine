@@ -65,19 +65,31 @@ namespace platform
     bool SDLCALL SdlMobileWindow::eventWatch(void* userdata, SDL_Event* event)
     {
         auto& self = *static_cast<SdlMobileWindow*>(userdata);
+        constexpr uint32_t background = 1u << 0;
+        constexpr uint32_t unfocused = 1u << 1;
+        constexpr uint32_t hidden = 1u << 2;
         switch (event->type)
         {
             case SDL_EVENT_WILL_ENTER_BACKGROUND:
-                SDL_Log("MOBILE_STATE event=pause");
-                self.m_paused.store(true, std::memory_order_release);
-                break;
             case SDL_EVENT_DID_ENTER_BACKGROUND:
-                self.m_paused.store(true, std::memory_order_release);
+                self.setInactive(background, true);
                 break;
             case SDL_EVENT_DID_ENTER_FOREGROUND:
-                SDL_Log("MOBILE_STATE event=resume");
-                self.m_surfaceDirty.store(true, std::memory_order_release);
-                self.m_paused.store(false, std::memory_order_release);
+                self.setInactive(background, false);
+                break;
+            case SDL_EVENT_WINDOW_FOCUS_LOST:
+                self.setInactive(unfocused, true);
+                break;
+            case SDL_EVENT_WINDOW_FOCUS_GAINED:
+                self.setInactive(unfocused, false);
+                break;
+            case SDL_EVENT_WINDOW_HIDDEN:
+            case SDL_EVENT_WINDOW_MINIMIZED:
+                self.setInactive(hidden, true);
+                break;
+            case SDL_EVENT_WINDOW_SHOWN:
+            case SDL_EVENT_WINDOW_RESTORED:
+                self.setInactive(hidden, false);
                 break;
             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
                 self.m_width.store(static_cast<uint32_t>(std::max(event->window.data1, 0)), std::memory_order_release);
@@ -87,6 +99,20 @@ namespace platform
             default: break;
         }
         return true;
+    }
+
+    void SdlMobileWindow::setInactive(uint32_t reason, bool inactive)
+    {
+        const uint32_t previous = inactive
+            ? m_inactiveReasons.fetch_or(reason, std::memory_order_acq_rel)
+            : m_inactiveReasons.fetch_and(~reason, std::memory_order_acq_rel);
+        const uint32_t current = inactive ? previous | reason : previous & ~reason;
+        if (previous == 0 && current != 0) SDL_Log("MOBILE_STATE event=pause");
+        if (previous != 0 && current == 0)
+        {
+            m_surfaceDirty.store(true, std::memory_order_release);
+            SDL_Log("MOBILE_STATE event=resume");
+        }
     }
 
     void SdlMobileWindow::refreshExtent()

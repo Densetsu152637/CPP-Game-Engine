@@ -23,7 +23,10 @@ namespace platform
     class SdlMobileWindow final : public vulkan::IVulkanSurfaceProvider
     {
         SDL_Window* m_window = nullptr;
-        std::atomic<bool> m_paused {false};
+        // SDL's Android focus callback can precede the background callback and
+        // the native surface destruction by several frames. Keep each inactive
+        // reason until its matching foreground/window event arrives.
+        std::atomic<uint32_t> m_inactiveReasons {0};
         std::atomic<bool> m_surfaceDirty {false};
         std::atomic<uint32_t> m_width {0};
         std::atomic<uint32_t> m_height {0};
@@ -32,6 +35,7 @@ namespace platform
         std::vector<TouchPoint> m_newTouches;
 
         static bool SDLCALL eventWatch(void* userdata, SDL_Event* event);
+        void setInactive(uint32_t reason, bool inactive);
         void refreshExtent();
 
     public:
@@ -42,7 +46,7 @@ namespace platform
 
         void pumpEvents();
         bool quitRequested() const { return m_quit; }
-        bool paused() const { return m_paused.load(std::memory_order_acquire); }
+        bool paused() const { return m_inactiveReasons.load(std::memory_order_acquire) != 0; }
         bool takeSurfaceDirty() { return m_surfaceDirty.exchange(false, std::memory_order_acq_rel); }
         const std::vector<TouchPoint>& touches() const { return m_touches; }
         const std::vector<TouchPoint>& newTouches() const { return m_newTouches; }
