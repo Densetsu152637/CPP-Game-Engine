@@ -34,6 +34,8 @@ state, logs, and external side effects already performed by a callback cannot be
 rolled back. A component schema remains registered while the Runtime runs, even
 when its script is replaced or fails; identical schemas can be registered by
 other scripts, while conflicting definitions are rejected.
+Schemas may declare positive component and field versions and typed defaults;
+see [Lua scripting](../../docs/scripting.md) for the syntax and registration limits.
 
 From the repository root, validate and inspect the data with:
 

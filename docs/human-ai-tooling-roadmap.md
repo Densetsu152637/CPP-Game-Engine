@@ -32,6 +32,13 @@ for the shipped interfaces and limits.
 | 5. Iteration/package | `src/tooling`: initialization, stable-ID index and dependency hashes, shader imports, staged script reload, standalone runtime package | WorkflowTests, CLI package test from an external working directory, `.github/workflows/windows-headless.yml` |
 | 6. AI adapter | `src/automation`: read-only project validation and scene inspection through bounded, path-confined MCP stdio | WorkflowTests transport fixtures and executable routing |
 
+The current Lua-defined component interface accepts `number`, `boolean`, and
+`string` fields with versioned schemas, defaults, and registration limits; see
+[Lua scripting](scripting.md). Vector, enum, and reference fields are deferred
+until storage and validation support them. The phase 8 design below lists the
+broader type choices and remaining contract work, rather than claiming those
+types are available in version 1.
+
 Version 1 has no earlier released format to migrate. Unsupported versions are
 rejected; future migrations must be explicit and tested. Transform exposes world
 position only; parent hierarchies, rotation, prefabs, arbitrary component

@@ -26,6 +26,14 @@ Scripts attached to an authored entity also receive `self` and `input` in their 
 Project scripts can register a typed ECS component while loading, for example
 `engine.register_component("PlayerStats", {ticks = "number", enabled = "boolean"})`.
 Fields accept `number`, `boolean`, or `string`; an existing schema must match.
+For versioned fields and defaults, use
+`engine.register_component("Vitals", {hp = {type = "number", version = 2, default = 100}, active = {type = "boolean", default = true}}, 2)`.
+The final argument is the component schema version; it defaults to 1. Each field
+version defaults to 1 and cannot exceed its component version. Omitted values
+use declared defaults. Project registration allows at most 64 component schemas,
+32 fields per schema, and 512 fields total. Schema and field names are limited
+to 64 ASCII bytes; string values and defaults are limited to 4096 bytes, and
+number values must be finite.
 `engine.set_component(entity, name, values)`, `engine.get_component(entity, name)`,
 and `engine.remove_component(entity, name)` operate on entity handles. The
 corresponding `self` methods omit the entity argument and use the authored owner.
