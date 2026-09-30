@@ -36,7 +36,8 @@ build/debug-vk0/bin/CPPGameEngine run examples/first-project/project.json --head
 build/debug-vk0/bin/CPPGameEngine editor examples/first-project/project.json
 ```
 
-See [command and packaging usage](docs/commands.md), the
+See the [documentation index](docs/README.md) for project guides and API
+references, [command and packaging usage](docs/commands.md), the
 [project/scene contract](docs/project-format.md), and the [read-only MCP adapter](docs/mcp.md).
 Android and iOS builds use the same authored project runtime through SDL3; see
 the [mobile build guide](mobile/README.md) and run `CPPGameEngine platform check android`
