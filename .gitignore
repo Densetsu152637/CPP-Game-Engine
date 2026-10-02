@@ -2,6 +2,7 @@
 .vscode/
 .idea/
 agents.md
+agents.*.md
 
 # build directories
 build/

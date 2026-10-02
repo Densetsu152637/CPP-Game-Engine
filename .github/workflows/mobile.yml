@@ -99,6 +99,55 @@ jobs:
             sleep 2
           done
           [[ "${booted:-}" == 1 ]] || { cat "$RUNNER_TEMP/android-emulator.log"; exit 1; }
+          home_package=""
+          setup_ready=false
+          last_setup_probe_error=""
+          for attempt in $(seq 1 120); do
+            if [[ -z "$home_package" ]]; then
+              if home_resolution="$(timeout 5s "$adb" shell cmd package resolve-activity --brief \
+                -a android.intent.action.MAIN -c android.intent.category.HOME 2>&1)"; then
+                home_component="$(tr -d '\r' <<< "$home_resolution" | tail -n 1)"
+                if [[ "$home_component" == */* ]]; then
+                  home_package="${home_component%%/*}"
+                  echo "Resolved Android HOME activity: $home_component"
+                else
+                  last_setup_probe_error="HOME resolver returned: $home_resolution"
+                fi
+              else
+                last_setup_probe_error="HOME activity lookup failed: $home_resolution"
+              fi
+            fi
+            if [[ -n "$home_package" ]]; then
+              if setup_probe="$(timeout 5s "$adb" shell 'printf "%s %s\\n" "$(settings get global device_provisioned)" "$(settings get secure user_setup_complete)"; dumpsys activity activities | grep -E "mResumedActivity|topResumedActivity" || true' 2>&1)"; then
+                setup_probe="$(tr -d '\r' <<< "$setup_probe")"
+                read -r device_provisioned user_setup_complete < <(head -n 1 <<< "$setup_probe")
+                resumed_activity="$(tail -n +2 <<< "$setup_probe")"
+                if [[ "$device_provisioned" == 1 && "$user_setup_complete" == 1 ]] \
+                  && grep -Fq "$home_package" <<< "$resumed_activity"; then
+                  setup_ready=true
+                  echo "Android first-boot setup is complete and HOME ($home_package) is resumed"
+                  break
+                fi
+                last_setup_probe_error="provisioned=$device_provisioned user_setup_complete=$user_setup_complete resumed=$resumed_activity"
+              else
+                last_setup_probe_error="Device setup/activity query failed: $setup_probe"
+              fi
+            fi
+            sleep 1
+          done
+          if [[ "$setup_ready" != true ]]; then
+            echo 'Android first-boot setup/HOME did not reach a stable ready state within 120 seconds' >&2
+            echo "Resolved HOME package: ${home_package:-<unavailable>}" >&2
+            echo "Last setup probe: $last_setup_probe_error" >&2
+            timeout 20s "$adb" devices -l || true
+            timeout 20s "$adb" shell settings get global device_provisioned || true
+            timeout 20s "$adb" shell settings get secure user_setup_complete || true
+            timeout 20s "$adb" shell dumpsys activity activities || true
+            timeout 20s "$adb" logcat -d -v threadtime > "$RUNNER_TEMP/android-setup-timeout-logcat.txt" 2>&1 || true
+            cat "$RUNNER_TEMP/android-setup-timeout-logcat.txt" || true
+            cat "$RUNNER_TEMP/android-emulator.log" || true
+            exit 1
+          fi
           "$adb" shell pm list features > "$RUNNER_TEMP/android-features.txt"
           "$adb" install -r mobile/android/app/build/outputs/apk/debug/app-debug.apk
           "$adb" shell am start -W -n com.cppgameengine.mobile/.GameActivity
@@ -195,6 +244,9 @@ jobs:
           timeout 20s "$ANDROID_HOME/emulator/emulator" -list-avds > "$RUNNER_TEMP/android-avd-list-diagnostics.txt" 2>&1
           timeout 20s "$adb" devices -l > "$RUNNER_TEMP/android-adb-devices.txt" 2>&1
           timeout 20s "$adb" logcat -d -v threadtime > "$RUNNER_TEMP/android-logcat-final.txt" 2>&1
+          timeout 20s "$adb" shell settings get global device_provisioned > "$RUNNER_TEMP/android-device-provisioned.txt" 2>&1
+          timeout 20s "$adb" shell settings get secure user_setup_complete > "$RUNNER_TEMP/android-user-setup-complete.txt" 2>&1
+          timeout 20s "$adb" shell dumpsys activity activities > "$RUNNER_TEMP/android-activities-final.txt" 2>&1
           timeout 20s "$adb" shell getprop sys.boot_completed > "$RUNNER_TEMP/android-boot-state.txt" 2>&1
           timeout 20s "$adb" shell dumpsys activity processes > "$RUNNER_TEMP/android-activity.txt" 2>&1
           timeout 20s "$adb" shell dumpsys SurfaceFlinger > "$RUNNER_TEMP/android-surfaceflinger.txt" 2>&1
@@ -218,6 +270,10 @@ jobs:
             ${{ runner.temp }}/android-screen.png
             ${{ runner.temp }}/android-adb-devices.txt
             ${{ runner.temp }}/android-logcat-final.txt
+            ${{ runner.temp }}/android-setup-timeout-logcat.txt
+            ${{ runner.temp }}/android-device-provisioned.txt
+            ${{ runner.temp }}/android-user-setup-complete.txt
+            ${{ runner.temp }}/android-activities-final.txt
             ${{ runner.temp }}/android-boot-state.txt
             ${{ runner.temp }}/android-activity.txt
             ${{ runner.temp }}/android-surfaceflinger.txt
