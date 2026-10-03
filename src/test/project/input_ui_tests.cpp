@@ -65,4 +65,28 @@ void runInputUiTests() {
     releasePanel.id="child";require(releaseUi.open(releasePanel),"release child opens");releaseUi.tick({});releaseUi.tick(dismiss);
     require(releaseUi.panels().size()==1,"dismiss child retains parent");releaseUi.tick(explicitRelease);releaseUi.tick(dismiss);
     require(releaseUi.panels().empty(),"next press after explicit release can dismiss parent");
+    UiModel choiceUi;
+    PanelOptions choicePanel;choicePanel.id="invalid-choice";choicePanel.choices={"first\nsecond","next"};
+    require(!choiceUi.open(choicePanel)&&choiceUi.panels().empty(),"multiline LF choice rejected atomically");
+    choicePanel.choices={"first\rsecond"};
+    require(!choiceUi.open(choicePanel)&&choiceUi.panels().empty(),"multiline CR choice rejected atomically");
+    choicePanel.id="long-choices";choicePanel.text="line1\nline2\nline3\nline4\nline5";
+    choicePanel.choices={"first","second","third"};choicePanel.lineHeight=10;choicePanel.rect={0,0,100,20};
+    require(choiceUi.open(choicePanel)&&choiceUi.panels().front().scrollOffset==0,"opening keeps reading text visible");choiceUi.tick({});
+    ActionFrame navigation;navigation.pressed={"ui_down"};choiceUi.tick(navigation);
+    require(choiceUi.panels().front().selected==1&&choiceUi.panels().front().scrollOffset==50,"keyboard navigation scrolls selected offscreen choice into view");
+    auto selectedVisible=[](const PanelSnapshot& p) {const float top=static_cast<float>(p.lines.size()+p.selected)*p.lineHeight*p.scale;return top>=p.scrollOffset&&top+p.lineHeight*p.scale<=p.scrollOffset+p.rect.height;};
+    require(selectedVisible(choiceUi.panels().front()),"selected row fully inside clip after downward navigation");choiceUi.pollEvent();
+    ActionFrame choiceClick;choiceClick.pressed={"ui_click"};choiceClick.pointerX=5;choiceClick.pointerY=15;choiceUi.tick(choiceClick);
+    auto clickEvent=choiceUi.pollEvent();require(clickEvent&&clickEvent->selection==1,"scrolled pointer row agrees with rendered choice positions");choiceUi.pollEvent();
+    require(choiceUi.scroll("long-choices",-1000),"manual reading scroll supported");choiceUi.tick({});
+    require(choiceUi.panels().front().scrollOffset==0,"idle retains manual reading position");
+    navigation.pressed={"ui_up"};choiceUi.tick(navigation);
+    require(choiceUi.panels().front().selected==0&&selectedVisible(choiceUi.panels().front()),"up navigation returns first choice to visible viewport");choiceUi.pollEvent();
+    PanelOptions childChoice;childChoice.id="choice-child";require(choiceUi.open(childChoice),"nested child opens above scrolled choices");
+    const float parentOffset=choiceUi.panels().front().scrollOffset;require(choiceUi.close("choice-child"),"child closes");
+    require(choiceUi.panels().front().focused&&choiceUi.panels().front().scrollOffset==parentOffset&&selectedVisible(choiceUi.panels().front()),"nested focus restoration retains visible selected row");
+    choiceUi.clear();choiceUi.tick({});choicePanel.id="tall-row";choicePanel.text="";choicePanel.lineHeight=30;choicePanel.rect.height=10;
+    require(choiceUi.open(choicePanel),"row taller than viewport supported");choiceUi.tick({});navigation.pressed={"ui_down"};choiceUi.tick(navigation);
+    require(choiceUi.panels().front().scrollOffset==60,"oversized selected row aligns top to clip");
 }

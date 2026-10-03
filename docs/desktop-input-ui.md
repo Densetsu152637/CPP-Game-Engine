@@ -35,7 +35,7 @@ rectangle, scale, metrics and choices are configurable. Default navigation uses
 ui_confirm / ui_back / ui_up / ui_down / ui_click. Controller support follows
 from mapping these actions; pointer coordinates must be in the same logical
 coordinate space as panel rectangles. Pointer wheel scrolls only inside the
-focused panel. Choice rows follow the text lines. Snapshot order is stack order;
+focused panel. Choice rows follow the text lines. Each choice is a single row; CR/LF characters are rejected. Up/down navigation scrolls the selected row into view. Rows taller than the viewport align at its top. Opening a panel and manual text scrolling retain the reading position until a choice navigation action. Snapshot order is stack order;
 only the top panel receives navigation, and closing it restores parent focus.
 
 Feed the original action frame into `tick`, then query `gameplayFrame()` for
