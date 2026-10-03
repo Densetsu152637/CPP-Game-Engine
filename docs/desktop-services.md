@@ -53,7 +53,10 @@ recursion. Missing, malformed, oversized, inaccessible and newer saves are disti
 coded failures. A migration callback is an explicit old-to-current transform;
 its returned object is revalidated. A migrated load never rewrites disk. To commit
 that migration, pass the callback to `save` with the validated transformed data.
-Newer schema/content snapshots and encountered future backups are not overwritten.
+Valid version headers identify future snapshots before interpreting current payload
+shape. Newer schema/content snapshots and encountered future backups are not overwritten.
+Unrecognized, corrupt or unreadable backups also block replacement; a parser safety
+refusal cannot cause destructive recovery of a possibly newer snapshot.
 
 Writing takes a per-slot OS lock, writes a same-directory temporary, flushes it,
 then atomically renames/replaces it. Windows uses `FlushFileBuffers` followed by
