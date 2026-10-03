@@ -82,6 +82,12 @@ else()
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_LIST_DIR}/ios/Info.plist"
         XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
         XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO")
+    if(IOS)
+        set_target_properties(CPPGameEngineMobile PROPERTIES
+            XCODE_ATTRIBUTE_SDKROOT "iphonesimulator"
+            XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS "iphonesimulator"
+            XCODE_GENERATE_SCHEME TRUE)
+    endif()
 endif()
 
 if(ANDROID)

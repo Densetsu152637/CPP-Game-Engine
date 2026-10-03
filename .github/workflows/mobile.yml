@@ -349,18 +349,18 @@ jobs:
           cp "$project_path/project.pbxproj" "$RUNNER_TEMP/ios-project.pbxproj"
           cp "$project_path/xcshareddata/xcschemes/${test_scheme}.xcscheme" \
             "$RUNNER_TEMP/ios-test-scheme.xcscheme"
+          xcodebuild -list -project "$project_path" 2>&1 \
+            | tee "$RUNNER_TEMP/ios-schemes.txt"
           for scheme in CPPGameEngineMobile "$test_scheme"; do
             destinations_file="$RUNNER_TEMP/ios-${scheme}-destinations.txt"
             xcodebuild -showdestinations -project "$project_path" -scheme "$scheme" \
-              > "$destinations_file" 2>&1 || true
-            echo "Xcode destinations for $scheme:"
-            cat "$destinations_file"
+              2>&1 | tee "$destinations_file"
           done
           xcodebuild -showBuildSettings \
             -project "$project_path" \
             -scheme "$test_scheme" \
             -destination "platform=iOS Simulator,id=$simulator_id" \
-            > "$RUNNER_TEMP/ios-test-build-settings.txt" 2>&1 || true
+            2>&1 | tee "$RUNNER_TEMP/ios-test-build-settings.txt"
           grep -E 'Build settings for action|TARGET_NAME =|PRODUCT_TYPE =|SUPPORTED_PLATFORMS =|SDKROOT =|SDK_NAME =' \
             "$RUNNER_TEMP/ios-test-build-settings.txt" || true
           xcodebuild test \
@@ -400,6 +400,7 @@ jobs:
             ${{ runner.temp }}/ios-ui-tests.xcresult
             ${{ runner.temp }}/ios-project.pbxproj
             ${{ runner.temp }}/ios-test-scheme.xcscheme
+            ${{ runner.temp }}/ios-schemes.txt
             ${{ runner.temp }}/ios-CPPGameEngineMobile-destinations.txt
             ${{ runner.temp }}/ios-CPPGameEngineMobileUITests-destinations.txt
             ${{ runner.temp }}/ios-test-build-settings.txt
