@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "ticks": 120,
+  "ticks": 360,
   "input": [
     "move_right:5",
     "ui_confirm:6",
