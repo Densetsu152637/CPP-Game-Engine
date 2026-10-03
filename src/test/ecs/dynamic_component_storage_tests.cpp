@@ -114,6 +114,52 @@ void test_dynamic_component_storage_and_deferred_query_coherence()
         !metadata.registerComponent("bad-name", {{"hp", DynamicFieldType::Number}}),
         "invalid metadata and unstable names must be rejected");
 
+    DynamicComponentStorage sparseMembership;
+    const std::vector<DynamicField> mixedFields{{"number", DynamicFieldType::Number},
+        {"flag", DynamicFieldType::Boolean}, {"text", DynamicFieldType::String}};
+    test::require(sparseMembership.registerComponent("Mixed", mixedFields) &&
+        sparseMembership.registerComponent("Marker", {{"value", DynamicFieldType::Number}}),
+        "schemas for sparse membership tests should register");
+    const Entity rowA{12, 3}, rowB{4, 2}, rowC{9, 5};
+    test::require(sparseMembership.set(rowA, "Mixed", {{"number", 12.0}, {"flag", true}, {"text", std::string("a")}}) &&
+        sparseMembership.set(rowB, "Mixed", {{"number", 4.0}, {"flag", false}, {"text", std::string("b")}}) &&
+        sparseMembership.set(rowC, "Mixed", {{"number", 9.0}, {"flag", true}, {"text", std::string("c")}}) &&
+        sparseMembership.set(rowB, "Marker", {{"value", 1.0}}) &&
+        sparseMembership.set(rowC, "Marker", {{"value", 2.0}}),
+        "mixed typed values should insert into sparse membership and aligned columns");
+    test::require(sparseMembership.query({"Mixed"}) == std::vector<Entity>{rowB, rowC, rowA} &&
+        sparseMembership.query({"Mixed", "Marker"}) == std::vector<Entity>{rowB, rowC},
+        "EnTT runtime-view queries should intersect memberships and return stable entity order");
+    test::require(sparseMembership.remove(rowB, "Mixed") &&
+        sparseMembership.get(rowC, "Mixed") == DynamicValues{{"number", 9.0}, {"flag", true}, {"text", std::string("c")}} &&
+        sparseMembership.query({"Mixed", "Marker"}) == std::vector<Entity>{rowC},
+        "swap removal should keep all typed columns aligned with the moved membership row");
+
+    const Entity reusedIndex{rowC.index, rowC.version + 1};
+    test::require(!sparseMembership.set(reusedIndex, "Mixed",
+            {{"number", 90.0}, {"flag", false}, {"text", std::string("stale")}}) &&
+        !sparseMembership.get(reusedIndex, "Mixed") && !sparseMembership.remove(reusedIndex, "Mixed") &&
+        sparseMembership.get(rowC, "Mixed").has_value(),
+        "a different generation must not alias a live sparse index");
+    test::require(sparseMembership.remove(rowC, "Mixed") &&
+        sparseMembership.set(reusedIndex, "Mixed",
+            {{"number", 90.0}, {"flag", false}, {"text", std::string("reused")}}) &&
+        sparseMembership.get(reusedIndex, "Mixed") == DynamicValues{{"number", 90.0}, {"flag", false},
+            {"text", std::string("reused")}},
+        "an index can be reused after the previous generation is erased");
+
+    const Entity maxVersion{20, std::numeric_limits<std::uint32_t>::max()};
+    test::require(sparseMembership.set(maxVersion, "Mixed",
+            {{"number", 20.0}, {"flag", true}, {"text", std::string("max-generation")}}) &&
+        sparseMembership.get(maxVersion, "Mixed").has_value() &&
+        sparseMembership.query({"Mixed"}) == std::vector<Entity>{reusedIndex, rowA, maxVersion},
+        "the maximum engine generation should survive EnTT's native generation offset");
+    test::require(!sparseMembership.set(Entity{}, "Mixed", {}) &&
+        !sparseMembership.set(Entity{1, 0}, "Mixed", {}) &&
+        !sparseMembership.set(Entity{std::numeric_limits<std::uint32_t>::max(), 1}, "Mixed", {}) &&
+        !sparseMembership.set(Entity{size_t{1} << 32, 1}, "Mixed", {}),
+        "invalid, reserved, and out-of-range handles must fail before reaching EnTT");
+
     DynamicComponentStorage typeQuota;
     for (size_t i = 0; i < max_dynamic_component_types; ++i)
         test::require(typeQuota.registerComponent("Type" + std::to_string(i),

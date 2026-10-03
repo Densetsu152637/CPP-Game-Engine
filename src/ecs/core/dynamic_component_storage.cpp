@@ -8,6 +8,37 @@ namespace ecs
 {
     namespace
     {
+        using NativeEntityTraits = entt::entt_traits<std::uint64_t>;
+        using NativeEntity = NativeEntityTraits::value_type;
+        using DynamicEntitySet = entt::basic_sparse_set<NativeEntity>;
+
+        bool toNativeEntity(const Entity& entity, NativeEntity& native)
+        {
+            // Match EntityRegistry's EnTT encoding. EnTT reserves the maximum
+            // index and generation; the engine stores generations one higher.
+            if (!entity.valid() || entity.index >= NativeEntityTraits::entity_mask || entity.version == 0)
+                return false;
+            native = NativeEntityTraits::construct(static_cast<NativeEntityTraits::entity_type>(entity.index),
+                entity.version - 1);
+            return true;
+        }
+
+        Entity fromNativeEntity(const NativeEntity entity)
+        {
+            return {NativeEntityTraits::to_entity(entity),
+                static_cast<std::uint32_t>(NativeEntityTraits::to_version(entity) + 1)};
+        }
+
+        template<typename T>
+        void reserveForAppend(std::vector<T>& values)
+        {
+            const size_t required = values.size() + 1;
+            if (required <= values.capacity()) return;
+            const size_t capacity = values.capacity();
+            const size_t doubled = capacity > values.max_size() / 2 ? values.max_size() : capacity * 2;
+            values.reserve(std::max(required, std::max(size_t{1}, doubled)));
+        }
+
         bool validType(const DynamicFieldType type)
         {
             return type == DynamicFieldType::Number || type == DynamicFieldType::Boolean ||
@@ -141,29 +172,35 @@ namespace ecs
     bool DynamicComponentStorage::set(const Entity& entity, const std::string_view name, const DynamicValues& values)
     {
         auto found = m_columns.find(std::string(name));
-        if (!entity.valid() || found == m_columns.end()) return false;
+        NativeEntity native{};
+        if (!toNativeEntity(entity, native) || found == m_columns.end()) return false;
         Column& column = found->second;
-        const auto rowFound = column.rows.find(entity.packed());
-        const bool inserting = rowFound == column.rows.end();
-        const auto ordered = orderedValues(column.fields, values);
+        const bool inserting = !column.entities.contains(native);
+        if (inserting && column.entities.current(native) != NativeEntityTraits::version_mask)
+            return false; // Another generation still owns this sparse index.
+        auto ordered = orderedValues(column.fields, values);
         if (!ordered) return false;
         size_t row = 0;
         if (inserting)
         {
             row = column.entities.size();
-            column.entities.push_back(entity);
-            column.rows.emplace(entity.packed(), row);
+            // Complete all potentially-throwing allocations before publishing
+            // membership; after push, typed row construction uses noexcept moves.
+            for (auto& values : column.numbers) reserveForAppend(values);
+            for (auto& values : column.booleans) reserveForAppend(values);
+            for (auto& values : column.strings) reserveForAppend(values);
+            column.entities.push(native);
             size_t numberIndex = 0, booleanIndex = 0, stringIndex = 0;
             for (size_t field = 0; field < column.fields.size(); ++field)
             {
                 const auto& value = (*ordered)[field];
                 if (column.fields[field].type == DynamicFieldType::Number) column.numbers[numberIndex++].push_back(std::get<double>(value));
                 else if (column.fields[field].type == DynamicFieldType::Boolean) column.booleans[booleanIndex++].push_back(static_cast<uint8_t>(std::get<bool>(value)));
-                else column.strings[stringIndex++].push_back(std::get<std::string>(value));
+                else column.strings[stringIndex++].push_back(std::get<std::string>(std::move((*ordered)[field])));
             }
             return true;
         }
-        row = rowFound->second;
+        row = column.entities.index(native);
         size_t numberIndex = 0, booleanIndex = 0, stringIndex = 0;
         for (size_t field = 0; field < column.fields.size(); ++field)
         {
@@ -198,9 +235,9 @@ namespace ecs
         const auto found = m_columns.find(std::string(name));
         if (found == m_columns.end()) return std::nullopt;
         const Column& column = found->second;
-        const auto rowFound = column.rows.find(entity.packed());
-        if (!entity.valid() || rowFound == column.rows.end()) return std::nullopt;
-        const size_t row = rowFound->second;
+        NativeEntity native{};
+        if (!toNativeEntity(entity, native) || !column.entities.contains(native)) return std::nullopt;
+        const size_t row = column.entities.index(native);
         DynamicValues result; result.reserve(column.fields.size());
         size_t numberIndex = 0, booleanIndex = 0, stringIndex = 0;
         for (const auto& field : column.fields)
@@ -217,44 +254,35 @@ namespace ecs
         const auto found = m_columns.find(std::string(name));
         if (found == m_columns.end()) return false;
         Column& column = found->second;
-        const auto rowFound = column.rows.find(entity.packed());
-        if (!entity.valid() || rowFound == column.rows.end()) return false;
-        const size_t row = rowFound->second, last = column.entities.size() - 1;
+        NativeEntity native{};
+        if (!toNativeEntity(entity, native) || !column.entities.contains(native)) return false;
+        const size_t row = column.entities.index(native), last = column.entities.size() - 1;
         if (row != last)
         {
-            const Entity moved = column.entities[last];
-            column.entities[row] = moved;
-            column.rows[moved.packed()] = row;
             for (auto& values : column.numbers) values[row] = values[last];
             for (auto& values : column.booleans) values[row] = values[last];
             for (auto& values : column.strings) values[row] = std::move(values[last]);
         }
-        column.entities.pop_back();
         for (auto& values : column.numbers) values.pop_back();
         for (auto& values : column.booleans) values.pop_back();
         for (auto& values : column.strings) values.pop_back();
-        column.rows.erase(rowFound);
+        column.entities.erase(native);
         return true;
     }
 
     std::vector<Entity> DynamicComponentStorage::query(const std::vector<std::string>& all) const
     {
         if (all.empty()) return {};
-        const Column* candidate = nullptr;
+        entt::basic_runtime_view<const DynamicEntitySet> view;
         for (const auto& name : all)
         {
             const auto found = m_columns.find(name);
             if (found == m_columns.end()) return {};
-            if (!candidate || found->second.entities.size() < candidate->entities.size()) candidate = &found->second;
+            view.iterate(found->second.entities);
         }
         std::vector<Entity> result;
-        for (const Entity& entity : candidate->entities)
-        {
-            bool matches = true;
-            for (const auto& name : all)
-                if (!m_columns.at(name).rows.contains(entity.packed())) { matches = false; break; }
-            if (matches) result.push_back(entity);
-        }
+        result.reserve(view.size_hint());
+        for (const NativeEntity entity : view) result.push_back(fromNativeEntity(entity));
         std::sort(result.begin(), result.end());
         return result;
     }
@@ -267,5 +295,5 @@ namespace ecs
     }
 
     void DynamicComponentStorage::clear()
-    { for (auto& [name, column] : m_columns) { (void)name; column.entities.clear(); column.rows.clear(); for (auto& v : column.numbers) v.clear(); for (auto& v : column.booleans) v.clear(); for (auto& v : column.strings) v.clear(); } }
+    { for (auto& [name, column] : m_columns) { (void)name; column.entities.clear(); for (auto& v : column.numbers) v.clear(); for (auto& v : column.booleans) v.clear(); for (auto& v : column.strings) v.clear(); } }
 }

@@ -2,6 +2,9 @@
 
 #include "entity.h"
 
+#include <entt/entity/runtime_view.hpp>
+#include <entt/entity/sparse_set.hpp>
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -37,8 +40,9 @@ namespace ecs
     {
         struct Column
         {
-            std::vector<Entity> entities;
-            std::unordered_map<std::uint64_t, size_t> rows;
+            // The sparse set stores EnTT-native 64-bit IDs (engine generation - 1).
+            // The typed vectors stay row-aligned with its packed entity array.
+            entt::basic_sparse_set<std::uint64_t> entities;
             std::vector<DynamicField> fields;
             std::uint32_t version = 1;
             std::vector<std::vector<double>> numbers;
