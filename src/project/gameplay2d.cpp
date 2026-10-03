@@ -53,7 +53,9 @@ namespace project::gameplay2d
                 }
             }
             const double time = std::max(enter[0], enter[1]);
-            if (time < 0 || time > 1 || time > std::min(leave[0], leave[1])) return {};
+            // Blocking requires an interval of positive-area overlap. Entry equal
+            // to exit is a corner graze, including entry/exit at the initial point.
+            if (time < 0 || time > 1 || time >= std::min(leave[0], leave[1])) return {};
             return {time, enter[0] >= enter[1], enter[1] >= enter[0]};
         }
     }

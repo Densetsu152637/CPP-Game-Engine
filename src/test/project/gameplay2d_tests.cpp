@@ -34,6 +34,25 @@ void runGameplay2dTests()
     add(world, "player", {0,0}); add(world, "right", {3,0}, {1,100}); add(world, "top", {0,3}, {100,1});
     at(world.move("player", {100,100})->position, {2,2}, "simultaneous corner blocks both axes");
     world.clear();
+    // A single instant of corner contact never creates positive-area overlap.
+    for (const float sign : {-1.0f, 1.0f})
+        for (int swap = 0; swap < 2; ++swap)
+            for (const float start : {1.0f, 2.0f})
+            {
+                world.clear();
+                const Vec2 obstacle = swap ? Vec2{0,3*sign} : Vec2{3*sign,0};
+                const Vec2 extent = swap ? Vec2{3,1} : Vec2{1,3};
+                add(world,"player",{start*sign,start*sign}); add(world,"corner",obstacle,extent);
+                const auto graze = world.move("player",{(3-start)*sign,(3-start)*sign});
+                test::require(graze.has_value(), "corner graze succeeds");
+                at(graze->position, {3*sign,3*sign}, "zero-duration corner graze preserves both axes");
+                test::require(graze->contacts.empty(), "grazing has no blocking contact");
+            }
+    world.clear(); add(world,"player",{0,0}); add(world,"corner",{3,3});
+    at(world.move("player",{4,4})->position, {2,2}, "positive interval corner entry blocks both axes");
+    world.clear(); add(world,"player",{0,0}); add(world,"corner",{-3,-3});
+    at(world.move("player",{-4,-4})->position, {-2,-2}, "negative positive interval corner entry blocks both axes");
+    world.clear();
     add(world, "player", {0,0}); add(world, "left", {-3,0}, {1,100});
     at(world.move("player", {-100,5})->position, {-2,5}, "negative sweep and slide");
     world.clear();
