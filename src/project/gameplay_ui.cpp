@@ -16,6 +16,16 @@ bool decode(std::string_view s,std::size_t& i,char32_t& cp) {
 }
 bool validRect(Rect r) { return std::isfinite(r.x)&&std::isfinite(r.y)&&std::isfinite(r.width)&&std::isfinite(r.height)&&r.width>0&&r.height>0&&r.width<=16384&&r.height<=16384; }
 void clampScroll(PanelSnapshot& p) { p.scrollOffset=std::clamp(p.scrollOffset,0.f,std::max(0.f,p.contentHeight-p.rect.height)); }
+void keepChoiceVisible(PanelSnapshot& p) {
+    const double rowHeight = static_cast<double>(p.lineHeight * p.scale);
+    const double top = static_cast<double>(p.lines.size() + p.selected) * rowHeight;
+    const double bottom = top + rowHeight;
+    double offset = p.scrollOffset;
+    if(rowHeight > p.rect.height || top < offset) offset = top;
+    else if(bottom > offset + p.rect.height) offset = bottom - p.rect.height;
+    p.scrollOffset = static_cast<float>(offset);
+    clampScroll(p);
+}
 }
 bool validUtf8(std::string_view text) { std::size_t i=0; char32_t cp=0; while(i<text.size()) if(!decode(text,i,cp)) return false; return true; }
 UiModel::UiModel(GlyphAdvance advance):m_advance(std::move(advance)) {}
@@ -46,7 +56,7 @@ void UiModel::capture() { m_suppressed.insert(m_raw.held.begin(),m_raw.held.end(
 bool UiModel::open(PanelOptions options) {
     if(m_panels.size()>=64||options.id.empty()||options.id.size()>128||options.fontAsset.size()>128||options.text.size()>65536||!validUtf8(options.text)||!validRect(options.rect)||!std::isfinite(options.scale)||options.scale<=0||options.scale>16||!std::isfinite(options.lineHeight)||options.lineHeight<=0||options.lineHeight>1024||!std::isfinite(options.glyphAdvance)||options.glyphAdvance<=0||options.choices.size()>64) return false;
     for(float c:options.color) if(!std::isfinite(c)||c<0||c>1) return false;
-    for(const auto& choice:options.choices) if(choice.size()>4096||!validUtf8(choice)) return false;
+    for(const auto& choice:options.choices) if(choice.size()>4096||!validUtf8(choice)||choice.find_first_of("\r\n")!=std::string::npos) return false;
     if(std::any_of(m_panels.begin(),m_panels.end(),[&](const auto& p){return p.id==options.id;})) return false;
     PanelSnapshot p; static_cast<PanelOptions&>(p)=std::move(options); if(!layout(p)) return false;
     if(!m_panels.empty()) m_panels.back().focused=false;
@@ -80,6 +90,7 @@ void UiModel::tick(const interaction::ActionFrame& input) {
         auto before=p.selected;
         if(pressed(p.upAction)) p.selected=(p.selected+p.choices.size()-1)%p.choices.size();
         if(pressed(p.downAction)) p.selected=(p.selected+1)%p.choices.size();
+        if(pressed(p.upAction) || pressed(p.downAction)) keepChoiceVisible(p);
         if(before!=p.selected) m_events.push_back({p.id,"selection",p.selected});
     } else { if(pressed(p.upAction)) scroll(p.id,-p.lineHeight*p.scale); if(pressed(p.downAction)) scroll(p.id,p.lineHeight*p.scale); }
     bool inside=input.pointerX>=p.rect.x&&input.pointerX<p.rect.x+p.rect.width&&input.pointerY>=p.rect.y&&input.pointerY<p.rect.y+p.rect.height;

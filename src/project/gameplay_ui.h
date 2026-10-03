@@ -15,7 +15,7 @@ struct PanelOptions {
     float scale = 1, lineHeight = 20, glyphAdvance = 10;
     int layer = 0;
     bool modal = true, dismissible = true;
-    std::vector<std::string> choices;
+    std::vector<std::string> choices; // Single-row UTF-8 labels; CR and LF are rejected.
     std::string confirmAction = "ui_confirm", cancelAction = "ui_back", upAction = "ui_up", downAction = "ui_down", pointerAction = "ui_click";
 };
 struct PanelSnapshot : PanelOptions {
