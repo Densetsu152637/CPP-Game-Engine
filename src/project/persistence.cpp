@@ -45,9 +45,9 @@ namespace project
                 if (quoted) { if (escaped) escaped = false; else if (c == '\\') escaped = true; else if (c == '"') quoted = false; }
                 else if (c == '"') quoted = true;
                 else if (c == '{' || c == '[') { if (++depth > limit) return false; }
-                else if (c == '}' || c == ']') { if (!depth) return false; --depth; }
+                else if (c == '}' || c == ']') { if (depth) --depth; }
             }
-            return !quoted && depth == 0;
+            return true; // The JSON parser diagnoses truncation and mismatched syntax.
         }
         bool validValue(const picojson::value& value, unsigned depth, unsigned limit)
         {
@@ -178,15 +178,18 @@ namespace project
         if (size < 0 || static_cast<std::uint64_t>(size) > options.maxBytes) return std::unexpected(failure("persistence.size", file, "Snapshot exceeds byte limit"));
         std::string text(static_cast<std::size_t>(size), '\0'); input.seekg(0);
         if (!input.read(text.data(), static_cast<std::streamsize>(text.size()))) return std::unexpected(failure("persistence.read.failed", file, "Incomplete snapshot read"));
-        if (!safeDepth(text, options.maxDepth + 2)) return std::unexpected(failure("persistence.corrupt", file, "Snapshot structure exceeds depth limit or is truncated"));
+        if (!safeDepth(text, 130)) return std::unexpected(failure("persistence.depth", file, "Snapshot exceeds parser depth safety bound"));
         picojson::value envelope; std::string parseError;
         const auto end = picojson::parse(envelope, text.begin(), text.end(), &parseError);
         if (!parseError.empty() || end != text.end() || !envelope.is<picojson::object>()) return std::unexpected(failure("persistence.corrupt", file, "Malformed snapshot JSON envelope"));
         const auto& object = envelope.get<picojson::object>(); const auto schema = version(object, "schema"); const auto content = version(object, "content_version");
-        const auto data = object.find("data");
-        if (!schema || !content || data == object.end() || !data->second.is<picojson::object>() || !validValue(data->second, 0, options.maxDepth))
-            return std::unexpected(failure("persistence.corrupt", file, "Invalid snapshot schema, content version, or object data"));
+        if (!schema || !content) return std::unexpected(failure("persistence.corrupt", file, "Invalid snapshot schema or content version"));
+        // Future versions may intentionally change the payload shape. Identify
+        // their valid version header before interpreting any current-schema data.
         if (schema > options.schemaVersion || content > options.contentVersion) return std::unexpected(failure("persistence.version.newer", file, "Snapshot was written by a newer schema/content version"));
+        const auto data = object.find("data");
+        if (data == object.end() || !data->second.is<picojson::object>() || !validValue(data->second, 0, options.maxDepth))
+            return std::unexpected(failure("persistence.corrupt", file, "Invalid snapshot object data"));
         if (schema != options.schemaVersion || content != options.contentVersion)
         {
             if (!migration) return std::unexpected(failure("persistence.migration.required", file, "Explicit version migration is required"));
@@ -221,9 +224,9 @@ namespace project
             std::ifstream input(file, std::ios::binary); const std::string prior((std::istreambuf_iterator<char>(input)), {});
             if (!input.good() && !input.eof()) return std::unexpected(failure("persistence.read.failed", file, "Cannot preserve previous snapshot"));
             const auto backup = std::filesystem::path(file.native() + std::filesystem::path(".bak").native());
-            // Preserve a previously encountered future backup too.
+            // Do not replace a future or unrecognized backup with current data.
             if (std::filesystem::exists(backup, ec))
-            { const auto oldBackup = read(backup, {}); if (!oldBackup && oldBackup.error().front().code == "persistence.version.newer") return std::unexpected(oldBackup.error()); }
+            { const auto oldBackup = read(backup, {}); if (!oldBackup && oldBackup.error().front().code != "persistence.migration.required") return std::unexpected(oldBackup.error()); }
             const auto savedBackup = durableReplace(backup, prior, {});
             if (!savedBackup) return savedBackup;
         }

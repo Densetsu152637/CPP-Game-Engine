@@ -73,6 +73,35 @@ namespace
         test::require(upgraded.save("main", *migrated, migration).has_value() && upgraded.load("main").has_value(), "explicit migration commit survives restart");
         test::require(upgraded.loadBackup("main", migration).has_value(), "migration preserves old snapshot backup");
     }
+    void futurePayloadShapesPreservePrimaryAndBackupBytes()
+    {
+        Fixture f; project::PersistenceStore store(f.options());
+        const auto backupPath = std::filesystem::path(f.primary().native() + std::filesystem::path(".bak").native());
+        auto bytes = [](const auto& path) { std::ifstream file(path, std::ios::binary); return std::string(std::istreambuf_iterator<char>(file), {}); };
+        auto requireFuture = [](const auto& result) { test::require(!result && result.error().front().code == "persistence.version.newer", "future payload shape must retain future-version classification"); };
+        test::require(store.save("main", state("room:a")).has_value() && store.save("main", state("room:b")).has_value(), "future shape fixture includes usable backup");
+        for (const auto& future : {std::string(R"({"schema":2,"content_version":1,"data":[]})"),
+            std::string(R"({"schema":1,"content_version":2,"data":"new-content-layout"})"),
+            std::string(R"({"schema":2,"content_version":1,"renamed_payload":{"room":"future"}})"),
+            std::string(R"({"schema":2,"content_version":1,"data":)") + std::string(40, '[') + "0" + std::string(40, ']') + "}"})
+        {
+            f.text(future); const auto priorBackup = bytes(backupPath);
+            requireFuture(store.load("main")); requireFuture(store.save("main", state("room:c"))); requireFuture(store.recoverBackup("main"));
+            test::require(bytes(f.primary()) == future && bytes(backupPath) == priorBackup, "load/save/recovery preserve exact future primary and backup bytes");
+            f.text(R"({"schema":1,"content_version":1,"data":{"room":"room:current"}})");
+            { std::ofstream backup(backupPath, std::ios::binary | std::ios::trunc); backup << future; }
+            const auto priorPrimary = bytes(f.primary());
+            requireFuture(store.loadBackup("main")); requireFuture(store.save("main", state("room:c"))); requireFuture(store.recoverBackup("main"));
+            test::require(bytes(f.primary()) == priorPrimary && bytes(backupPath) == future, "load/save/recovery preserve exact future backup and primary bytes");
+            { std::ofstream backup(backupPath, std::ios::binary | std::ios::trunc); backup << R"({"schema":1,"content_version":1,"data":{"room":"room:backup"}})"; }
+        }
+        f.text(std::string(R"({"schema":2,"content_version":1,"data":)") + std::string(140, '[') + "0" + std::string(140, ']') + "}");
+        const auto overlyDeep = bytes(f.primary());
+        test::require(!store.load("main") && !store.recoverBackup("main") && bytes(f.primary()) == overlyDeep, "parser safety limit cannot make an unrecognized snapshot recoverably corrupt");
+        f.text(R"({"schema":1,"content_version":1,"data":{"room":"room:current"}})");
+        { std::ofstream backup(backupPath, std::ios::binary | std::ios::trunc); backup << overlyDeep; }
+        const auto priorPrimary = bytes(f.primary()); test::require(!store.save("main", state("room:c")) && bytes(f.primary()) == priorPrimary && bytes(backupPath) == overlyDeep, "unrecognized backup cannot be overwritten after a parser safety refusal");
+    }
     void confinementAndBounds()
     {
         Fixture f; project::PersistenceStore store(f.options());
@@ -83,7 +112,7 @@ namespace
         auto shallow = f.options(); shallow.maxDepth = 1; project::PersistenceStore depth(shallow);
         test::require(!depth.save("main", {{"deep", picojson::value(picojson::object{{"more", picojson::value(picojson::object{{"v", picojson::value(true)}})}})}}), "object depth bound");
         test::require(store.save("main", state("room:a")).has_value(), "bounded read fixture");
-        f.text(std::string(40, '[') + std::string(40, ']')); test::require(!store.load("main"), "JSON nesting rejected before parser recursion");
+        f.text(std::string(140, '[') + std::string(140, ']')); test::require(!store.load("main"), "JSON nesting rejected before parser recursion");
         const auto outside = f.root / "outside"; std::filesystem::create_directory(outside);
         const auto alias = f.root / "alias";
 #ifdef _WIN32
@@ -101,7 +130,7 @@ namespace
     }
 }
 void runPersistenceTests()
-{ freshRestartBackupAndCorruption(); failuresRetainCommittedPrimary(); versionsMigrateExplicitlyAndNeverOverwriteFuture(); confinementAndBounds(); }
+{ freshRestartBackupAndCorruption(); failuresRetainCommittedPrimary(); versionsMigrateExplicitlyAndNeverOverwriteFuture(); futurePayloadShapesPreservePrimaryAndBackupBytes(); confinementAndBounds(); }
 #ifdef CPP_GAME_ENGINE_SERVICE_TEST_MAIN
 int main() { try { runPersistenceTests(); std::cout << "[PASS] durable persistence service tests\n"; return 0; } catch (const std::exception& e) { std::cerr << "[FAIL] " << e.what() << '\n'; return 1; } }
 #endif
