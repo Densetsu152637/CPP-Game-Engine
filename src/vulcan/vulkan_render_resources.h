@@ -379,8 +379,10 @@ namespace vulkan
             }
         }
 
+        VkExtent2D renderingExtent {};
         void begin(const VulkanSwapchain& swapchain, uint32_t imageIndex)
         {
+            renderingExtent = swapchain.extent();
             require_vk(vkResetCommandPool(device, commands, 0), "Reset command pool");
             draws.clear();
             VkCommandBufferBeginInfo beginInfo { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
@@ -430,7 +432,8 @@ namespace vulkan
         }
 
         Pipeline& pipeline(const VulkanShaderProgram& shader, const Uniforms& uniforms,
-            const rendering::VertexLayout* vertexLayout, const bool textured)
+            const rendering::VertexLayout* vertexLayout, const bool textured,
+            const rendering::DrawState& state)
         {
             // Exact content key avoids hash collisions, dangling shader pointers and address reuse.
             std::string key;
@@ -454,6 +457,7 @@ namespace vulkan
             }
             for (auto uniform : uniforms) { append(uniform->binding.set); append(uniform->binding.binding); }
             append(textured);
+            append(state.blend); append(state.depthTest); append(state.depthWrite);
             if (vertexLayout)
             {
                 append(vertexLayout->stride);
@@ -535,12 +539,22 @@ namespace vulkan
             VkPipelineMultisampleStateCreateInfo samples { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
             samples.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
             VkPipelineDepthStencilStateCreateInfo depth { VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
-            depth.depthTestEnable = VK_TRUE;
-            depth.depthWriteEnable = VK_TRUE;
+            depth.depthTestEnable = state.depthTest ? VK_TRUE : VK_FALSE;
+            depth.depthWriteEnable = state.depthWrite ? VK_TRUE : VK_FALSE;
             depth.depthCompareOp = VK_COMPARE_OP_LESS;
             VkPipelineColorBlendAttachmentState attachment {};
             attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                 VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            if (state.blend == rendering::BlendMode::StraightAlpha)
+            {
+                attachment.blendEnable = VK_TRUE;
+                attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+                attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+                attachment.colorBlendOp = VK_BLEND_OP_ADD;
+                attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+                attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+                attachment.alphaBlendOp = VK_BLEND_OP_ADD;
+            }
             VkPipelineColorBlendStateCreateInfo blend { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
             blend.attachmentCount = 1;
             blend.pAttachments = &attachment;
@@ -574,7 +588,8 @@ namespace vulkan
             VkQueue graphicsQueue = VK_NULL_HANDLE,
             uint32_t graphicsQueueFamily = 0,
             const CachedMesh* cachedMesh = nullptr,
-            const SampledTexture* cachedTexture = nullptr)
+            const SampledTexture* cachedTexture = nullptr,
+            const rendering::DrawState& state = {})
         {
             const bool hasVertices = vertices || cachedMesh;
             const bool textured = texture || cachedTexture;
@@ -597,7 +612,7 @@ namespace vulkan
                         attribute.offset > limits.maxVertexInputAttributeOffset)
                         throw std::invalid_argument("Vulkan mesh attribute exceeds device vertex input limits");
             auto uniforms = uniformLayout(shader);
-            auto& program = pipeline(shader, uniforms, vertexLayout, textured);
+            auto& program = pipeline(shader, uniforms, vertexLayout, textured, state);
             auto draw = std::make_unique<Draw>(device);
             if (texture)
                 draw->textures.push_back(createSampledTexture(*texture, memory, graphicsQueue, graphicsQueueFamily));
@@ -658,6 +673,21 @@ namespace vulkan
             }
             // Retain resources before recording any references; allocation failures leave the frame valid.
             draws.push_back(std::move(draw));
+            const auto extent = renderingExtent;
+            const rendering::PixelRect full {0, 0, extent.width, extent.height};
+            const auto view = state.viewport.value_or(full);
+            const auto clip = state.scissor.value_or(view);
+            auto inBounds = [&](const rendering::PixelRect& r) {
+                return r.width && r.height && r.x <= extent.width && r.y <= extent.height &&
+                    r.width <= extent.width-r.x && r.height <= extent.height-r.y;
+            };
+            if (!inBounds(view) || !inBounds(clip))
+                throw std::invalid_argument("Draw viewport/scissor exceeds framebuffer extent");
+            VkViewport viewport {static_cast<float>(view.x), static_cast<float>(view.y),
+                static_cast<float>(view.width), static_cast<float>(view.height), 0, 1};
+            VkRect2D scissor {{static_cast<int32_t>(clip.x), static_cast<int32_t>(clip.y)}, {clip.width,clip.height}};
+            vkCmdSetViewport(command, 0, 1, &viewport);
+            vkCmdSetScissor(command, 0, 1, &scissor);
             vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_GRAPHICS, program.handle);
             if (!sets.empty())
                 vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_GRAPHICS, program.layout, 0,

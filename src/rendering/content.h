@@ -32,5 +32,7 @@ namespace rendering
     // CGMESH 1 stores a non-indexed triangle list with one `vertex x y z u v`
     // record per vertex. PPM P3 is accepted at max value 255 and becomes RGBA8.
     MeshAsset loadMeshAsset(const std::filesystem::path& path);
+    Texture2D loadTexture(const std::filesystem::path& path);
+    Texture2D loadTexturePng(const std::filesystem::path& path);
     Texture2D loadTexturePpm(const std::filesystem::path& path);
 }

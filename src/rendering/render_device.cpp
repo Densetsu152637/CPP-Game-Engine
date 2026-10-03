@@ -36,6 +36,13 @@ namespace rendering
 
         void validate_draw(const DrawCommand& draw)
         {
+            if (draw.state.blend != BlendMode::Opaque && draw.state.blend != BlendMode::StraightAlpha)
+                throw std::invalid_argument("Unknown draw blend mode");
+            for (const auto* rect : { &draw.state.viewport, &draw.state.scissor })
+                if (*rect && (!(*rect)->width || !(*rect)->height ||
+                    (*rect)->x > static_cast<uint32_t>(std::numeric_limits<int32_t>::max()) ||
+                    (*rect)->y > static_cast<uint32_t>(std::numeric_limits<int32_t>::max())))
+                    throw std::invalid_argument("Draw viewport/scissor requires nonempty bounded pixel rectangle");
             if (!draw.shader.valid() || draw.shader.kind() != RenderResourceKind::Shader)
                 throw std::invalid_argument("Draw requires a live shader handle");
             if (draw.mesh.id() && (!draw.mesh.valid() || draw.mesh.kind() != RenderResourceKind::Mesh))

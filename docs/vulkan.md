@@ -37,7 +37,10 @@ explicit CPU vertex bytes. The layout supports `Float2`, `Float3`, and `Float4`
 attributes with caller-declared locations, stride, and offsets. Invalid layouts,
 device-limit violations, and data whose byte count does not match its stride are
 rejected. Vertex bytes are copied to a frame-owned host-visible vertex buffer.
-There is no index buffer, culling, blending, or mipmapping yet. Each swapchain
+There is no index buffer, culling, or mipmapping yet. Draw commands expose optional
+straight-alpha blending, independent depth test/write, and dynamic framebuffer
+viewport/scissor; see [desktop 2D rendering](desktop-2d-rendering.md). Defaults
+retain opaque behavior. Each swapchain
 image has a depth target; pipelines use depth test/write with `LESS`. The renderer
 chooses a supported D32 or D24 depth attachment format. Viewport and scissor follow
 the swapchain extent.
@@ -74,7 +77,9 @@ location 0 (`Float3`) and UV at location 1 (`Float2`).
 `rendering::loadTexturePpm` accepts ASCII PPM P3 with max value 255 and converts
 RGB pixels to opaque row-major RGBA8. The loader caps each dimension at 8192 and
 the image at 16,777,216 texels. Vulkan currently samples `R8G8B8A8_UNORM` with
-nearest filtering and repeat addressing. Texture bytes are uploaded synchronously
+nearest filtering and repeat addressing. `rendering::loadTexture` also imports PNG with preserved straight RGBA alpha; the
+bounded PNG decoder and font/sprite APIs are documented in
+[desktop 2D rendering](desktop-2d-rendering.md). Texture bytes are uploaded synchronously
 by the Vulkan backend and retained through frame completion. The persistent
 `RenderDevice` path caches texture resources by handle for reuse across frames.
 The authored sample stores `asset:player-mesh` at
