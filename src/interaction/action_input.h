@@ -6,6 +6,7 @@
 #include <vector>
 
 namespace interaction {
+// Action names are nonempty opaque string identities; authored schemas own any name length limits.
 using BindingMap = std::map<std::string, std::vector<std::string>>;
 enum class Device { Keyboard, MouseButton, Wheel, GamepadButton, GamepadAxis };
 struct BindingDescriptor { std::string token; Device device; int code; float direction = 1; };
