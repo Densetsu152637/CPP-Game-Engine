@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "author": "Original synthetic engine fixture generated for this task",
+  "license": "Same MIT terms as engine repository LICENSE",
+  "source": "tools/generate_assets.py",
+  "assets": [
+    "sprites.png",
+    "font.png",
+    "font.json",
+    "cue.wav",
+    "loop.wav"
+  ],
+  "purpose": "Developer test geometry, own glyph patterns and sine tones. No game canon, scripture or external content."
+}

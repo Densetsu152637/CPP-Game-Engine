@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "scene_id": "scene:pure",
+  "entities": [
+    {
+      "id": "test:pure",
+      "name": "test:pure",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        "Script": {
+          "asset": "asset:pure-tests"
+        }
+      }
+    }
+  ]
+}

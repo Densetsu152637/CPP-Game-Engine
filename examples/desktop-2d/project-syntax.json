@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "name": "Desktop fixture Lua declaration validation only",
+  "startup_scene": "scenes/syntax.scene.json",
+  "assets": [
+    {
+      "id": "asset:syntax-0",
+      "path": "scripts/bindings.lua",
+      "kind": "script"
+    },
+    {
+      "id": "asset:syntax-1",
+      "path": "scripts/controller.lua",
+      "kind": "script"
+    },
+    {
+      "id": "asset:syntax-2",
+      "path": "scripts/player.lua",
+      "kind": "script"
+    },
+    {
+      "id": "asset:syntax-3",
+      "path": "scripts/progression.lua",
+      "kind": "script"
+    },
+    {
+      "id": "asset:syntax-4",
+      "path": "scripts/pure-tests.lua",
+      "kind": "script"
+    },
+    {
+      "id": "asset:syntax-5",
+      "path": "scripts/test-new-female.lua",
+      "kind": "script"
+    },
+    {
+      "id": "asset:syntax-6",
+      "path": "scripts/test-new-male.lua",
+      "kind": "script"
+    },
+    {
+      "id": "asset:syntax-7",
+      "path": "scripts/test-restore-female.lua",
+      "kind": "script"
+    },
+    {
+      "id": "asset:syntax-8",
+      "path": "scripts/test-restore-male.lua",
+      "kind": "script"
+    }
+  ]
+}

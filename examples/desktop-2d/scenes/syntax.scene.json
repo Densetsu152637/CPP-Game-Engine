@@ -1,0 +1,150 @@
+{
+  "schema": 1,
+  "scene_id": "scene:syntax",
+  "entities": [
+    {
+      "id": "syntax:0",
+      "name": "bindings",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        "Script": {
+          "asset": "asset:syntax-0"
+        }
+      }
+    },
+    {
+      "id": "syntax:1",
+      "name": "controller",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        "Script": {
+          "asset": "asset:syntax-1"
+        }
+      }
+    },
+    {
+      "id": "syntax:2",
+      "name": "player",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        "Script": {
+          "asset": "asset:syntax-2"
+        }
+      }
+    },
+    {
+      "id": "syntax:3",
+      "name": "progression",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        "Script": {
+          "asset": "asset:syntax-3"
+        }
+      }
+    },
+    {
+      "id": "syntax:4",
+      "name": "pure-tests",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        "Script": {
+          "asset": "asset:syntax-4"
+        }
+      }
+    },
+    {
+      "id": "syntax:5",
+      "name": "test-new-female",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        "Script": {
+          "asset": "asset:syntax-5"
+        }
+      }
+    },
+    {
+      "id": "syntax:6",
+      "name": "test-new-male",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        "Script": {
+          "asset": "asset:syntax-6"
+        }
+      }
+    },
+    {
+      "id": "syntax:7",
+      "name": "test-restore-female",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        "Script": {
+          "asset": "asset:syntax-7"
+        }
+      }
+    },
+    {
+      "id": "syntax:8",
+      "name": "test-restore-male",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        "Script": {
+          "asset": "asset:syntax-8"
+        }
+      }
+    }
+  ]
+}
