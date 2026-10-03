@@ -281,21 +281,27 @@ namespace tooling
                     const auto end = source.find(quote, begin);
                     if (end == std::string::npos) break;
                     auto module = source.substr(begin, end - begin);
+                    if (module.empty() || module.find("..") != std::string::npos || module.front() == '.' || module.back() == '.' || module.find_first_of("/\\:") != std::string::npos)
+                        return std::unexpected(error("asset.dependency.outside_root", record.path, "", "Lua module name is invalid"));
                     std::replace(module.begin(), module.end(), '.', '/');
                     const auto scriptDir = absolute.parent_path();
-                    const auto directCandidate = (scriptDir / (module + ".lua")).lexically_normal();
-                    const auto packageCandidate = (scriptDir / module / "init.lua").lexically_normal();
-                    if (!contained(root, directCandidate) || !contained(root, packageCandidate))
-                        return std::unexpected(error("asset.dependency.outside_root", record.path, "", "Lua module resolves outside the project root"));
-                    std::error_code existsError;
-                    auto resolved = std::filesystem::is_regular_file(directCandidate, existsError) ?
-                        canonicalExisting(directCandidate, existsError) : std::filesystem::path{};
-                    if (resolved.empty() && std::filesystem::is_regular_file(packageCandidate, existsError))
-                        resolved = canonicalExisting(packageCandidate, existsError);
-                    if (existsError || resolved.empty())
-                        return std::unexpected(error("asset.dependency.missing", record.path, "", "Missing Lua module: " + module));
-                    if (!contained(root, resolved))
-                        return std::unexpected(error("asset.dependency.outside_root", record.path, "", "Lua module resolves outside the project root"));
+                    std::filesystem::path resolved;
+                    bool escaped = false;
+                    // Match restricted runtime require: directory-relative Lua/file
+                    // package, then project-root-relative Lua/file package.
+                    for (const auto& candidate : {scriptDir / (module + ".lua"), scriptDir / module / "init.lua",
+                        root / (module + ".lua"), root / module / "init.lua"})
+                    {
+                        std::error_code candidateError;
+                        const auto canonical = canonicalExisting(candidate, candidateError);
+                        if (candidateError) continue;
+                        if (!contained(root, canonical)) { escaped = true; continue; }
+                        if (std::filesystem::is_regular_file(canonical, candidateError) && !candidateError)
+                        { resolved = canonical; break; }
+                    }
+                    if (resolved.empty())
+                        return std::unexpected(error(escaped ? "asset.dependency.outside_root" : "asset.dependency.missing",
+                            record.path, "", "Lua module is missing or outside the project root: " + module));
                     const auto dependencyPath = resolved.lexically_relative(root);
                     const auto dependency = ids.find(dependencyPath);
                     if (dependency == ids.end())

@@ -178,8 +178,12 @@ void test_project_template_package_and_runtime_lookup_are_root_scoped()
     project.manifest = "project.json";
     project.scene.source = "scenes/main.json";
     project.assets.emplace("asset:main-script", project::Asset{"asset:main-script", "assets/scripts/main.lua", "script"});
-    write(templateRoot / "assets/scripts/main.lua", "require('helpers.move')\nreturn {}\n");
+    write(templateRoot / "assets/scripts/main.lua", "require('helpers.move')\nrequire('scripts.progression')\nrequire('scripts.journal')\nreturn {}\n");
     write(templateRoot / "assets/scripts/helpers/move.lua", "return {}\n");
+    write(templateRoot / "scripts/progression.lua", "return {complete = true}\n");
+    write(templateRoot / "scripts/journal/init.lua", "require('scripts.progression')\nreturn {}\n");
+    project.assets.emplace("asset:root-progression", project::Asset{"asset:root-progression", "scripts/progression.lua", "script"});
+    project.assets.emplace("asset:root-journal", project::Asset{"asset:root-journal", "scripts/journal/init.lua", "script"});
     write(templateRoot / "assets/image.png", "PNG transport fixture");
     write(templateRoot / "assets/cue.wav", "WAV transport fixture");
     write(templateRoot / "assets/font.json", "font transport fixture");
@@ -187,13 +191,39 @@ void test_project_template_package_and_runtime_lookup_are_root_scoped()
     project.assets.emplace("asset:image", project::Asset{"asset:image", "assets/image.png", "texture"});
     project.assets.emplace("asset:cue", project::Asset{"asset:cue", "assets/cue.wav", "audio"});
     project.assets.emplace("asset:font", project::Asset{"asset:font", "assets/font.json", "font"});
+    const auto rootQualifiedIndex = tooling::buildAssetIndex(project);
+    test::require(rootQualifiedIndex.has_value(), "root-qualified nested file and init.lua modules index with runtime resolution order");
+    auto dependencies = [&](const char* id)
+    {
+        const auto found = std::find_if(rootQualifiedIndex->assets.begin(), rootQualifiedIndex->assets.end(), [id](const auto& asset) { return asset.id == id; });
+        test::require(found != rootQualifiedIndex->assets.end(), "indexed script record must exist"); return found->dependencies;
+    };
+    test::require(dependencies("asset:main-script") == std::vector<std::string>{"asset:module", "asset:root-journal", "asset:root-progression"}, "root-qualified modules retain declared stable dependency IDs");
+    test::require(dependencies("asset:root-journal") == std::vector<std::string>{"asset:root-progression"}, "nested init module can resolve another project-root-qualified module");
+    write(templateRoot / "assets/scripts/main.lua", "require('scripts.absent')\nreturn {}\n");
+    const auto absentModule = tooling::buildAssetIndex(project);
+    test::require(!absentModule && absentModule.error().front().code == "asset.dependency.missing", "absent project-root modules remain explicit failures");
+    write(templateRoot / "assets/scripts/main.lua", "require('../outside')\nreturn {}\n");
+    const auto traversalModule = tooling::buildAssetIndex(project);
+    test::require(!traversalModule && traversalModule.error().front().code == "asset.dependency.outside_root", "invalid traversal module names remain rejected");
+    const auto outsideModule = temp.path / "external-module.lua"; write(outsideModule, "return {outside = true}\n");
+    const auto moduleLink = externalLink(templateRoot / "assets/scripts/escape-module.lua", outsideModule);
+    auto escapedName = moduleLink.lexically_relative(templateRoot / "assets/scripts").generic_string();
+    escapedName.resize(escapedName.size() - 4); std::replace(escapedName.begin(), escapedName.end(), '/', '.');
+    write(templateRoot / "assets/scripts/main.lua", "require('" + escapedName + "')\nreturn {}\n");
+    const auto linkedModule = tooling::buildAssetIndex(project);
+    test::require(!linkedModule && linkedModule.error().front().code == "asset.dependency.outside_root", "canonical module candidates reject real symlink/junction escape");
+    test::require(!tooling::packageProject(project, temp.path / "escaped-module-package", temp.path / "absent-runtime.exe") && !std::filesystem::exists(temp.path / "escaped-module-package"), "escaping module cannot publish package content");
+    if (moduleLink.filename() == "escape-module.lua") std::filesystem::remove(moduleLink);
+    else std::filesystem::remove(moduleLink.parent_path());
+    write(templateRoot / "assets/scripts/main.lua", "require('helpers.move')\nrequire('scripts.progression')\nrequire('scripts.journal')\nreturn {}\n");
     const auto runtime = temp.path / "engine.exe";
     write(runtime, "engine fixture");
     const auto package = tooling::packageProject(project, temp.path / "package", runtime);
     test::require(package && std::filesystem::exists(*package / "bin" / runtime.filename()), "package should include runnable engine binary");
     auto read = [](const std::filesystem::path& path) { std::ifstream stream(path, std::ios::binary); return std::string(std::istreambuf_iterator<char>(stream), {}); };
     test::require(read(*package / "PACKAGE.txt").find("engine-notices: omitted") != std::string::npos, "old API explicitly marks omitted engine notices");
-    for (const auto* asset : {"assets/scripts/helpers/move.lua", "assets/image.png", "assets/cue.wav", "assets/font.json"})
+    for (const auto* asset : {"assets/scripts/helpers/move.lua", "scripts/progression.lua", "scripts/journal/init.lua", "assets/image.png", "assets/cue.wav", "assets/font.json"})
         test::require(read(*package / asset) == read(templateRoot / asset), "declared Lua module and all new asset kinds are preserved byte-for-byte");
     const auto graphicsRuntime = temp.path / "desktop-build/bin/engine.exe";
     write(graphicsRuntime, "graphics engine fixture");
