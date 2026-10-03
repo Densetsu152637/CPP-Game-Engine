@@ -14,6 +14,7 @@
 #endif
 
 #include "project/project.h"
+#include "project/runtime.h"
 #include "test/test_assertions.h"
 void runGameplay2dTests();
 void runInputUiTests();
@@ -306,6 +307,28 @@ namespace
         test::require(session.save(*changed).has_value(), "save should succeed after injected failures are removed");
         test::require(readScene() != original, "successful retry should commit the edited scene");
     }
+    void combinedBindingValidationPreservesLegacyNames()
+    {
+        TemporaryProject fixture;picojson::value manifest;
+        {std::ifstream input(fixture.root/"project.json");input>>manifest;}
+        const std::string legacy(80,'a');
+        auto& fields=manifest.get<picojson::object>();
+        fields["inputActions"]=picojson::value(picojson::object{{legacy,picojson::value(std::string("Right"))}});
+        fields["inputBindings"]=picojson::value(picojson::object{
+            {"move right",picojson::value(picojson::array{picojson::value(std::string("Key:W"))})},
+            {"move →",picojson::value(picojson::array{picojson::value(std::string("Key:Z"))})}});
+        fixture.write("project.json",manifest.serialize());
+        auto loaded=project::loadProject(fixture.root/"project.json");test::require(loaded.has_value(),"opaque legacy and new action names should validate together");
+        project::Runtime runtime(*loaded);test::require(runtime.start().has_value(),"validated opaque action project should run");
+        project::InputSnapshot input;input.held={legacy,"move right","move →"};
+        test::require(runtime.tick(input).has_value()&&runtime.stop().has_value(),"opaque action identities must remain available in runtime allowlist");
+        picojson::object many;for(int i=0;i<256;++i) many["legacy"+std::to_string(i)]=picojson::value(std::string("Right"));
+        fields["inputActions"]=picojson::value(many);fixture.write("project.json",manifest.serialize());
+        const auto invalid=project::loadProject(fixture.root/"project.json");
+        test::require(!invalid,"combined legacy/new bindings exceeding mapper limits must reject at validation");
+        requireCode(invalid.error(),"project.input_binding.invalid");
+    }
+
     void desktopComponentsRoundTripAndRejectInvalidReferences()
     {
         TemporaryProject fixture;
@@ -351,6 +374,7 @@ int main()
         sharedResolversCanonicalizeAliasedRootsAndRejectEscapingLinks();
         componentRegistryDrivesStableEditorMetadataAndSaveFailuresPreserveBytes();
         desktopComponentsRoundTripAndRejectInvalidReferences();
+        combinedBindingValidationPreservesLegacyNames();
         runGameplay2dTests(); runInputUiTests(); runPersistenceTests(); runAudioTests();
         std::cout << "[PASS] project format and validation tests\n";
         return 0;

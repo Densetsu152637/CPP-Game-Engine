@@ -330,16 +330,7 @@ struct LuaScriptSystem::Impl
             // Give modules the same restricted globals in preflight and at
             // runtime, so validation cannot resolve a different module path
             // or take an OS-dependent branch before gameplay begins.
-            lua_newtable(lua);
-            for (const char* name : {"assert", "error", "ipairs", "pairs", "next", "pcall", "xpcall",
-                "select", "tonumber", "tostring", "type", "rawequal", "rawget", "rawset",
-                "rawlen", "setmetatable", "getmetatable", "math", "string", "table", "utf8",
-                "require"})
-            {
-                if (std::strcmp(name, "math") == 0) push_safe_math(lua);
-                else lua_getglobal(lua, name);
-                lua_setfield(lua, -2, name);
-            }
+            self->push_root_safe_globals();
             self->populate_host_globals(true);
             lua_pushvalue(lua, -1);
             lua_setfield(lua, -2, "_G");
@@ -802,6 +793,7 @@ struct LuaScriptSystem::Impl
     static picojson::value json_value(lua_State* lua, int index, unsigned depth,
         size_t& nodes, std::set<const void*>& ancestors)
     {
+        if (!lua_checkstack(lua, 4)) throw std::runtime_error("save conversion exceeds Lua stack capacity");
         if (depth > 24 || ++nodes > 65536) throw std::runtime_error("save object exceeds depth or node limit");
         switch (lua_type(lua, index))
         {
@@ -844,6 +836,7 @@ struct LuaScriptSystem::Impl
 
     static void push_json(lua_State* lua, const picojson::value& value)
     {
+        if (!lua_checkstack(lua, 4)) throw std::runtime_error("save conversion exceeds Lua stack capacity");
         if (value.is<bool>()) lua_pushboolean(lua, value.get<bool>());
         else if (value.is<double>()) lua_pushnumber(lua, value.get<double>());
         else if (value.is<std::string>()) { const auto& text = value.get<std::string>(); lua_pushlstring(lua, text.data(), text.size()); }
@@ -858,6 +851,29 @@ struct LuaScriptSystem::Impl
             for (const auto& item : value.get<picojson::array>()) { push_json(lua, item); lua_rawseti(lua, -2, index++); }
         }
         else lua_pushnil(lua);
+    }
+
+    static void validate_json(const picojson::value& value, unsigned depth, size_t& nodes)
+    {
+        if (depth > 24 || ++nodes > 65536) throw std::runtime_error("save object exceeds depth or node limit");
+        if (value.is<double>() && !std::isfinite(value.get<double>())) throw std::runtime_error("save numbers must be finite");
+        if (value.is<std::string>() && value.get<std::string>().size()>65536) throw std::runtime_error("string exceeds service limit");
+        if (value.is<picojson::object>()) for(const auto& [key,item]:value.get<picojson::object>())
+        { if(key.size()>65536) throw std::runtime_error("string exceeds service limit");validate_json(item,depth+1,nodes); }
+        if (value.is<picojson::array>()) for(const auto& item:value.get<picojson::array>()) validate_json(item,depth+1,nodes);
+    }
+
+    static void preflight_json(std::string_view json)
+    {
+        if(json.size()>1024*1024) throw std::runtime_error("save exceeds byte limit");
+        unsigned depth=0;bool quoted=false,escape=false;
+        for(char c:json)
+        {
+            if(quoted) { if(escape) escape=false;else if(c=='\\') escape=true;else if(c=='"') quoted=false; }
+            else if(c=='"') quoted=true;
+            else if(c=='{'||c=='[') { if(++depth>25) throw std::runtime_error("save object exceeds depth limit"); }
+            else if(c=='}'||c==']') { if(!depth) throw std::runtime_error("host returned invalid save object");--depth; }
+        }
     }
 
     static int desktop_service(lua_State* lua)
@@ -975,6 +991,8 @@ struct LuaScriptSystem::Impl
             if (service == "save.recover") { if (!api.save_recover) unavailable(); return result_void(api.save_recover(string_arg(lua, 1))); }
             if (service == "save.write" || service == "settings.write" || service == "state.write")
             {
+                const int originalTop=lua_gettop(lua);
+                try {
                 size_t nodes = 0; std::set<const void*> ancestors;
                 const auto value = json_value(lua, service == "save.write" ? 2 : 1, 0, nodes, ancestors);
                 if (!value.is<picojson::object>()) throw std::runtime_error("save root must be an object");
@@ -982,6 +1000,7 @@ struct LuaScriptSystem::Impl
                 if (service == "save.write") { if (!api.save_write) unavailable(); return result_void(api.save_write(string_arg(lua, 1), json)); }
                 if (service == "state.write") { if (!api.state_write) unavailable(); return result_void(api.state_write(json)); }
                 if (!api.settings_write) unavailable(); return result_void(api.settings_write(json));
+                } catch(const std::exception& error) { lua_settop(lua,originalTop);return result_error(error.what()); }
             }
             if (service == "save.read" || service == "settings.read" || service == "state.read")
             {
@@ -990,10 +1009,14 @@ struct LuaScriptSystem::Impl
                 else if (service == "state.read") { if (!api.state_read) unavailable(); result = api.state_read(); }
                 else { if (!api.settings_read) unavailable(); result = api.settings_read(); }
                 if (!result) { lua_pushnil(lua); lua_pushlstring(lua, result.error().data(), result.error().size()); return 2; }
-                if (result->size() > 1024 * 1024) throw std::runtime_error("save exceeds byte limit");
+                const int originalTop=lua_gettop(lua);
+                try {
+                preflight_json(*result);
                 picojson::value value; const auto error = picojson::parse(value, *result);
                 if (!error.empty() || !value.is<picojson::object>()) throw std::runtime_error("host returned invalid save object");
+                size_t nodes=0;validate_json(value,0,nodes);
                 push_json(lua, value); return 1;
+                } catch(const std::exception& error) { lua_settop(lua,originalTop);return result_error(error.what()); }
             }
             throw std::runtime_error("unknown runtime service");
         });

@@ -684,11 +684,12 @@ namespace project
                 const auto safe = candidate.m_impl->world.isSafe(*body, request.traveller);
                 if (!safe || !*safe) return std::unexpected(runtimeError("runtime.scene.spawn.blocked", *scenePath, "Target traveller placement overlaps a solid collider"));
             }
-            candidate.m_impl->preparing = false; candidate.m_impl->revision = state.revision + 1; candidate.m_impl->ticks = state.ticks;
+            candidate.m_impl->revision = state.revision + 1; candidate.m_impl->ticks = state.ticks;
             // Retain the old state until candidate initialization and validation succeed.
             const auto retired = stop();
             if (!retired) return retired;
             inputScope.active = false;
+            candidate.m_impl->preparing = false;
             m_impl.swap(candidate.m_impl);
         }
         return {};
@@ -813,8 +814,9 @@ namespace project
         {
             const auto p = position(id); if (!p || !sprite.visible) continue;
             const auto forced = m_impl->forcedFrames.find(id);
-            const auto frame = forced == m_impl->forcedFrames.end() ? rendering::animationFrame(
-                double(m_impl->sceneTicks) * m_impl->options.fixedDeltaSeconds, sprite.framesPerSecond, sprite.frames.size(), sprite.loop) : forced->second;
+            const auto frame = forced != m_impl->forcedFrames.end() ? forced->second :
+                sprite.frames.empty() || sprite.framesPerSecond == 0 ? 0 : rendering::animationFrame(
+                    double(m_impl->sceneTicks) * m_impl->options.fixedDeltaSeconds, sprite.framesPerSecond, sprite.frames.size(), sprite.loop);
             result.push_back({id, *p, sprite, frame});
         }
         std::sort(result.begin(), result.end(), [](const auto& a, const auto& b)

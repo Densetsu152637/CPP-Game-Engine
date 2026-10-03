@@ -1016,6 +1016,12 @@ namespace project
             if (project.inputBindings.size() > 128)
                 add(diagnostics, "project.input_binding.limit", displayFile, "inputBindings", "At most 128 actions may be declared");
         }
+        interaction::BindingMap combinedBindings;
+        for(const auto& [action,key]:project.inputActions) combinedBindings[action]={"Key:"+key};
+        for(const auto& [action,tokens]:project.inputBindings) combinedBindings[action]=tokens;
+        const auto bindingValidation=interaction::validateBindings(combinedBindings);
+        for(const auto& error:bindingValidation.errors)
+            add(diagnostics,"project.input_binding.invalid",displayFile,"inputBindings",error);
         std::string startup;
         if (stringField(*fields, "startup_scene", displayFile, "", startup, diagnostics))
         {

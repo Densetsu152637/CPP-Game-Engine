@@ -12,7 +12,7 @@ engine scene inspect build/my-project/scenes/main.scene.json --project-root buil
 engine run build/my-project/project.json --headless --ticks 120 --input move_right:0 --format json
 engine project assets build/my-project/project.json
 engine project shaders build/my-project/project.json --compiler <path-to-glslc>
-engine project package build/my-project/project.json build/my-package --runtime <engine-executable>
+engine project package build/my-project/project.json build/my-package --runtime <engine-executable> --shaders <compiled-shader-directory> --license-root <actual-engine-checkout>
 engine editor build/my-project/project.json
 engine mcp build/my-project
 engine platform check android --format json
@@ -110,3 +110,17 @@ overlap, glyph clipping, painter order and camera resize/letterboxing with Vulka
 validation. Mobile source lists include the shared new modules for compile
 compatibility; desktop input, UI and audio authoring do not establish new mobile
 runtime support.
+
+Standalone desktop packages include compiled shaders and pinned engine/dependency
+notices. Pass `--license-root` with the actual engine source checkout; the CLI can
+also find a checkout among at most eight ancestors of its own executable. It never
+uses an authored game project as the notice source. `--shaders` selects a compiled
+directory explicitly; otherwise packaging discovers the runtime build sibling
+shader directory. The launcher resolves packaged paths independently of the
+working directory. User saves/settings stay in the selected user data profile.
+
+Below the logical camera size, rendering uses a fractional viewport fallback.
+Pointer coordinates map through the actual rounded viewport width and height,
+including framebuffer DPI and letterbox offsets, so all rendered logical rows
+remain interactive. Physical and injected action sources share effective edges:
+an action releases only after its final held source releases.

@@ -1,4 +1,5 @@
 #include "project/runtime.h"
+#include "project/desktop_input_bridge.h"
 #include "test/test_assertions.h"
 #include <chrono>
 #include <cmath>
@@ -51,7 +52,7 @@ namespace
     {
         Fixture fixture;
         fixture.write("controller.lua", R"lua(return {new=function() return {
-            on_update=function() assert(engine.is_alive(self.id())); assert(not os and not package and (not io or not io.open))
+            on_update=function() assert(engine.is_alive(self.id())); assert(not os and not package and not io.open);print('safe module log')
                 if input.held('move') then self.set_position(self.get_position().x+input.value('move'),0,0) end
             end} end})lua");
         fixture.write("main.lua", "return require('controller').new()");
@@ -87,11 +88,10 @@ namespace
         input.pressed.clear(); test::require(runtime.tick(input).has_value() && runtime.position("traveller")->at(0) == 0,
             "held control must stay suppressed after modal dismissal");
         input.held.clear(); input.values.clear(); input.released = {"move"}; test::require(runtime.tick(input).has_value(), "release should clear held controls");
-        test::require(runtime.tick().has_value(), "neutral tick should clear suppression");
         input.released.clear(); input.pressed = {"move"}; input.held = {"move"}; input.values = {{"move", 0.5f}};
         test::require(runtime.tick(input).has_value() && std::abs(runtime.position("traveller")->at(0) - 0.5f) < 0.0001f,
             "analog value must reach collision movement after a fresh press");
-        test::require(runtime.camera()->center[0] == runtime.position("traveller")->at(0) && runtime.sprites().front().frame == 1,
+        test::require(runtime.camera()->center[0] == runtime.position("traveller")->at(0) && runtime.sprites().front().frame == 0,
             "camera and animated sprite snapshots must reflect the successful simulation tick");
         input.pressed.clear(); input.values["move"] = 1;
         test::require(runtime.tick(input).has_value() && runtime.position("traveller")->at(0) <= 1.0001f,
@@ -129,6 +129,99 @@ namespace
         test::require(runtime.stop().has_value(), "scene transaction fixture should cleanly stop");
     }
 
+    void desktopFrontendMergesSourcesAndMapsFractionalViewports()
+    {
+        std::set<std::string> previous;interaction::ActionFrame physical;physical.held={"confirm"};physical.values={{"confirm",0.75f}};
+        physical.pointerX=3;physical.wheelY=2;
+        project::InputSnapshot injected;injected.held={"confirm"};injected.pressed={"confirm"};
+        auto frame=project::desktop::mergeInput(physical,injected,previous);
+        test::require(frame.pressed.contains("confirm")&&frame.values.at("confirm")==1,"combined input should press once and injected held should override analog value");
+        injected={};injected.released={"confirm"};frame=project::desktop::mergeInput(physical,injected,previous);
+        test::require(frame.held.contains("confirm")&&frame.released.empty()&&frame.pressed.empty()&&frame.values.at("confirm")==0.75f&&frame.pointerX==3&&frame.wheelY==2,
+            "injected release must not release a physically held action or discard analog/pointer/wheel input");
+        physical.held.clear();physical.values.clear();frame=project::desktop::mergeInput(physical,{},previous);
+        test::require(frame.released.contains("confirm")&&!frame.held.contains("confirm"),"combined release occurs when the last source releases");
+        const auto bottom=project::desktop::logicalPointer(99.5,77.8,100,100,100,100,{0,22,100,56},{320,180});
+        test::require(bottom[1]>179&&bottom[1]<180&&bottom[0]>318,"fractional viewport bottom row must map to its rendered logical row");
+        const auto dpi=project::desktop::logicalPointer(49.75,38.9,50,50,100,100,{0,22,100,56},{320,180});
+        test::require(dpi==bottom,"framebuffer DPI conversion must preserve logical pointer coordinates");
+        test::require(project::desktop::logicalPointer(50,10,100,100,100,100,{0,22,100,56},{320,180})[1]<0,
+            "letterbox pointer coordinates must remain outside logical UI");
+    }
+
+    void jsonBridgeBoundsNestedDataAndReservesLuaStack()
+    {
+        Fixture fixture;
+        fixture.write("main.lua",R"lua(return {on_update=function()
+            local value={};local node=value;for i=1,23 do node.child={};node=node.child end;node.value=true
+            assert(save.write('near-limit',value));local read=assert(save.read('near-limit'))
+            for i=1,23 do read=read.child end;assert(read.value==true)
+            local cycle={};cycle.self=cycle;local ok,err=save.write('cycle',cycle);assert(ok==nil and err)
+            node.child={};node.child.value=true;ok,err=save.write('too-deep',value);assert(ok==nil and err)
+            ok,err=save.write('too-large',{text=string.rep('x',65537)});assert(ok==nil and err)
+            local many={};for i=1,65536 do many[i]=true end;ok,err=save.write('too-many',{nodes=many});assert(ok==nil and err)
+            local stored;stored,err=save.read('host-deep');assert(stored==nil and err)
+            assert(state.write({stillUsable=true}));assert(state.read().stillUsable)
+        end})lua");
+        auto options=fixture.options();picojson::value nested(picojson::object{{"leaf",picojson::value(true)}});
+        for(int i=0;i<27;++i) nested=picojson::value(picojson::object{{"child",nested}});
+        test::require(options.persistence->save("host-deep",nested.get<picojson::object>()).has_value(),"host persistence can store data deeper than Lua bridge policy");
+        const auto original=options.persistence->load("host-deep")->at("child").serialize();
+        project::Runtime runtime(fixture.project,options);test::require(runtime.start().has_value(),"JSON bridge fixture should start");
+        const auto tick=runtime.tick();if(!tick) throw std::runtime_error(tick.error().front().message);
+        test::require(runtime.running()&&!options.persistence->load("cycle")&&!options.persistence->load("too-deep")&&
+            !options.persistence->load("too-large")&&!options.persistence->load("too-many"),"invalid JSON writes must reject without effects or faulting");
+        test::require(options.persistence->load("host-deep")->at("child").serialize()==original,"over-limit Lua reads must preserve stored bytes/data");
+        test::require(runtime.stop().has_value(),"JSON bridge fixture should stop");
+    }
+
+    void staticAndPausedSpriteSnapshotsRemainDrawable()
+    {
+        Fixture fixture;
+        auto fixed=fixture.project.scene.entities.front();fixed.id="static";fixed.script.reset();
+        fixed.spriteRenderer->frames.clear();fixed.spriteRenderer->framesPerSecond=0;
+        auto paused=fixed;paused.id="paused";paused.spriteRenderer->frames={{{0,0,1,1}},{{1,0,1,1}}};
+        fixture.project.scene.entities.push_back(fixed);fixture.project.scene.entities.push_back(paused);
+        project::Runtime runtime(fixture.project,fixture.options());
+        test::require(runtime.start().has_value(), "static sprite fixture should start");
+        for(int tick=0;tick<3;++tick)
+        {
+            const auto sprites=runtime.sprites();test::require(sprites.size()==3, "static, paused, and animated sprites should all publish snapshots");
+            for(const auto& sprite:sprites) test::require(sprite.frame==(sprite.id=="traveller"?std::size_t(tick%2):0),
+                "static and paused sprites must select frame zero while animation advances");
+            test::require(runtime.tick().has_value(), "sprite snapshot fixture should advance");
+        }
+        test::require(runtime.stop().has_value(), "sprite snapshot fixture should stop");
+    }
+
+    void rejectedCandidateTeardownCannotMutateHostServices()
+    {
+        Fixture fixture;
+        fixture.write("main.lua", "return {on_destroy=function() error('source retirement failed') end}");
+        fixture.write("target.lua", R"lua(return {on_destroy=function()
+            local ok,err=save.write('candidate-sentinel',{rejected=true}); assert(ok==nil and err)
+            ok,err=settings.write({audio={master=0.1}}); assert(ok==nil and err)
+            ok,err=audio.volume('master',0.1); assert(ok==nil and err)
+            local voice;voice,err=audio.play('missing');assert(voice==nil and err)
+        end})lua");
+        auto options = fixture.options();
+        picojson::object originalSettings{{"unchanged",picojson::value(true)}};
+        test::require(options.persistence->saveSettings(originalSettings).has_value(), "baseline settings should be durable");
+        options.audio->setBusGain(audio::Bus::Master,0.75f);
+        project::Runtime runtime(fixture.project,options);
+        test::require(runtime.start().has_value() && runtime.requestScene("room").has_value(), "teardown fixture should prepare target");
+        const auto transitioned=runtime.tick();
+        test::require(!transitioned && transitioned.error().front().code=="runtime.script.stop" && !runtime.running() && runtime.liveEntityCount()==0,
+            "irreversible source teardown failure must report failure and clean the stopped source");
+        test::require(!options.persistence->load("candidate-sentinel") && options.persistence->loadSettings()->at("unchanged").get<bool>(),
+            "rejected candidate destruction must preserve durable saves and settings");
+        test::require(options.audio->voiceCount()==0, "rejected candidate must not start voices");
+        auto clip=std::make_shared<audio::Clip>();clip->sampleRate=48000;clip->channels=1;clip->samples={1,1};
+        test::require(options.audio->play(clip).has_value(), "baseline mixer probe should play");
+        std::array<float,2> mixed{};options.audio->mix(mixed);
+        test::require(std::abs(mixed[0]-0.75f)<0.001f, "rejected candidate must preserve live mixer gains");
+    }
+
     void settingsPersistAndApplyToInputAndMixer()
     {
         Fixture fixture;
@@ -157,5 +250,9 @@ void runDesktopRuntimeTests()
     cachedModulesResolveTheActiveEntityContext();
     modalInputAndCollisionUseLiveSnapshots();
     sceneCandidatesCopyStateAndPreserveOpaqueHandles();
+    desktopFrontendMergesSourcesAndMapsFractionalViewports();
+    jsonBridgeBoundsNestedDataAndReservesLuaStack();
+    staticAndPausedSpriteSnapshotsRemainDrawable();
+    rejectedCandidateTeardownCannotMutateHostServices();
     settingsPersistAndApplyToInputAndMixer();
 }

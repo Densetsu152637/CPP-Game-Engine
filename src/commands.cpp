@@ -1,6 +1,7 @@
 #include "commands.h"
 #include "project/project.h"
 #include "project/runtime.h"
+#include "project/desktop_input_bridge.h"
 #include "tooling/iteration.h"
 #include "editor/editor.h"
 #include "automation/mcp.h"
@@ -45,7 +46,7 @@ struct Arguments {
             if (!arg.starts_with("--")) { positional.push_back(arg); continue; }
             if (arg == "--headless" || arg == "--rebuild") { options[arg].push_back("true"); continue; }
             if (arg != "--format" && arg != "--ticks" && arg != "--project-root" && arg != "--runtime" &&
-                arg != "--compiler" && arg != "--input" && arg != "--shaders" && arg != "--user-data")
+                arg != "--compiler" && arg != "--input" && arg != "--shaders" && arg != "--user-data" && arg != "--license-root")
                 throw std::invalid_argument("Unknown option: " + arg);
             if (i + 1 == argc) throw std::invalid_argument("Missing value for " + arg);
             options[arg].push_back(argv[++i]);
@@ -171,6 +172,7 @@ class Preview {
     rendering::RenderResourceHandle shaderHandle;
     std::shared_ptr<ContentCatalog> catalog;
     std::shared_ptr<interaction::ActionMapper> mapper;
+    std::set<std::string> combinedHeld;
     std::map<std::string, rendering::RenderResourceHandle> textures, meshes, dynamicMeshes;
     float wheelX = 0, wheelY = 0;
     rendering::Camera2DView view(const project::Runtime& runtime) const {
@@ -220,7 +222,6 @@ public:
     }
     void finish() { if (device) { device->waitIdle(); device->shutdown(); } }
     bool sample(project::InputSnapshot& input, const project::Runtime& runtime) {
-        const auto injectedHeld = input.held;
         glfwPollEvents(); if (glfwWindowShouldClose(window)) return false;
         interaction::RawInput raw; raw.focused = glfwGetWindowAttrib(window, GLFW_FOCUSED) != 0;
         raw.wheelX = wheelX; raw.wheelY = wheelY; wheelX = wheelY = 0;
@@ -239,14 +240,11 @@ public:
         double x = 0, y = 0; int ww = 0, wh = 0, fw = 0, fh = 0;
         glfwGetCursorPos(window, &x, &y); glfwGetWindowSize(window, &ww, &wh); glfwGetFramebufferSize(window, &fw, &fh);
         const auto cameraView = view(runtime);
-        if (ww > 0 && wh > 0 && cameraView.scale > 0) {
-            raw.pointerX = static_cast<float>((x * fw / ww - cameraView.framebufferViewport.x) / cameraView.scale);
-            raw.pointerY = static_cast<float>((y * fh / wh - cameraView.framebufferViewport.y) / cameraView.scale);
-        } else raw.pointerX = raw.pointerY = -1;
+        const auto point=project::desktop::logicalPointer(x,y,ww,wh,fw,fh,cameraView.framebufferViewport,
+            runtime.camera().value_or(project::Camera2D{}).logicalSize);
+        raw.pointerX=point[0];raw.pointerY=point[1];
         const auto frame = mapper->sample(raw);
-        input.pressed.insert(frame.pressed.begin(), frame.pressed.end()); input.held.insert(frame.held.begin(), frame.held.end()); input.released.insert(frame.released.begin(), frame.released.end());
-        input.values = frame.values; for (const auto& action : injectedHeld) input.values[action] = 1.0f;
-        input.pointerX = frame.pointerX; input.pointerY = frame.pointerY; input.wheelX = frame.wheelX; input.wheelY = frame.wheelY; input.focused = frame.focused;
+        input=project::desktop::mergeInput(frame,input,combinedHeld);
         return true;
     }
     void draw(const project::Runtime& runtime) {
@@ -425,7 +423,7 @@ std::optional<int> runCommands(int argc, char** argv) {
             return success(command, project::sceneJson(*scene, project::revisionFor(*scene)));
         }
         if (command == "project validate" || command == "project assets" || command == "project package" || command == "project shaders") {
-            if (command == "project package") args.require(2, {"--runtime"});
+            if (command == "project package") args.require(2, {"--runtime","--shaders","--license-root"});
             else if (command == "project assets") args.require(1, {"--rebuild", "--compiler"});
             else if (command == "project shaders") args.require(1, {"--rebuild", "--compiler"});
             else args.require(1, {});
@@ -437,7 +435,20 @@ std::optional<int> runCommands(int argc, char** argv) {
                 return success(command, "{\"diagnostics\":[]}");
             }
             if (command == "project package") {
-                const auto packaged = tooling::packageProject(*loaded, args.positional[1], args.get("--runtime", std::filesystem::absolute(argv[0]).string()));
+                Path licenseRoot=args.get("--license-root");
+                if(licenseRoot.empty())
+                {
+                    auto ancestor=std::filesystem::absolute(argv[0]).parent_path();
+                    for(unsigned level=0;level<8&&!ancestor.empty();++level)
+                    {
+                        if(std::filesystem::is_regular_file(ancestor/"LICENSE")&&
+                            std::filesystem::is_regular_file(ancestor/"third_party/stb/LICENSE")&&
+                            std::filesystem::is_regular_file(ancestor/"third_party/lua/lua.h")) {licenseRoot=ancestor;break;}
+                        const auto parent=ancestor.parent_path();if(parent==ancestor) break;ancestor=parent;
+                    }
+                    if(licenseRoot.empty()) throw std::invalid_argument("project package requires --license-root pointing to the actual engine source checkout");
+                }
+                const auto packaged = tooling::packageProject(*loaded, args.positional[1], args.get("--runtime", std::filesystem::absolute(argv[0]).string()),args.get("--shaders"),licenseRoot);
                 if (!packaged) return fail(command, packaged.error());
                 return success(command, "{\"directory\":" + quote(packaged->generic_string()) + "}");
             }

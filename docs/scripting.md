@@ -118,7 +118,10 @@ actions. Settings validate before writing and apply to the live mapper/mixer
 after a successful durable write. Startup loads them independently of game saves;
 invalid settings report a diagnostic log while preserving default bindings.
 
-Service operations return `nil,error` for expected operational failures. Malformed
+Service operations return `nil,error` for expected operational failures. JSON
+conversion limits, cycles, incompatible table shapes, and oversized host reads
+also return `nil,error` without writing data. Both conversion directions reserve
+Lua stack capacity and apply the same bounds before publishing tables. Malformed
 Lua values and unavailable injected services raise script errors. Save/session
 objects permit finite numbers, booleans, strings, nested string-keyed objects and
 dense arrays, bounded to 1 MiB, 24 nesting levels, 65,536 nodes, and 64 KiB per
