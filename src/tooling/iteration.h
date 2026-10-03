@@ -58,10 +58,15 @@ namespace tooling
         const std::filesystem::path& compiler);
 
     // Export source assets and project files into a self-contained runtime folder.
-    // This is a content package, not a platform executable or a sandbox.
+    // The runtime is copied as supplied. An empty shaderDirectory discovers adjacent
+    // build shaders; absence leaves a headless package. Explicit shader/license roots
+    // are required when supplied. licenseRoot is the actual engine source root;
+    // omission is recorded in PACKAGE.txt. This does not sandbox authored code.
     project::Result<std::filesystem::path> packageProject(const project::Project& project,
         const std::filesystem::path& destination,
-        const std::filesystem::path& runtimeExecutable = {});
+        const std::filesystem::path& runtimeExecutable = {},
+        const std::filesystem::path& shaderDirectory = {},
+        const std::filesystem::path& licenseRoot = {});
     project::Result<std::filesystem::path> locateRuntimeAsset(const std::filesystem::path& packageRoot,
         const std::filesystem::path& projectRelativeAsset);
 }

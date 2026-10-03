@@ -606,7 +606,8 @@ namespace tooling
     }
 
     project::Result<std::filesystem::path> packageProject(const project::Project& project,
-        const std::filesystem::path& destination, const std::filesystem::path& runtimeExecutable)
+        const std::filesystem::path& destination, const std::filesystem::path& runtimeExecutable,
+        const std::filesystem::path& shaderDirectory, const std::filesystem::path& licenseRoot)
     {
         std::error_code rootError;
         const auto root = canonicalExisting(project.root, rootError);
@@ -619,7 +620,8 @@ namespace tooling
             return std::unexpected(error("package.destination.exists", target, "", "Package destination already exists"));
         const auto staging = stagingPath(target);
         std::error_code ec;
-        std::filesystem::create_directories(staging, ec);
+        std::filesystem::create_directories(staging.parent_path(), ec);
+        if (!ec && !std::filesystem::create_directory(staging, ec)) ec = std::make_error_code(std::errc::file_exists);
         if (ec) return std::unexpected(error("package.create.failed", staging, "", "Could not create package staging directory: " + ec.message()));
         const auto copyFile = [&](const std::filesystem::path& relative) -> bool
         {
@@ -627,7 +629,8 @@ namespace tooling
             std::error_code sourceError;
             const auto resolved = canonicalExisting(root / relative, sourceError);
             if (sourceError || !contained(root, resolved) || !std::filesystem::is_regular_file(resolved)) return false;
-            const auto out = staging / relative;
+            const auto out = (staging / relative).lexically_normal();
+            if (!contained(staging, out)) return false;
             std::filesystem::create_directories(out.parent_path(), ec);
             if (ec) return false;
             std::filesystem::copy_file(resolved, out, std::filesystem::copy_options::overwrite_existing, ec);
@@ -659,32 +662,128 @@ namespace tooling
                 return std::unexpected(error("package.runtime.missing", executable, "", "Engine runtime executable is missing; build the headless engine or pass its path"));
             }
             std::filesystem::create_directories((staging / executableRelative).parent_path(), ec);
-            if (!ec) std::filesystem::copy_file(executable, staging / executableRelative, std::filesystem::copy_options::overwrite_existing, ec);
+            if (!ec) std::filesystem::copy_file(executable, staging / executableRelative, std::filesystem::copy_options::none, ec);
             if (ec) ok = false;
+        }
+        bool packagedShaders = false;
+        bool packagedLicenses = false;
+        project::Diagnostics supplementalErrors;
+        const auto copySupplement = [&](const std::filesystem::path& sourceRoot, const std::filesystem::path& relative,
+            const std::filesystem::path& output) -> bool
+        {
+            std::error_code sourceError;
+            const auto source = canonicalExisting(sourceRoot / relative, sourceError);
+            if (sourceError || !contained(sourceRoot, source) || !std::filesystem::is_regular_file(source)) return false;
+            const auto out = (staging / output).lexically_normal();
+            if (!contained(staging, out)) return false;
+            const auto size = std::filesystem::file_size(source, sourceError);
+            if (sourceError || size == 0 || size > 16 * 1024 * 1024 || std::filesystem::exists(out, ec)) return false;
+            std::filesystem::create_directories(out.parent_path(), ec);
+            if (!ec) std::filesystem::copy_file(source, out, std::filesystem::copy_options::none, ec);
+            return !ec;
+        };
+        if (ok)
+        {
+            auto requestedShaders = shaderDirectory;
+            if (requestedShaders.empty())
+            {
+                const auto candidate = executable.parent_path().parent_path() / "shaders";
+                if (std::filesystem::exists(candidate, ec)) requestedShaders = candidate;
+                if (ec) { ok = false; supplementalErrors = error("package.shaders.inspect", candidate, "", "Cannot inspect runtime shader directory"); }
+            }
+            if (ok && !requestedShaders.empty())
+            {
+                const auto shaderRoot = canonicalExisting(requestedShaders, ec);
+                if (ec || !std::filesystem::is_directory(shaderRoot))
+                { ok = false; supplementalErrors = error("package.shaders.missing", requestedShaders, "", "Runtime shader directory is missing"); }
+                const std::array<const char*, 6> shaders{"mesh_textured.vert.spv", "mesh_textured.frag.spv", "mesh.vert.spv", "mesh.frag.spv", "triangle.vert.spv", "triangle.frag.spv"};
+                for (std::size_t i = 0; ok && i < shaders.size(); ++i)
+                {
+                    const auto file = shaderRoot / shaders[i];
+                    if (i >= 2 && !std::filesystem::exists(file, ec) && !ec) continue;
+                    std::error_code sourceError; const auto source = canonicalExisting(file, sourceError);
+                    bool valid = !sourceError && contained(shaderRoot, source) && std::filesystem::is_regular_file(source);
+                    std::uintmax_t size = valid ? std::filesystem::file_size(source, sourceError) : 0;
+                    valid = valid && !sourceError && size >= 20 && size <= 16 * 1024 * 1024 && size % 4 == 0;
+                    std::array<unsigned char, 4> magic{}; std::ifstream input(source, std::ios::binary);
+                    valid = valid && static_cast<bool>(input.read(reinterpret_cast<char*>(magic.data()), 4)) && magic == std::array<unsigned char, 4>{3, 2, 35, 7};
+                    if (!valid || !copySupplement(shaderRoot, shaders[i], std::filesystem::path("shaders") / shaders[i]))
+                    { ok = false; supplementalErrors = error("package.shaders.invalid", file, "", "Required runtime shader is missing, unbounded, invalid SPIR-V, or escapes its source directory"); }
+                }
+                packagedShaders = ok;
+            }
+        }
+        if (ok && !licenseRoot.empty())
+        {
+            const auto noticesRoot = canonicalExisting(licenseRoot, ec);
+            if (ec || !std::filesystem::is_directory(noticesRoot))
+            { ok = false; supplementalErrors = error("package.licenses.root", licenseRoot, "", "Explicit engine notice root cannot be resolved"); }
+            const std::array<std::pair<const char*, const char*>, 5> notices{{
+                {"LICENSE", "licenses/engine/LICENSE"}, {"third_party/entt/LICENSE", "licenses/entt/LICENSE"},
+                {"third_party/glfw/LICENSE.md", "licenses/glfw/LICENSE.md"}, {"third_party/picojson/LICENSE", "licenses/picojson/LICENSE"},
+                {"third_party/stb/LICENSE", "licenses/stb/LICENSE"}}};
+            for (const auto& [source, output] : notices) if (ok && !copySupplement(noticesRoot, source, output))
+            { ok = false; supplementalErrors = error("package.licenses.missing", noticesRoot / source, "", "Required engine/dependency notice is missing or escapes the explicit engine root"); }
+            if (ok)
+            {
+                const auto luaHeader = canonicalExisting(noticesRoot / "third_party/lua/lua.h", ec);
+                const bool confined = !ec && contained(noticesRoot, luaHeader) && std::filesystem::is_regular_file(luaHeader);
+                const auto luaSize = confined ? std::filesystem::file_size(luaHeader, ec) : 0;
+                std::string lua = confined && !ec && luaSize <= 1024 * 1024 ? readText(luaHeader) : std::string{};
+                const auto begin = lua.find("* Copyright (C)");
+                const auto end = begin == std::string::npos ? std::string::npos : lua.find("******************************************************************************/", begin);
+                if (begin == std::string::npos || end == std::string::npos || lua.size() > 1024 * 1024 || std::filesystem::exists(staging / "licenses/lua/LICENSE.txt", ec))
+                { ok = false; supplementalErrors = error("package.licenses.lua", luaHeader, "", "Pinned Lua header copyright/permission notice is missing"); }
+                else
+                {
+                    std::filesystem::create_directories(staging / "licenses/lua", ec);
+                    std::ofstream notice(staging / "licenses/lua/LICENSE.txt", std::ios::binary);
+                    notice << lua.substr(begin, end - begin);
+                    notice.close();
+                    ok = !ec && static_cast<bool>(notice);
+                    if (!ok) supplementalErrors = error("package.licenses.write", luaHeader, "", "Cannot write pinned Lua license notice");
+                }
+            }
+            packagedLicenses = ok;
         }
         if (ok)
         {
+            for (const auto* reserved : {"PACKAGE.txt", "run.cmd", "run.sh"}) if (std::filesystem::exists(staging / reserved, ec))
+            { ok = false; supplementalErrors = error("package.output.conflict", staging / reserved, "", "Authored file conflicts with package metadata or launcher"); break; }
+            if (!ok)
+            { std::filesystem::remove_all(staging, ec); return std::unexpected(std::move(supplementalErrors)); }
             const auto marker = staging / "PACKAGE.txt";
             std::ofstream info(marker, std::ios::binary);
             info << "CPP Game Engine source content package\n"
                 << "manifest: " << pathText(manifestRel) << "\n"
                 << "startup-scene: " << pathText(sceneRel) << "\n"
                 << "runtime: " << pathText(executableRelative) << "\n"
+                << "runtime-shaders: " << (packagedShaders ? "shaders" : "not included; headless package") << "\n"
+                << "engine-notices: " << (packagedLicenses ? "licenses" : "omitted; caller did not provide an engine license root") << "\n"
                 << "Launch run.cmd on Windows or run.sh on Unix-like systems.\n"
                 << "Project Lua scripts execute as code; this package does not sandbox them.\n";
+            info.close();
             ok = static_cast<bool>(info);
             if (ok)
             {
 #ifdef _WIN32
                 std::ofstream launcher(staging / "run.cmd", std::ios::binary);
-                launcher << "@echo off\r\npushd \"%~dp0\"\r\n\"" << pathText(executableRelative)
-                    << "\" run \"" << pathText(manifestRel) << "\" %*\r\nset \"result=%errorlevel%\"\r\npopd\r\nexit /b %result%\r\n";
+                auto batchPath = [](const std::filesystem::path& path)
+                { std::string value; for (char c : pathText(path)) { value += c; if (c == '%') value += '%'; } return value; };
+                launcher << "@echo off\r\nsetlocal DisableDelayedExpansion\r\npushd \"%~dp0\"\r\n\"%~dp0" << batchPath(executableRelative)
+                    << "\" run \"%~dp0" << batchPath(manifestRel) << "\"";
+                if (packagedShaders) launcher << " --shaders \"%~dp0shaders\"";
+                launcher << " %*\r\nset \"result=%errorlevel%\"\r\npopd\r\nexit /b %result%\r\n";
+                launcher.close();
                 ok = static_cast<bool>(launcher);
 #else
                 std::ofstream launcher(staging / "run.sh", std::ios::binary);
                 launcher << "#!/bin/sh\npackage_dir=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd) || exit 1\n"
-                    << "cd \"$package_dir\" || exit 1\nexec \"" << pathText(executableRelative)
-                    << "\" run \"" << pathText(manifestRel) << "\" \"$@\"\n";
+                    << "cd \"$package_dir\" || exit 1\nexec \"$package_dir/\"" << shellQuote(pathText(executableRelative))
+                    << " run \"$package_dir/\"" << shellQuote(pathText(manifestRel));
+                if (packagedShaders) launcher << " --shaders \"$package_dir/shaders\"";
+                launcher << " \"$@\"\n";
+                launcher.close();
                 ok = static_cast<bool>(launcher);
                 if (ok)
                 {
@@ -699,6 +798,7 @@ namespace tooling
         if (!ok)
         {
             std::filesystem::remove_all(staging, ec);
+            if (!supplementalErrors.empty()) return std::unexpected(std::move(supplementalErrors));
             if (!index) return std::unexpected(index.error());
             return std::unexpected(error("package.copy.failed", target, "", "Required project files could not be copied into package"));
         }
