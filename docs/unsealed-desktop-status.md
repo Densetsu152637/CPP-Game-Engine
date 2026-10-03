@@ -2,9 +2,9 @@
 
 ## Result and scope
 
-All R01-R16 engine capabilities are implemented and validated for the local Windows desktop scope at code commit `4d3cfbdb3deda2cc21981caaa61bf8b1496bbe38`. Integration branch `codex/unsealed-desktop` was fast-forwarded to that exact independently reviewed clean foundation revision; the final local documentation commit changes only README/index/this record. Source engine main remains at `34a9a13e782be2a2822cbf8f1cc2ca0497e99c67`. Unsealed's imported engine and existing authored changes were preserved; its staged consumption pin remains `e110e846600133db058a32048df1adcada8126d6`.
+All R01-R16 engine capabilities are implemented and validated for the local Windows desktop scope at code commit `4d3cfbdb3deda2cc21981caaa61bf8b1496bbe38`. Integration branch `codex/unsealed-desktop` was fast-forwarded to that exact independently reviewed clean foundation revision; the final local documentation commit changes only README/index/this record. At the original implementation handoff, source engine main remained at `34a9a13e782be2a2822cbf8f1cc2ca0497e99c67`. Unsealed's imported engine and existing authored changes were preserved; its staged consumption pin remains `e110e846600133db058a32048df1adcada8126d6`.
 
-Phone-only work, unresolved game canon and Steam SDK integration are excluded. The synthetic lab chooses no production resolution, story or approved combat format. No publishing, PR, main merge or Unsealed pin update was performed. Physical audibility, subjective text/art quality and physical gamepad interaction remain manual checks. Linux, macOS, Wayland and mobile execution of these extensions are unverified; existing mobile platform documentation retains its separate gates.
+Phone-only work, unresolved game canon and Steam SDK integration are excluded. The synthetic lab chooses no production resolution, story or approved combat format. No publishing, PR, main merge or Unsealed pin update was performed during the original implementation task. Physical audibility, subjective text/art quality and physical gamepad interaction remain manual checks. Linux, macOS, Wayland and mobile execution of these extensions are unverified; existing mobile platform documentation retains its separate gates.
 
 ## Acceptance matrix
 
@@ -55,4 +55,22 @@ All task worktrees live under `D:\Git Repositories\_Workspaces_\CPP-Game-Engine`
 
 Focused independent reviews found material issues; corrected scene effects, static sprites, bounded Lua/JSON reads, input edges/fractional pointer/schema consistency, helpers, UI and packaging were consumed before the clean final foundation handoff. Root reported all material findings resolved; packaging independent review `05c3d98` found none. Root final integration artifact review passed before closure.
 
-No active integration commands remain. Main/source and imported consumption were preserved. Root final artifact review is complete. The local branch is ready for separately authorized upstream repository review/publication; no automatic main merge or Unsealed pin update follows.
+No active integration commands remain. Main/source and imported consumption were preserved. Root final artifact review is complete. The user subsequently authorized local main consolidation; the candidate below awaits root review before the exact source-main fast-forward. Remote review/publication and Unsealed pin updates remain separate actions.
+## Authorized local branch consolidation
+
+The user explicitly requested merging all eight `codex/unsealed-*` task branches into local engine main. All nine engine worktrees were clean at preflight. The original integration checkpoint was `c9ad1761d5539c0ad2ee3b81a66874e91ddeaf6a`, tree `788318d4915ce9d1b999ae108b01aabe6764da1a`; original main was `34a9a13e782be2a2822cbf8f1cc2ca0497e99c67`.
+
+Foundation was already an ancestor. Each other original feature history had only patch-equivalent commits (zero unmatched patches); normal merge simulations were conflict-free and tree-identical. Six normal merge commits preserve those original histories. Consolidated graph checkpoint `146b471f4b806153d9fd8841a9b902d640b5c231` has exactly the original integration tree, retaining all reviewed fixes without implementation changes. This record-only commit adds the consolidation audit; production source remains identical to tested `4d3cfbd`.
+
+| Captured branch | Original tip now proven ancestor |
+| --- | --- |
+| codex/unsealed-desktop | c9ad1761d5539c0ad2ee3b81a66874e91ddeaf6a |
+| codex/unsealed-foundation | 4d3cfbdb3deda2cc21981caaa61bf8b1496bbe38 |
+| codex/unsealed-example | 61ade9f74e5a4d489bcead3ade6fd3f2ab5108a3 |
+| codex/unsealed-input-ui | 858f437067824ca44105c9ee3e9be7372fe311e9 |
+| codex/unsealed-mechanics | 67d601bcc007f314d3ab5f33ff61f6f3ce234f65 |
+| codex/unsealed-packaging | f3078b8ecea1dca6d82cd235821cedd41349baaa |
+| codex/unsealed-rendering | 6a996e5273cd7c47bea9f15aa89bc2be0f75516d |
+| codex/unsealed-services | 0b6ffc6b1b8a9d698830329fb3f46fd0e75554a9 |
+
+Evidence: [preflight and patch audit](../build/merge-consolidation-preflight.json), [merge simulations](../build/merge-consolidation-simulations.json), [merge commits](../build/merge-consolidation-merges.json), [fresh full fixture log](../build/merge-consolidation-walkthrough.log), [revision/binary-hash/exit/time record](../build/merge-consolidation-walkthrough-record.json). The full fixture passes static/validation/pure, both variants and separate restoration processes, exit 0, using unchanged foundation V0 binary SHA256 `54835708E3F5ECA60B1E71FD78E85413199B31F15332A2CBE5950609E3520BC1` and isolated artifacts. Previous exact-code Windows CPU/GPU/CLI/package checks remain applicable. Remote CI and SA/PR review are not claimed; no publication, branch/worktree cleanup, or Unsealed change occurred. Candidate prepared for root review before main moves.
