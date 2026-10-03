@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "gpu_buffer.h"
+#include "draw_state.h"
 #include "shader.h"
 #include "texture.h"
 
@@ -108,6 +109,7 @@ namespace rendering
         std::vector<DrawUniform> uniforms;
         uint64_t order = 0;
         std::optional<DrawOrderKey> stableOrder;
+        DrawState state;
     };
 
     template <typename T>

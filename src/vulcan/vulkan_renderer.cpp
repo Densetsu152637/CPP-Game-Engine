@@ -763,7 +763,11 @@ namespace vulkan
         if (!framebufferReady())
             return false;
 
-        if (!m_swapchain.valid())
+        // A resize may still acquire the old swapchain successfully/suboptimally.
+        // Rebuild before applying framebuffer-sized authored viewports.
+        const auto drawable = m_surfaceProvider ? m_surfaceProvider->drawableExtent() : rendering::ImageExtent{};
+        if (!m_swapchain.valid() || (m_surfaceProvider &&
+            (drawable.width != m_swapchain.extent().width || drawable.height != m_swapchain.extent().height)))
             recreateSwapchain();
 
         if (!m_swapchain.valid())
@@ -1037,7 +1041,21 @@ namespace vulkan
 #endif
     }
 
-    void VulkanRenderer::drawCached(VulkanShaderProgram& shader, uint64_t meshId, uint64_t textureId)
+    void VulkanRenderer::drawProcedural(VulkanShaderProgram& shader, const rendering::DrawState& state)
+    {
+#ifdef CPP_GAME_ENGINE_USE_VULKAN
+        if (!m_initialized || !m_frameActive)
+            throw std::logic_error("Vulkan draws require an active render frame");
+        m_gpu->draw(shader, m_memoryManager, nullptr, nullptr, nullptr,
+            VK_NULL_HANDLE, 0, nullptr, nullptr, state);
+        ++m_renderCallCount;
+#else
+        (void)shader; (void)state;
+        throw std::runtime_error("Vulkan draws require CPP_GAME_ENGINE_USE_VULKAN");
+#endif
+    }
+    void VulkanRenderer::drawCached(VulkanShaderProgram& shader, uint64_t meshId, uint64_t textureId,
+        const rendering::DrawState& state)
     {
 #ifdef CPP_GAME_ENGINE_USE_VULKAN
         if (!m_initialized || !m_frameActive)
@@ -1052,10 +1070,10 @@ namespace vulkan
             texture = found->second.get();
         }
         m_gpu->draw(shader, m_memoryManager, nullptr, &mesh->second.layout, nullptr,
-            m_graphicsQueue, m_queueFamilies.graphicsFamily, &mesh->second, texture);
+            m_graphicsQueue, m_queueFamilies.graphicsFamily, &mesh->second, texture, state);
         ++m_renderCallCount;
 #else
-        (void)shader; (void)meshId; (void)textureId;
+        (void)shader; (void)meshId; (void)textureId; (void)state;
         throw std::runtime_error("Vulkan cached draws require CPP_GAME_ENGINE_USE_VULKAN");
 #endif
     }

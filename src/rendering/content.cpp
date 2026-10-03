@@ -1,4 +1,10 @@
 #include "content.h"
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_PNG
+#define STBI_NO_STDIO
+#define STBI_MAX_DIMENSIONS 8192
+#include "../../third_party/stb/stb_image.h"
+#include <memory>
 
 #include <charconv>
 #include <cctype>
@@ -130,6 +136,46 @@ namespace rendering
         return mesh;
     }
 
+    Texture2D loadTexture(const std::filesystem::path &path)
+    {
+        auto extension = path.extension().string();
+        for (auto &c : extension)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (extension == ".png")
+            return loadTexturePng(path);
+        if (extension == ".ppm")
+            return loadTexturePpm(path);
+        invalid_asset(path, "texture must be PNG or PPM");
+    }
+    Texture2D loadTexturePng(const std::filesystem::path &path)
+    {
+        std::ifstream input(path, std::ios::binary | std::ios::ate);
+        if (!input)
+            invalid_asset(path, "file could not be opened");
+        const auto length = input.tellg();
+        if (length <= 0 || length > 64 * 1024 * 1024)
+            invalid_asset(path, "PNG encoded file exceeds 64 MiB or is empty");
+        std::vector<uint8_t> encoded(static_cast<size_t>(length));
+        input.seekg(0);
+        input.read(reinterpret_cast<char *>(encoded.data()), length);
+        if (!input)
+            invalid_asset(path, "PNG file read failed");
+        int w = 0, h = 0, channels = 0;
+        if (!stbi_info_from_memory(encoded.data(), static_cast<int>(encoded.size()), &w, &h, &channels) ||
+            w <= 0 || h <= 0 || w > MaxTextureDimension || h > MaxTextureDimension ||
+            size_t(w) > MaxTexturePixels / size_t(h))
+            invalid_asset(path, "invalid PNG header or dimensions exceed texture limits");
+        std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> pixels(
+            stbi_load_from_memory(encoded.data(), static_cast<int>(encoded.size()), &w, &h, &channels, 4),
+            stbi_image_free);
+        if (!pixels)
+            invalid_asset(path, std::string("PNG decode failed: ") + stbi_failure_reason());
+        Texture2D result;
+        result.width = static_cast<uint32_t>(w);
+        result.height = static_cast<uint32_t>(h);
+        result.rgba8.assign(pixels.get(), pixels.get() + size_t(w) * h * 4);
+        return result;
+    }
     Texture2D loadTexturePpm(const std::filesystem::path& path)
     {
         std::ifstream input(path, std::ios::binary);

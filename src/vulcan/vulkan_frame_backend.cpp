@@ -79,9 +79,9 @@ namespace vulkan
                         uniform.bytes.data(), uniform.bytes.size(),
                         std::type_index(typeid(std::byte)), frame });
                 if (draw.mesh.id())
-                    m_renderer.drawCached(shader, draw.mesh.id(), draw.texture.id());
+                    m_renderer.drawCached(shader, draw.mesh.id(), draw.texture.id(), draw.state);
                 else
-                    m_renderer.render(shader);
+                    m_renderer.drawProcedural(shader, draw.state);
             }
             const uint32_t imageIndex = m_renderer.currentFrame().imageIndex;
             const auto swapchain = m_renderer.swapchain().handle();

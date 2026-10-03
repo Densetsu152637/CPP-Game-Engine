@@ -28,6 +28,7 @@ struct GLFWwindow;
 #include "../rendering/renderer.h"
 #include "../rendering/render_frame.h"
 #include "../rendering/texture.h"
+#include "../rendering/draw_state.h"
 #include "vulkan_shader.h"
 #include "vulkan_memory.h"
 #include "vulkan_surface_provider.h"
@@ -204,6 +205,8 @@ namespace vulkan
         void cacheTexture(uint64_t id, const rendering::Texture2D& texture);
         void releaseMesh(uint64_t id);
         void releaseTexture(uint64_t id);
-        void drawCached(VulkanShaderProgram& shader, uint64_t meshId, uint64_t textureId = 0);
+        void drawProcedural(VulkanShaderProgram& shader, const rendering::DrawState& state = {});
+        void drawCached(VulkanShaderProgram& shader, uint64_t meshId, uint64_t textureId = 0,
+            const rendering::DrawState& state = {});
     };
 }
