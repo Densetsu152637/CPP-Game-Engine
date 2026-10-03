@@ -32,6 +32,23 @@ struct LuaComponentField
 };
 using LuaComponentValues = std::vector<std::pair<std::string, LuaComponentValue>>;
 
+struct LuaMoveResult
+{
+    std::array<float, 2> position{};
+    std::vector<std::string> contacts;
+};
+struct LuaUiPanel
+{
+    std::string id, font, text;
+    std::array<float, 4> rect{8, 8, 304, 164};
+    std::array<float, 4> color{1, 1, 1, 1};
+    float scale = 1;
+    bool modal = true;
+    std::vector<std::string> choices;
+};
+struct LuaUiEvent { std::string panel, type; std::size_t selection = 0; };
+struct LuaTriggerEvent { std::string first, second, phase; };
+
 // Engine services are injected so scripts do not depend on a particular ECS implementation.
 struct EngineScriptApi
 {
@@ -51,6 +68,33 @@ struct EngineScriptApi
     std::function<std::optional<LuaComponentValues>(std::int64_t, std::string_view)> get_component;
     std::function<bool(std::int64_t, std::string_view)> remove_component;
     std::function<std::vector<std::int64_t>(const std::vector<std::string>&)> query_components;
+    std::function<std::optional<std::int64_t>(std::string_view)> find_entity;
+    std::function<std::expected<LuaMoveResult, std::string>(std::int64_t, float, float)> move;
+    std::function<std::expected<std::vector<std::string>, std::string>(std::int64_t)> overlaps;
+    std::function<std::expected<void, std::string>(std::string_view, std::string_view, std::string_view)> change_scene;
+    std::function<bool(std::int64_t, std::uint32_t)> set_sprite_frame;
+    std::function<bool(std::int64_t, bool)> set_sprite_visible;
+    std::function<std::expected<void, std::string>(const LuaUiPanel&)> ui_open;
+    std::function<bool(std::string_view)> ui_close;
+    std::function<bool(std::string_view, std::string)> ui_set_text;
+    std::function<bool(std::string_view, float)> ui_scroll;
+    std::function<std::optional<LuaUiEvent>()> ui_event;
+    std::function<std::expected<std::uint64_t, std::string>(std::string_view, bool, std::string_view, float)> audio_play;
+    std::function<bool(std::uint64_t)> audio_stop;
+    std::function<std::expected<void, std::string>(std::string_view, float)> audio_volume;
+    // JSON crosses the host boundary; wrappers expose bounded Lua objects.
+    std::function<std::expected<void, std::string>(std::string_view, std::string_view)> save_write;
+    std::function<std::expected<std::string, std::string>(std::string_view, bool)> save_read;
+    std::function<std::expected<void, std::string>(std::string_view)> save_recover;
+    std::function<std::expected<void, std::string>(std::string_view)> settings_write;
+    std::function<std::expected<std::string, std::string>()> settings_read;
+    std::function<std::expected<void, std::string>(std::string_view)> state_write;
+    std::function<std::string()> state_read;
+    std::function<bool(std::string_view, bool)> lock_controls;
+    std::function<bool(float, float)> set_camera;
+    std::function<void()> reset_camera;
+    std::function<std::expected<std::optional<std::array<float, 2>>, std::string>(std::int64_t, float, float)> safe_position;
+    std::function<std::vector<LuaTriggerEvent>()> triggers;
     // Project CLI mode routes ordinary Lua output away from machine-readable stdout.
     bool redirect_standard_output = false;
     // When set, require resolves only modules within this project root.
@@ -65,6 +109,9 @@ struct LuaScriptContext
     std::function<bool(std::string_view)> pressed;
     std::function<bool(std::string_view)> held;
     std::function<bool(std::string_view)> released;
+    std::function<float(std::string_view)> value;
+    std::function<std::array<float, 2>()> pointer;
+    std::function<std::array<float, 2>()> wheel;
 };
 
 class LuaScriptSystem

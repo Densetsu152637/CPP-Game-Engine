@@ -74,6 +74,7 @@ int main()
         test_scheduler_logging();
         test_dynamic_component_storage_and_deferred_query_coherence();
         test_render_device_concurrency();
+        test_desktop2d_rendering();
     }
     catch (const std::exception& exception)
     {

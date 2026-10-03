@@ -3,14 +3,14 @@
 VULKAN ?= 0
 CONFIG ?= debug
 BUILD ?= build/$(CONFIG)-vk$(VULKAN)
-PROJECT_HEADERS := $(wildcard src/*.h src/*/*.h src/*/*/*.h src/*/*/*/*.h third_party/entt/src/entt/*.hpp third_party/entt/src/entt/*/*.hpp third_party/entt/src/entt/*/*/*.hpp third_party/lua/*.h third_party/glfw/include/GLFW/*.h third_party/picojson/*.h)
-ENGINE_SRC := src/platform/platform_check.cpp $(filter-out src/main.cpp,$(wildcard src/*.cpp src/async/*.cpp src/components/*.cpp src/core/*.cpp src/ecs/*.cpp src/ecs/core/*.cpp src/ecs/jobs/*.cpp src/ecs/rendering/*.cpp src/functional/*.cpp src/interaction/*.cpp src/logging/*.cpp src/automation/*.cpp src/editor/*.cpp src/project/*.cpp src/rendering/*.cpp src/runtime/*.cpp src/scripting/*.cpp src/structs/*.cpp src/tooling/*.cpp src/util/*.cpp src/vulcan/*.cpp))
+PROJECT_HEADERS := $(wildcard src/*.h src/*/*.h src/*/*/*.h src/*/*/*/*.h third_party/entt/src/entt/*.hpp third_party/entt/src/entt/*/*.hpp third_party/entt/src/entt/*/*/*.hpp third_party/lua/*.h third_party/glfw/include/GLFW/*.h third_party/picojson/*.h third_party/stb/*.h)
+ENGINE_SRC := src/platform/platform_check.cpp $(filter-out src/main.cpp,$(wildcard src/*.cpp src/async/*.cpp src/audio/*.cpp src/components/*.cpp src/core/*.cpp src/ecs/*.cpp src/ecs/core/*.cpp src/ecs/jobs/*.cpp src/ecs/rendering/*.cpp src/functional/*.cpp src/interaction/*.cpp src/logging/*.cpp src/automation/*.cpp src/editor/*.cpp src/project/*.cpp src/rendering/*.cpp src/runtime/*.cpp src/scripting/*.cpp src/structs/*.cpp src/tooling/*.cpp src/util/*.cpp src/vulcan/*.cpp))
 LUA_SRC := $(filter-out third_party/lua/lua.c third_party/lua/onelua.c third_party/lua/ltests.c,$(wildcard third_party/lua/*.c))
 GLFW_COMMON := context init input monitor platform vulkan window egl_context osmesa_context null_init null_monitor null_window null_joystick
-ECS_TEST_SRC := src/test/ecs_tests.cpp $(wildcard src/test/ecs/*.cpp) src/test/rendering/shader_tests.cpp src/test/rendering/render_system_integration_tests.cpp src/test/rendering/render_device_tests.cpp
+ECS_TEST_SRC := src/test/ecs_tests.cpp $(wildcard src/test/ecs/*.cpp) src/test/rendering/shader_tests.cpp src/test/rendering/render_system_integration_tests.cpp src/test/rendering/render_device_tests.cpp src/test/rendering/desktop2d_tests.cpp
 LUA_TEST_SRC := $(wildcard src/test/scripting/*.cpp)
-PROJECT_TEST_SRC := $(filter-out src/test/project/runtime_tests.cpp,$(wildcard src/test/project/*.cpp))
-RUNTIME_TEST_SRC := $(wildcard src/test/project/runtime_tests.cpp)
+PROJECT_TEST_SRC := $(filter-out src/test/project/runtime_tests.cpp src/test/project/runtime_desktop2d_tests.cpp,$(wildcard src/test/project/*.cpp)) src/test/desktop2d/audio_tests.cpp
+RUNTIME_TEST_SRC := src/test/project/runtime_tests.cpp src/test/project/runtime_desktop2d_tests.cpp
 EDITOR_TEST_SRC := $(wildcard src/test/editor/*.cpp)
 WORKFLOW_TEST_SRC := $(wildcard src/test/tooling/*.cpp src/test/automation/*.cpp)
 INCLUDES := -Isrc -Ithird_party/entt/src -Ithird_party/lua -Ithird_party/glfw/include
@@ -34,7 +34,7 @@ else
 CXXFLAGS += /Od /Z7
 CFLAGS += /Od /Z7
 endif
-LDLIBS := user32.lib gdi32.lib shell32.lib
+LDLIBS := user32.lib gdi32.lib shell32.lib winmm.lib
 MKDIR = mkdir "$(subst /,\,$(dir $@))" 2>nul || (if exist "$(subst /,\,$(dir $@))" (exit /b 0) else (exit /b 1))
 CREATE_BUILD = if not exist "$(subst /,\,$@)" mkdir "$(subst /,\,$@)"
 SAVE_OPTIONS = fc /B "$(subst /,\,$@)" "$(subst /,\,$@.tmp)" >nul 2>&1 || copy /Y "$(subst /,\,$@.tmp)" "$(subst /,\,$@)" >nul
@@ -95,6 +95,7 @@ RUNTIME_TEST := $(BUILD)/bin/RuntimeTests$(EXE)
 EDITOR_TEST := $(BUILD)/bin/EditorTests$(EXE)
 WORKFLOW_TEST := $(BUILD)/bin/WorkflowTests$(EXE)
 SMOKE := $(BUILD)/bin/VulkanSmoke$(EXE)
+DESKTOP2D_GPU := $(BUILD)/bin/Desktop2DTests$(EXE)
 SHADERS := $(BUILD)/shaders/triangle.vert.spv $(BUILD)/shaders/triangle.frag.spv $(BUILD)/shaders/mesh.vert.spv $(BUILD)/shaders/mesh_textured.vert.spv $(BUILD)/shaders/mesh_textured.frag.spv
 .PHONY: all test shaders smoke smoke-validation run clean
 .PHONY: FORCE
@@ -133,6 +134,11 @@ $(WORKFLOW_TEST): $(call objects,$(WORKFLOW_TEST_SRC)) $(COMMON_OBJ)
 $(SMOKE): $(call objects,src/test/rendering/vulkan_smoke.cpp) $(COMMON_OBJ)
 	@$(MKDIR)
 	$(LINK)
+$(DESKTOP2D_GPU): $(call objects,src/test/rendering/desktop2d_gpu.cpp) $(COMMON_OBJ)
+	@$(MKDIR)
+	$(LINK)
+desktop2d-smoke: $(DESKTOP2D_GPU) $(SHADERS)
+	"$(DESKTOP2D_GPU)" "$(BUILD)/shaders"
 $(BUILD)/obj/%.$(OBJEXT): %.cpp $(PROJECT_HEADERS) Makefile $(BUILD)/build-options.txt
 	@$(MKDIR)
 	$(COMPILE_CPP)

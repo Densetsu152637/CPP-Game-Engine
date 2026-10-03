@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <memory>
@@ -53,6 +54,44 @@ namespace project
         bool operator==(const MeshRenderer&) const = default;
     };
 
+    // Atlas rectangles use top-left texture pixel coordinates, not world units.
+    using PixelRectangle = std::array<std::uint32_t, 4>;
+
+    struct SpriteRenderer
+    {
+        std::string texture;
+        std::array<float, 2> size{1.0f, 1.0f};
+        std::array<float, 2> pivot{0.5f, 0.5f};
+        std::array<float, 4> tint{1.0f, 1.0f, 1.0f, 1.0f};
+        std::optional<PixelRectangle> source;
+        std::vector<PixelRectangle> frames;
+        float framesPerSecond = 0.0f;
+        bool loop = true;
+        int layer = 0;
+        bool visible = true;
+        bool operator==(const SpriteRenderer&) const = default;
+    };
+
+    struct Camera2D
+    {
+        std::array<std::uint32_t, 2> logicalSize{320, 180};
+        float pixelsPerUnit = 16.0f;
+        std::array<float, 2> center{};
+        std::optional<std::string> follow;
+        bool pixelSnap = true;
+        bool operator==(const Camera2D&) const = default;
+    };
+
+    struct Collider2D
+    {
+        std::array<float, 2> size{1.0f, 1.0f};
+        std::array<float, 2> offset{};
+        bool trigger = false;
+        std::uint32_t layer = 1;
+        std::uint32_t mask = UINT32_MAX;
+        bool operator==(const Collider2D&) const = default;
+    };
+
     struct Asset
     {
         std::string id;
@@ -68,6 +107,9 @@ namespace project
         std::optional<Transform> transform;
         std::optional<Script> script;
         std::optional<MeshRenderer> meshRenderer;
+        std::optional<SpriteRenderer> spriteRenderer;
+        std::optional<Camera2D> camera2D;
+        std::optional<Collider2D> collider2D;
         bool operator==(const SceneEntity&) const = default;
     };
 
@@ -89,6 +131,7 @@ namespace project
         std::filesystem::path startupScene;
         std::map<std::string, Asset, std::less<>> assets;
         std::map<std::string, std::string, std::less<>> inputActions;
+        std::map<std::string, std::vector<std::string>, std::less<>> inputBindings;
         Scene scene;
     };
 
@@ -119,7 +162,16 @@ namespace project
     {
         Float3,
         AssetId,
-        OptionalAssetId
+        OptionalAssetId,
+        Float2,
+        Float4,
+        Float,
+        Integer,
+        Boolean,
+        UInt2,
+        Rectangle,
+        RectangleArray,
+        OptionalEntityId
     };
 
     struct PropertyDescriptor

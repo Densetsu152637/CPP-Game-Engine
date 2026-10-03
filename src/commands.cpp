@@ -9,6 +9,9 @@
 #include "rendering/camera.h"
 #include "rendering/material.h"
 #include "rendering/render_device.h"
+#include "rendering/sprite2d.h"
+#include "rendering/text2d.h"
+#include "interaction/action_input.h"
 #include "scripting/lua_script_system.h"
 #include "scripting/lua_source_file.h"
 #include "vulcan/vulkan_frame_backend.h"
@@ -20,6 +23,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -41,7 +45,7 @@ struct Arguments {
             if (!arg.starts_with("--")) { positional.push_back(arg); continue; }
             if (arg == "--headless" || arg == "--rebuild") { options[arg].push_back("true"); continue; }
             if (arg != "--format" && arg != "--ticks" && arg != "--project-root" && arg != "--runtime" &&
-                arg != "--compiler" && arg != "--input" && arg != "--shaders")
+                arg != "--compiler" && arg != "--input" && arg != "--shaders" && arg != "--user-data")
                 throw std::invalid_argument("Unknown option: " + arg);
             if (i + 1 == argc) throw std::invalid_argument("Missing value for " + arg);
             options[arg].push_back(argv[++i]);
@@ -77,9 +81,44 @@ int fail(const std::string& command, const project::Diagnostics& diagnostics, in
 int success(const std::string& command, const std::string& result = "{}") {
     std::cout << project::resultJson(true, command, result) << '\n'; return 0;
 }
+struct ContentCatalog {
+    std::map<std::string, rendering::Texture2D> textures;
+    std::map<std::string, rendering::FontAtlas> fonts;
+    explicit ContentCatalog(const project::Project& project) {
+        for (const auto& [id, asset] : project.assets) if (asset.kind == "texture") {
+            const auto path = project::resolveAsset(project, id); if (!path) throw std::runtime_error(path.error().front().message);
+            textures.emplace(id, rendering::loadTexture(*path));
+        }
+        for (const auto& [id, asset] : project.assets) if (asset.kind == "font") {
+            const auto path = project::resolveAsset(project, id); if (!path) throw std::runtime_error(path.error().front().message);
+            const auto header = rendering::loadFontAtlas(*path, 8192, 8192);
+            const auto texture = textures.find(header.texture);
+            if (texture == textures.end()) throw std::runtime_error("Font references an unknown or non-texture asset");
+            fonts.emplace(id, rendering::loadFontAtlas(*path, texture->second.width, texture->second.height));
+        }
+    }
+    float advance(std::string_view font, char32_t codepoint) const {
+        const auto found = fonts.find(std::string(font)); if (found == fonts.end()) throw std::runtime_error("UI font is not loaded");
+        auto glyph = found->second.glyphs.find(codepoint); if (glyph == found->second.glyphs.end()) glyph = found->second.glyphs.find(found->second.fallback);
+        return glyph->second.advance;
+    }
+    void validateSprites(const project::Scene& scene) const {
+        for (const auto& entity : scene.entities) if (entity.spriteRenderer) {
+            const auto& sprite = *entity.spriteRenderer; const auto texture = textures.find(sprite.texture);
+            if (texture == textures.end()) throw std::runtime_error("Sprite texture is not loaded");
+            const auto valid = [&](const project::PixelRectangle& rectangle) {
+                if (rectangle[0] > texture->second.width || rectangle[2] > texture->second.width - rectangle[0] ||
+                    rectangle[1] > texture->second.height || rectangle[3] > texture->second.height - rectangle[1])
+                    throw std::runtime_error("Sprite atlas rectangle exceeds its texture: " + entity.id);
+            };
+            if (sprite.source) valid(*sprite.source); for (const auto& frame : sprite.frames) valid(frame);
+        }
+    }
+};
 project::Result<void> compileScripts(const project::Project& value) {
     std::vector<std::pair<std::string, std::string>> declarations;
     std::map<std::string, std::pair<Path, std::string>> scriptOrigins;
+    std::vector<project::Scene> scenes{value.scene};
     for (const auto& [id, asset] : value.assets) {
         auto path = project::resolveAsset(value, id);
         if (!path) return std::unexpected(path.error());
@@ -97,11 +136,15 @@ project::Result<void> compileScripts(const project::Project& value) {
                 scriptOrigins.emplace(chunkName, std::pair<Path, std::string>{*path, id});
                 declarations.emplace_back(std::move(*source), chunkName);
             } else if (asset.kind == "mesh") (void)rendering::loadMeshAsset(*path);
-            else if (asset.kind == "texture") (void)rendering::loadTexturePpm(*path);
+            else if (asset.kind == "texture") (void)rendering::loadTexture(*path);
+            else if (asset.kind == "audio") { const auto clip = audio::loadWav(*path); if (!clip) throw std::runtime_error(clip.error().message); }
+            else if (asset.kind == "scene") { const auto scene = project::loadScene(*path, value); if (!scene) return std::unexpected(scene.error()); scenes.push_back(*scene); }
         } catch (const std::exception& error) {
             return std::unexpected(project::Diagnostics{{"asset.content.invalid", project::Severity::Error, *path, id, error.what()}});
         }
     }
+    try { const ContentCatalog catalog(value); for (const auto& scene : scenes) catalog.validateSprites(scene); }
+    catch (const std::exception& error) { return std::unexpected(project::Diagnostics{{"asset.font.invalid", project::Severity::Error, value.manifest, "assets", error.what()}}); }
     if (!declarations.empty()) {
         const auto valid = LuaScriptSystem::validate_declarations(declarations, value.root);
         if (!valid) {
@@ -126,115 +169,142 @@ class Preview {
     std::unique_ptr<rendering::RenderDevice> device;
     vulkan::VulkanShaderProgram shader{"authored content"};
     rendering::RenderResourceHandle shaderHandle;
-    struct Drawable {
-        std::string entityId;
-        rendering::RenderResourceHandle mesh;
-        rendering::RenderResourceHandle texture;
-    };
-    std::vector<Drawable> drawables;
-    std::map<std::string, bool> held;
-    std::map<std::string, int> keys;
+    std::shared_ptr<ContentCatalog> catalog;
+    std::shared_ptr<interaction::ActionMapper> mapper;
+    std::map<std::string, rendering::RenderResourceHandle> textures, meshes, dynamicMeshes;
+    float wheelX = 0, wheelY = 0;
+    rendering::Camera2DView view(const project::Runtime& runtime) const {
+        int width = 0, height = 0; glfwGetFramebufferSize(window, &width, &height);
+        const auto camera = runtime.camera().value_or(project::Camera2D{});
+        return rendering::makeCamera2DView({camera.logicalSize, camera.pixelsPerUnit, camera.center, camera.pixelSnap},
+            static_cast<uint32_t>(std::max(0, width)), static_cast<uint32_t>(std::max(0, height)));
+    }
+    rendering::RenderResourceHandle dynamicMesh(const std::string& id, const rendering::MeshAsset& mesh) {
+        auto found = dynamicMeshes.find(id);
+        if (found == dynamicMeshes.end()) return dynamicMeshes.emplace(id, device->createMesh(mesh.vertexData(), mesh.layout())).first->second;
+        device->updateMesh(found->second, mesh.vertexData(), mesh.layout()); return found->second;
+    }
 public:
-    Preview(const project::Project& project, const Path& shaders) {
-        struct PendingDrawable {
-            std::string entityId;
-            rendering::MeshAsset mesh;
-            rendering::Texture2D texture;
-        };
-        std::vector<PendingDrawable> pending;
-        const std::map<std::string, int> keyCodes{{"Right",GLFW_KEY_RIGHT},{"Left",GLFW_KEY_LEFT},{"Up",GLFW_KEY_UP},{"Down",GLFW_KEY_DOWN},{"Space",GLFW_KEY_SPACE}};
-        for (const auto& [action, key] : project.inputActions) {
-            const auto code = keyCodes.find(key);
-            if (code == keyCodes.end()) throw std::runtime_error("Unsupported authored input key: " + key);
-            keys.emplace(action, code->second);
-        }
-        for (const auto& entity : project.scene.entities) {
-            if (!entity.meshRenderer) continue;
-            auto meshPath = project::resolveAsset(project, entity.meshRenderer->mesh);
-            if (!meshPath) throw std::runtime_error("Unable to resolve mesh for " + entity.id);
-            PendingDrawable drawable{entity.id, rendering::loadMeshAsset(*meshPath), {1, 1, {255,255,255,255}}};
-            if (entity.meshRenderer->texture) {
-                auto texturePath = project::resolveAsset(project, *entity.meshRenderer->texture);
-                if (!texturePath) throw std::runtime_error("Unable to resolve texture for " + entity.id);
-                drawable.texture = rendering::loadTexturePpm(*texturePath);
-            }
-            pending.push_back(std::move(drawable));
-        }
-        if (pending.empty()) throw std::runtime_error("Visible preview requires at least one entity with MeshRenderer");
+    Preview(const project::Project& project, const Path& shaders, std::shared_ptr<ContentCatalog> content,
+            std::shared_ptr<interaction::ActionMapper> actions) : catalog(std::move(content)), mapper(std::move(actions)) {
         shader.addSpirv(rendering::ShaderStage::Vertex, shaders / "mesh_textured.vert.spv");
         shader.addSpirv(rendering::ShaderStage::Fragment, shaders / "mesh_textured.frag.spv");
         if (!glfwInit()) throw std::runtime_error("GLFW initialization failed");
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         window = glfwCreateWindow(960, 600, project.name.c_str(), nullptr, nullptr);
         if (!window) { glfwTerminate(); throw std::runtime_error("GLFW window creation failed"); }
+        glfwSetWindowUserPointer(window, this);
+        glfwSetScrollCallback(window, [](GLFWwindow* window, double x, double y) {
+            auto* owner = static_cast<Preview*>(glfwGetWindowUserPointer(window));
+            owner->wheelX += static_cast<float>(x); owner->wheelY += static_cast<float>(y);
+        });
         try {
             surface = std::make_unique<vulkan::VulkanGlfwSurfaceProvider>(window);
-            device = std::make_unique<rendering::RenderDevice>(
-                std::make_unique<vulkan::VulkanFrameBackend>(*surface));
-            const auto capabilities = device->capabilities();
-            for (const auto feature : std::array{rendering::RenderFeature::BackendAvailable,
-                    rendering::RenderFeature::SampledTextures, rendering::RenderFeature::DepthAttachment}) {
-                const auto status = capabilities.feature(feature);
-                if (!status.supported)
-                    throw std::runtime_error(std::string("Authored preview requires ") + status.name + ": " + status.reason);
+            device = std::make_unique<rendering::RenderDevice>(std::make_unique<vulkan::VulkanFrameBackend>(*surface));
+            for (const auto feature : std::array{rendering::RenderFeature::BackendAvailable, rendering::RenderFeature::SampledTextures, rendering::RenderFeature::DepthAttachment}) {
+                const auto status = device->capabilities().feature(feature);
+                if (!status.supported) throw std::runtime_error(std::string("Authored preview requires ") + status.name + ": " + status.reason);
             }
             shaderHandle = device->createShader(shader);
-            for (const auto& drawable : pending)
-                drawables.push_back({drawable.entityId,
-                    device->createMesh(drawable.mesh.vertexData(), drawable.mesh.layout()),
-                    device->createTexture(drawable.texture)});
-        } catch (...) {
-            device.reset();
-            surface.reset();
-            glfwDestroyWindow(window);
-            window = nullptr;
-            glfwTerminate();
-            throw;
-        }
+            textures.emplace("__white", device->createTexture({1, 1, {255,255,255,255}}));
+            for (const auto& [id, texture] : catalog->textures) textures.emplace(id, device->createTexture(texture));
+            for (const auto& [id, asset] : project.assets) if (asset.kind == "mesh") {
+                const auto path = project::resolveAsset(project, id); if (!path) throw std::runtime_error(path.error().front().message);
+                const auto mesh = rendering::loadMeshAsset(*path); meshes.emplace(id, device->createMesh(mesh.vertexData(), mesh.layout()));
+            }
+        } catch (...) { device.reset(); surface.reset(); glfwDestroyWindow(window); window = nullptr; glfwTerminate(); throw; }
     }
     ~Preview() {
-        try { if (device) device->shutdown(); }
-        catch (const std::exception& error) { std::cerr << "Renderer shutdown: " << error.what() << '\n'; }
-        catch (...) { std::cerr << "Renderer shutdown failed\n"; }
-        device.reset();
-        surface.reset();
-        if (window) glfwDestroyWindow(window);
-        glfwTerminate();
+        try { if (device) device->shutdown(); } catch (const std::exception& error) { std::cerr << "Renderer shutdown: " << error.what() << '\n'; }
+        device.reset(); surface.reset(); if (window) glfwDestroyWindow(window); glfwTerminate();
     }
     void finish() { if (device) { device->waitIdle(); device->shutdown(); } }
-    bool sample(project::InputSnapshot& input) {
-        glfwPollEvents();
-        if (glfwWindowShouldClose(window)) return false;
-        for (const auto& [action, code] : keys) {
-            const bool down = glfwGetWindowAttrib(window, GLFW_FOCUSED) && glfwGetKey(window, code) == GLFW_PRESS;
-            if (down) input.held.insert(action);
-            if (down && !held[action]) input.pressed.insert(action);
-            if (!down && held[action]) input.released.insert(action);
-            held[action] = down;
+    bool sample(project::InputSnapshot& input, const project::Runtime& runtime) {
+        const auto injectedHeld = input.held;
+        glfwPollEvents(); if (glfwWindowShouldClose(window)) return false;
+        interaction::RawInput raw; raw.focused = glfwGetWindowAttrib(window, GLFW_FOCUSED) != 0;
+        raw.wheelX = wheelX; raw.wheelY = wheelY; wheelX = wheelY = 0;
+        GLFWgamepadstate gamepad{};
+        for (int id = GLFW_JOYSTICK_1; id <= GLFW_JOYSTICK_LAST; ++id)
+            if (glfwJoystickIsGamepad(id) && glfwGetGamepadState(id, &gamepad)) { raw.gamepadConnected = true; break; }
+        for (const auto& binding : interaction::bindingRegistry()) {
+            if (binding.device == interaction::Device::Keyboard && glfwGetKey(window, binding.code) == GLFW_PRESS) raw.down.insert(binding.token);
+            else if (binding.device == interaction::Device::MouseButton && glfwGetMouseButton(window, binding.code) == GLFW_PRESS) raw.down.insert(binding.token);
+            else if (binding.device == interaction::Device::GamepadButton && raw.gamepadConnected && gamepad.buttons[binding.code] == GLFW_PRESS) raw.down.insert(binding.token);
         }
+        if (raw.gamepadConnected) {
+            const std::string names[]{"LeftX","LeftY","RightX","RightY","LeftTrigger","RightTrigger"};
+            for (int axis = 0; axis < 6; ++axis) raw.axes[names[axis]] = axis < 4 ? gamepad.axes[axis] : (gamepad.axes[axis] + 1) * 0.5f;
+        }
+        double x = 0, y = 0; int ww = 0, wh = 0, fw = 0, fh = 0;
+        glfwGetCursorPos(window, &x, &y); glfwGetWindowSize(window, &ww, &wh); glfwGetFramebufferSize(window, &fw, &fh);
+        const auto cameraView = view(runtime);
+        if (ww > 0 && wh > 0 && cameraView.scale > 0) {
+            raw.pointerX = static_cast<float>((x * fw / ww - cameraView.framebufferViewport.x) / cameraView.scale);
+            raw.pointerY = static_cast<float>((y * fh / wh - cameraView.framebufferViewport.y) / cameraView.scale);
+        } else raw.pointerX = raw.pointerY = -1;
+        const auto frame = mapper->sample(raw);
+        input.pressed.insert(frame.pressed.begin(), frame.pressed.end()); input.held.insert(frame.held.begin(), frame.held.end()); input.released.insert(frame.released.begin(), frame.released.end());
+        input.values = frame.values; for (const auto& action : injectedHeld) input.values[action] = 1.0f;
+        input.pointerX = frame.pointerX; input.pointerY = frame.pointerY; input.wheelX = frame.wheelX; input.wheelY = frame.wheelY; input.focused = frame.focused;
         return true;
     }
     void draw(const project::Runtime& runtime) {
-        auto frame = device->makeFrame();
-        rendering::CameraUniform camera;
-        camera.viewProjection = {0.5f,0,0,0, 0,-0.8f,0,0, 0,0,-0.1f,0, 0,0,0.5f,1};
-        rendering::MaterialUniform material;
-        for (const auto& drawable : drawables) {
-            const auto position = runtime.position(drawable.entityId);
-            if (!position) continue;
-            const std::array<float, 16> model{1,0,0,0, 0,1,0,0, 0,0,1,0, (*position)[0],(*position)[1],(*position)[2],1};
-            rendering::DrawCommand draw{shaderHandle, drawable.mesh, drawable.texture};
-            rendering::appendUniform(draw, "model", model, {0,0});
-            rendering::appendUniform(draw, "material", material, {0,1});
-            rendering::appendUniform(draw, "camera", camera, {0,2});
-            frame->record(std::move(draw));
+        const auto cameraView = view(runtime); if (cameraView.scale == 0) return;
+        const auto cameraDescription = runtime.camera().value_or(project::Camera2D{});
+        auto frame = device->makeFrame(); std::set<std::string> used;
+        const auto record = [&](rendering::RenderResourceHandle mesh, rendering::RenderResourceHandle texture,
+                const rendering::CameraUniform& camera, rendering::DrawState state, const std::array<float,4>& color,
+                const std::array<float,16>& model) {
+            rendering::DrawCommand draw{shaderHandle, mesh, texture}; draw.state = state;
+            rendering::MaterialUniform material; material.baseColor = color;
+            rendering::appendUniform(draw, "model", model, {0,0}); rendering::appendUniform(draw, "material", material, {0,1}); rendering::appendUniform(draw, "camera", camera, {0,2}); frame->record(std::move(draw));
+        };
+        const std::array<float,16> identity{1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+        for (const auto& entity : runtime.activeScene().entities) if (entity.meshRenderer) {
+            const auto position = runtime.position(entity.id); if (!position) continue;
+            auto camera = cameraView.camera;
+            if (!runtime.camera()) camera.viewProjection = {0.5f,0,0,0, 0,-0.8f,0,0, 0,0,-0.1f,0, 0,0,0.5f,1};
+            auto model = identity; model[12] = (*position)[0]; model[13] = (*position)[1]; model[14] = (*position)[2];
+            record(meshes.at(entity.meshRenderer->mesh), textures.at(entity.meshRenderer->texture.value_or("__white")), camera, {}, {1,1,1,1}, model);
+        }
+        for (const auto& sprite : runtime.sprites()) {
+            const auto& texture = catalog->textures.at(sprite.sprite.texture);
+            project::PixelRectangle source{0,0,texture.width,texture.height};
+            if (!sprite.sprite.frames.empty()) source = sprite.sprite.frames.at(sprite.frame);
+            else if (sprite.sprite.source) source = *sprite.sprite.source;
+            const rendering::Sprite2DDescription description{{sprite.position[0],sprite.position[1]},sprite.sprite.size,sprite.sprite.pivot,{source[0],source[1],source[2],source[3]},sprite.sprite.tint,true};
+            const auto geometry = rendering::makeSpriteQuad(description, texture.width, texture.height, cameraDescription.pixelsPerUnit, cameraDescription.pixelSnap);
+            const auto key = "sprite:" + sprite.id; used.insert(key);
+            record(dynamicMesh(key, geometry), textures.at(sprite.sprite.texture), cameraView.camera, rendering::painter2DState(cameraView), sprite.sprite.tint, identity);
+        }
+        const auto uiCamera = rendering::makeLogicalUiCamera(cameraDescription.logicalSize[0],cameraDescription.logicalSize[1]);
+        auto panels = runtime.panels(); std::stable_sort(panels.begin(), panels.end(), [](const auto& a, const auto& b) { return a.layer < b.layer; });
+        for (const auto& panel : panels) {
+            const auto& font = catalog->fonts.at(panel.fontAsset); const auto& texture = catalog->textures.at(font.texture);
+            rendering::MeshAsset background;
+            const float x = panel.rect.x, y = panel.rect.y, w = panel.rect.width, h = panel.rect.height;
+            background.vertices = {{{x,y,0},{0,0}},{{x+w,y,0},{1,0}},{{x,y+h,0},{0,1}},{{x,y+h,0},{0,1}},{{x+w,y,0},{1,0}},{{x+w,y+h,0},{1,1}}};
+            const auto backgroundKey = "panel:" + panel.id; used.insert(backgroundKey);
+            record(dynamicMesh(backgroundKey,background),textures.at("__white"),uiCamera,rendering::painter2DState(cameraView),{0.025f,0.035f,0.06f,0.94f},identity);
+            std::string text;
+            for (size_t index = 0; index < panel.lines.size(); ++index) { if (index) text += '\n'; text += panel.lines[index]; }
+            for (size_t index = 0; index < panel.choices.size(); ++index) { text += '\n'; text += panel.focused && index == panel.selected ? "> " : "  "; text += panel.choices[index]; }
+            rendering::Text2DDescription description{text,{0,0},0,panel.scrollOffset / panel.scale,
+                rendering::LogicalRect{0,0,panel.clip.width / panel.scale,panel.clip.height / panel.scale}};
+            auto geometry = rendering::makeTextGeometry(font,texture.width,texture.height,description).mesh;
+            for (auto& vertex : geometry.vertices) { vertex.position[0] = vertex.position[0] * panel.scale + panel.rect.x; vertex.position[1] = vertex.position[1] * panel.scale + panel.rect.y; }
+            if (!geometry.vertices.empty()) { const auto key = "text:" + panel.id; used.insert(key); record(dynamicMesh(key,geometry),textures.at(font.texture),uiCamera,rendering::painter2DState(cameraView),panel.color,identity); }
         }
         device->submit(frame);
+        for (auto item = dynamicMeshes.begin(); item != dynamicMeshes.end();) {
+            if (!used.contains(item->first)) { device->destroy(item->second); item = dynamicMeshes.erase(item); } else ++item;
+        }
     }
 };
 #endif
 int runProject(const Arguments& args) {
-    args.require(1, {"--headless", "--ticks", "--input", "--shaders"});
+    args.require(1, {"--headless", "--ticks", "--input", "--shaders", "--user-data"});
     const auto ticks = number(args.get("--ticks", "120"), 1, 1000000);
     auto loaded = project::loadProject(args.positional[0]);
     if (!loaded) return fail("run", loaded.error());
@@ -245,7 +315,7 @@ int runProject(const Arguments& args) {
         for (const auto& event : found->second) {
             const auto colon = event.rfind(':');
             if (colon == std::string::npos || colon == 0) throw std::invalid_argument("--input expects action:tick");
-            if (!loaded->inputActions.contains(event.substr(0, colon)))
+            if (!loaded->inputActions.contains(event.substr(0, colon)) && !loaded->inputBindings.contains(event.substr(0, colon)))
                 return fail("run", {{"command.input.unknown", project::Severity::Error, loaded->manifest, "--input", "Input action is not declared by the project: " + event.substr(0, colon)}}, 2);
             const unsigned tick = number(event.substr(colon + 1), 0, ticks - 1);
             inputs[tick].pressed.insert(event.substr(0, colon));
@@ -253,25 +323,49 @@ int runProject(const Arguments& args) {
             if (tick + 1 < ticks) inputs[tick + 1].released.insert(event.substr(0, colon));
         }
     }
-    project::Runtime runtime(*loaded);
+    auto catalog = std::make_shared<ContentCatalog>(*loaded);
+    interaction::BindingMap bindings;
+    for (const auto& [action, key] : loaded->inputActions) bindings[action] = {"Key:" + key};
+    for (const auto& [action, tokens] : loaded->inputBindings) bindings[action] = tokens;
+    auto mapper = std::make_shared<interaction::ActionMapper>(std::move(bindings));
+    std::uint64_t profileHash = 14695981039346656037ull;
+    for (const unsigned char character : loaded->name) { profileHash ^= character; profileHash *= 1099511628211ull; }
+    const auto projectId = "project-" + std::to_string(profileHash);
+    auto root = args.has("--user-data") ? project::Result<Path>(Path(args.get("--user-data"))) : project::PersistenceStore::defaultUserDataRoot(projectId);
+    if (!root) return fail("run", root.error(), 3);
+    auto persistence = std::make_shared<project::PersistenceStore>(project::PersistenceOptions{*root, projectId});
+    bool playback = false;
+#ifdef CPP_GAME_ENGINE_USE_VULKAN
+    playback = !args.has("--headless") && std::any_of(loaded->assets.begin(), loaded->assets.end(), [](const auto& asset) { return asset.second.kind == "audio"; });
+#endif
+    auto audioSystem = std::make_shared<audio::AudioSystem>(audio::DeviceOptions{playback});
+    const auto audioReady = audioSystem->initialize();
+    if (!audioReady) return fail("run", {{audioReady.error().code, project::Severity::Error, loaded->manifest, "audio", audioReady.error().message}}, 3);
+    project::RuntimeOptions options; options.audio = audioSystem; options.persistence = persistence; options.inputMapper = mapper;
+    options.glyphAdvance = [catalog](std::string_view font, char32_t codepoint) { return catalog->advance(font, codepoint); };
+    options.fontLineHeight = [catalog](std::string_view font) { return catalog->fonts.at(std::string(font)).lineHeight; };
+    project::Runtime runtime(*loaded, std::move(options));
     auto started = runtime.start();
     if (!started) return fail("run", started.error());
 #ifdef CPP_GAME_ENGINE_USE_VULKAN
     std::unique_ptr<Preview> preview;
-    if (!args.has("--headless")) preview = std::make_unique<Preview>(*loaded, args.get("--shaders", "build/debug-vk1/shaders"));
+    if (!args.has("--headless")) preview = std::make_unique<Preview>(*loaded, args.get("--shaders", "build/debug-vk1/shaders"), catalog, mapper);
 #endif
+    std::array<float, 1600> offlineAudio{}; // 800 stereo samples per authored 60 Hz tick at 48 kHz.
     for (unsigned tick = 0; tick < ticks; ++tick) {
         const auto next = std::chrono::steady_clock::now() + std::chrono::microseconds(16667);
 #ifdef CPP_GAME_ENGINE_USE_VULKAN
-        if (preview && !preview->sample(inputs[tick])) break;
+        if (preview && !preview->sample(inputs[tick], runtime)) break;
 #endif
         const auto advanced = runtime.tick(inputs[tick]);
         if (!advanced) return fail("run", advanced.error(), 3);
+        if (!playback) audioSystem->mix(offlineAudio);
+        if (!audioSystem->deviceError().empty()) return fail("run", {{"audio.device.failure", project::Severity::Error, loaded->manifest, "audio", audioSystem->deviceError()}}, 3);
 #ifdef CPP_GAME_ENGINE_USE_VULKAN
         if (preview) { preview->draw(runtime); std::this_thread::sleep_until(next); }
 #endif
     }
-    auto scene = loaded->scene;
+    auto scene = runtime.activeScene();
     std::sort(scene.entities.begin(), scene.entities.end(), [](const auto& a, const auto& b) { return a.id < b.id; });
     for (auto& entity : scene.entities) if (const auto p = runtime.position(entity.id)) entity.transform = project::Transform{*p};
     const auto completedTicks = runtime.tickCount();

@@ -1,6 +1,7 @@
 #include "lua_script_system.h"
 #include "lua_source_file.h"
 #include "../ecs/core/dynamic_component_storage.h"
+#include "../../third_party/picojson/picojson.h"
 
 #include <algorithm>
 #include <array>
@@ -216,6 +217,42 @@ struct LuaScriptSystem::Impl
         lua_remove(lua, -2);
     }
 
+    void populate_host_globals(bool includeOwner)
+    {
+        push_engine_api();
+        lua_setfield(state, -2, "engine");
+        for (const char* space : {"ui", "audio", "save", "settings", "state"})
+        {
+            lua_newtable(state);
+            const std::vector<const char*> names = std::string_view(space) == "ui" ?
+                std::vector<const char*>{"open", "close", "set_text", "scroll", "event"} : std::string_view(space) == "audio" ?
+                std::vector<const char*>{"play", "stop", "volume"} : std::string_view(space) == "save" ? std::vector<const char*>{"read", "write", "recover"} : std::vector<const char*>{"read", "write"};
+            for (const auto* field : names) { const auto service = std::string(space) + "." + field; add_service(field, service.c_str()); }
+            lua_setfield(state, -2, space);
+        }
+        if (includeOwner)
+        {
+            lua_newtable(state);
+            add_function("set_position", self_set_position);
+            add_function("get_position", self_get_position);
+            add_function("set_component", self_set_component);
+            add_function("get_component", self_get_component);
+            add_function("remove_component", self_remove_component);
+            add_service("id", "self.id"); add_service("move", "self.move"); add_service("overlaps", "self.overlaps");
+            add_service("safe_position", "self.safe_position");
+            lua_setfield(state, -2, "self");
+            lua_newtable(state);
+            for (const char* mode : {"pressed", "held", "released", "value", "pointer", "wheel"})
+            {
+                lua_pushlightuserdata(state, this);
+                lua_pushstring(state, mode);
+                lua_pushcclosure(state, input_action, 2);
+                lua_setfield(state, -2, mode);
+            }
+            lua_setfield(state, -2, "input");
+        }
+    }
+
     void push_root_safe_globals()
     {
         lua_newtable(state);
@@ -303,6 +340,7 @@ struct LuaScriptSystem::Impl
                 else lua_getglobal(lua, name);
                 lua_setfield(lua, -2, name);
             }
+            self->populate_host_globals(true);
             lua_pushvalue(lua, -1);
             lua_setfield(lua, -2, "_G");
             lua_setupvalue(lua, -2, 1);
@@ -728,8 +766,16 @@ struct LuaScriptSystem::Impl
         return invoke(lua, [&]
         {
             auto* self = from_upvalue(lua);
-            const char* action = luaL_checkstring(lua, 1);
             const char* mode = lua_tostring(lua, lua_upvalueindex(2));
+            if (std::string_view(mode) == "pointer" || std::string_view(mode) == "wheel")
+            {
+                const auto query = self->active_context ? (std::string_view(mode) == "pointer" ? self->active_context->pointer : self->active_context->wheel) : std::function<std::array<float, 2>()>{};
+                const auto point = query ? query() : std::array<float, 2>{};
+                lua_newtable(lua); lua_pushnumber(lua, point[0]); lua_setfield(lua, -2, "x"); lua_pushnumber(lua, point[1]); lua_setfield(lua, -2, "y"); return 1;
+            }
+            const char* action = luaL_checkstring(lua, 1);
+            if (std::string_view(mode) == "value")
+            { lua_pushnumber(lua, self->active_context && self->active_context->value ? self->active_context->value(action) : 0); return 1; }
             if (!self->active_context) { lua_pushboolean(lua, false); return 1; }
             const auto& query = std::string_view(mode) == "pressed" ? self->active_context->pressed
                 : std::string_view(mode) == "held" ? self->active_context->held : self->active_context->released;
@@ -745,6 +791,220 @@ struct LuaScriptSystem::Impl
         lua_setfield(state, -2, name);
     }
 
+    static std::string string_arg(lua_State* lua, int index)
+    {
+        size_t size = 0;
+        const char* value = luaL_checklstring(lua, index, &size);
+        if (size > 65536) throw std::runtime_error("string exceeds service limit");
+        return std::string(value, size);
+    }
+
+    static picojson::value json_value(lua_State* lua, int index, unsigned depth,
+        size_t& nodes, std::set<const void*>& ancestors)
+    {
+        if (depth > 24 || ++nodes > 65536) throw std::runtime_error("save object exceeds depth or node limit");
+        switch (lua_type(lua, index))
+        {
+        case LUA_TBOOLEAN: return picojson::value(bool(lua_toboolean(lua, index)));
+        case LUA_TNUMBER:
+        {
+            const double value = lua_tonumber(lua, index);
+            if (!std::isfinite(value)) throw std::runtime_error("save numbers must be finite");
+            return picojson::value(value);
+        }
+        case LUA_TSTRING: return picojson::value(string_arg(lua, index));
+        case LUA_TTABLE: break;
+        default: throw std::runtime_error("save values must be JSON-compatible objects, arrays, strings, booleans or numbers");
+        }
+        index = lua_absindex(lua, index);
+        const void* identity = lua_topointer(lua, index);
+        if (!ancestors.insert(identity).second) throw std::runtime_error("save objects cannot contain cycles");
+        struct Erase { std::set<const void*>& set; const void* key; ~Erase() { set.erase(key); } } erase{ancestors, identity};
+        picojson::object object;
+        std::map<size_t, picojson::value> array;
+        lua_pushnil(lua);
+        while (lua_next(lua, index))
+        {
+            auto value = json_value(lua, -1, depth + 1, nodes, ancestors);
+            if (lua_type(lua, -2) == LUA_TSTRING) object.emplace(string_arg(lua, -2), std::move(value));
+            else if (lua_isinteger(lua, -2) && lua_tointeger(lua, -2) > 0 && lua_tointeger(lua, -2) <= 65536)
+                array.emplace(static_cast<size_t>(lua_tointeger(lua, -2)), std::move(value));
+            else throw std::runtime_error("save object keys must be strings or positive array indices");
+            lua_pop(lua, 1);
+        }
+        if (!array.empty())
+        {
+            if (!object.empty() || array.rbegin()->first != array.size()) throw std::runtime_error("save arrays must have contiguous indices");
+            picojson::array result;
+            for (auto& [key, value] : array) { (void)key; result.push_back(std::move(value)); }
+            return picojson::value(result);
+        }
+        return picojson::value(object);
+    }
+
+    static void push_json(lua_State* lua, const picojson::value& value)
+    {
+        if (value.is<bool>()) lua_pushboolean(lua, value.get<bool>());
+        else if (value.is<double>()) lua_pushnumber(lua, value.get<double>());
+        else if (value.is<std::string>()) { const auto& text = value.get<std::string>(); lua_pushlstring(lua, text.data(), text.size()); }
+        else if (value.is<picojson::object>())
+        {
+            lua_newtable(lua);
+            for (const auto& [key, item] : value.get<picojson::object>()) { lua_pushlstring(lua, key.data(), key.size()); push_json(lua, item); lua_settable(lua, -3); }
+        }
+        else if (value.is<picojson::array>())
+        {
+            lua_newtable(lua); size_t index = 1;
+            for (const auto& item : value.get<picojson::array>()) { push_json(lua, item); lua_rawseti(lua, -2, index++); }
+        }
+        else lua_pushnil(lua);
+    }
+
+    static int desktop_service(lua_State* lua)
+    {
+        return invoke(lua, [&]() -> int
+        {
+            auto* self = from_upvalue(lua);
+            const std::string_view service = lua_tostring(lua, lua_upvalueindex(2));
+            if (self->declaration_validation) throw std::runtime_error("runtime services cannot be called during declaration validation");
+            auto& api = self->api;
+            const auto unavailable = [&] { throw std::runtime_error(std::string(service) + " is unavailable"); };
+            const auto result_error = [&](const std::string& error) { lua_pushnil(lua); lua_pushlstring(lua, error.data(), error.size()); return 2; };
+            const auto result_void = [&](const auto& result) { if (!result) return result_error(result.error()); lua_pushboolean(lua, true); return 1; };
+            const auto owner = [&]() -> std::int64_t
+            { if (!self->active_context || !self->active_context->owner) throw std::runtime_error("self has no owner"); return *self->active_context->owner; };
+            if (service == "find_entity")
+            {
+                if (!api.find_entity) unavailable();
+                const auto result = api.find_entity(string_arg(lua, 1));
+                if (result) lua_pushinteger(lua, *result); else lua_pushnil(lua); return 1;
+            }
+            if (service == "self.id") { lua_pushinteger(lua, owner()); return 1; }
+            if (service == "lock_controls") { if (!api.lock_controls) unavailable(); lua_pushboolean(lua, api.lock_controls(string_arg(lua, 1), bool(lua_toboolean(lua, 2)))); return 1; }
+            if (service == "set_camera") { if (!api.set_camera) unavailable(); lua_pushboolean(lua, api.set_camera(static_cast<float>(luaL_checknumber(lua, 1)), static_cast<float>(luaL_checknumber(lua, 2)))); return 1; }
+            if (service == "reset_camera") { if (!api.reset_camera) unavailable(); api.reset_camera(); lua_pushboolean(lua, true); return 1; }
+            if (service == "safe_position" || service == "self.safe_position")
+            {
+                if (!api.safe_position) unavailable(); const bool own = service == "self.safe_position";
+                const auto result = api.safe_position(own ? owner() : entity_arg(lua, 1), static_cast<float>(luaL_checknumber(lua, own ? 1 : 2)), static_cast<float>(luaL_checknumber(lua, own ? 2 : 3)));
+                if (!result) return result_error(result.error()); if (!*result) { lua_pushnil(lua); return 1; }
+                lua_newtable(lua); lua_pushnumber(lua, (**result)[0]); lua_setfield(lua, -2, "x"); lua_pushnumber(lua, (**result)[1]); lua_setfield(lua, -2, "y"); return 1;
+            }
+            if (service == "triggers")
+            {
+                if (!api.triggers) unavailable(); lua_newtable(lua); size_t index = 1;
+                for (const auto& event : api.triggers())
+                {
+                    lua_newtable(lua); lua_pushlstring(lua, event.first.data(), event.first.size()); lua_setfield(lua, -2, "first");
+                    lua_pushlstring(lua, event.second.data(), event.second.size()); lua_setfield(lua, -2, "second");
+                    lua_pushlstring(lua, event.phase.data(), event.phase.size()); lua_setfield(lua, -2, "phase"); lua_rawseti(lua, -2, index++);
+                }
+                return 1;
+            }
+            if (service == "move" || service == "self.move")
+            {
+                if (!api.move) unavailable();
+                if (!self->allows_write("Position3D")) throw std::runtime_error("system wrote an undeclared Position3D component");
+                const bool own = service == "self.move";
+                const auto result = api.move(own ? owner() : entity_arg(lua, 1),
+                    static_cast<float>(luaL_checknumber(lua, own ? 1 : 2)), static_cast<float>(luaL_checknumber(lua, own ? 2 : 3)));
+                if (!result) return result_error(result.error());
+                lua_createtable(lua, 0, 3);
+                lua_pushnumber(lua, result->position[0]); lua_setfield(lua, -2, "x");
+                lua_pushnumber(lua, result->position[1]); lua_setfield(lua, -2, "y");
+                lua_newtable(lua); size_t index = 1;
+                for (const auto& contact : result->contacts) { lua_pushlstring(lua, contact.data(), contact.size()); lua_rawseti(lua, -2, index++); }
+                lua_setfield(lua, -2, "contacts"); return 1;
+            }
+            if (service == "overlaps" || service == "self.overlaps")
+            {
+                if (!api.overlaps) unavailable();
+                const auto result = api.overlaps(service == "self.overlaps" ? owner() : entity_arg(lua, 1));
+                if (!result) return result_error(result.error());
+                lua_newtable(lua); size_t index = 1;
+                for (const auto& id : *result) { lua_pushlstring(lua, id.data(), id.size()); lua_rawseti(lua, -2, index++); } return 1;
+            }
+            if (service == "change_scene")
+            { if (!api.change_scene) unavailable(); return result_void(api.change_scene(string_arg(lua, 1), lua_gettop(lua) >= 2 ? string_arg(lua, 2) : "", lua_gettop(lua) >= 3 ? string_arg(lua, 3) : "")); }
+            if (service == "sprite_frame" || service == "sprite_visible")
+            {
+                const auto entity = entity_arg(lua, 1);
+                bool result = false;
+                if (service == "sprite_frame")
+                { if (!api.set_sprite_frame) unavailable(); const auto frame = luaL_checkinteger(lua, 2); if (frame < 0 || frame > UINT32_MAX) throw std::runtime_error("invalid sprite frame"); result = api.set_sprite_frame(entity, static_cast<uint32_t>(frame)); }
+                else { if (!api.set_sprite_visible) unavailable(); result = api.set_sprite_visible(entity, bool(lua_toboolean(lua, 2))); }
+                lua_pushboolean(lua, result); return 1;
+            }
+            if (service == "ui.open")
+            {
+                if (!api.ui_open) unavailable(); luaL_checktype(lua, 1, LUA_TTABLE);
+                LuaUiPanel panel;
+                const auto field = [&](const char* name) { lua_getfield(lua, 1, name); auto value = string_arg(lua, -1); lua_pop(lua, 1); return value; };
+                panel.id = field("id"); panel.font = field("font"); panel.text = field("text");
+                const auto optional_number = [&](const char* name, float& value)
+                { lua_getfield(lua, 1, name); if (!lua_isnil(lua, -1)) value = static_cast<float>(luaL_checknumber(lua, -1)); lua_pop(lua, 1); };
+                optional_number("x", panel.rect[0]); optional_number("y", panel.rect[1]); optional_number("width", panel.rect[2]); optional_number("height", panel.rect[3]); optional_number("scale", panel.scale);
+                lua_getfield(lua, 1, "modal"); if (!lua_isnil(lua, -1)) { luaL_checktype(lua, -1, LUA_TBOOLEAN); panel.modal = bool(lua_toboolean(lua, -1)); } lua_pop(lua, 1);
+                lua_getfield(lua, 1, "choices");
+                if (!lua_isnil(lua, -1)) { luaL_checktype(lua, -1, LUA_TTABLE); if (lua_rawlen(lua, -1) > 64) throw std::runtime_error("too many UI choices"); for (size_t index = 1; index <= lua_rawlen(lua, -1); ++index) { lua_rawgeti(lua, -1, index); panel.choices.push_back(string_arg(lua, -1)); lua_pop(lua, 1); } } lua_pop(lua, 1);
+                return result_void(api.ui_open(panel));
+            }
+            if (service == "ui.close" || service == "ui.set_text" || service == "ui.scroll")
+            {
+                const auto id = string_arg(lua, 1); bool result = false;
+                if (service == "ui.close") { if (!api.ui_close) unavailable(); result = api.ui_close(id); }
+                else if (service == "ui.set_text") { if (!api.ui_set_text) unavailable(); result = api.ui_set_text(id, string_arg(lua, 2)); }
+                else { if (!api.ui_scroll) unavailable(); result = api.ui_scroll(id, static_cast<float>(luaL_checknumber(lua, 2))); }
+                lua_pushboolean(lua, result); return 1;
+            }
+            if (service == "ui.event")
+            {
+                if (!api.ui_event) unavailable(); const auto event = api.ui_event();
+                if (!event) { lua_pushnil(lua); return 1; }
+                lua_newtable(lua); lua_pushlstring(lua, event->panel.data(), event->panel.size()); lua_setfield(lua, -2, "panel");
+                lua_pushlstring(lua, event->type.data(), event->type.size()); lua_setfield(lua, -2, "type"); lua_pushinteger(lua, event->selection + 1); lua_setfield(lua, -2, "selection"); return 1;
+            }
+            if (service == "audio.play")
+            {
+                if (!api.audio_play) unavailable(); const auto asset = string_arg(lua, 1);
+                const auto result = api.audio_play(asset, lua_gettop(lua) >= 2 && lua_toboolean(lua, 2), lua_gettop(lua) >= 3 ? string_arg(lua, 3) : "effects", lua_gettop(lua) >= 4 ? static_cast<float>(luaL_checknumber(lua, 4)) : 1);
+                if (!result) return result_error(result.error()); lua_pushinteger(lua, *result); return 1;
+            }
+            if (service == "audio.stop") { if (!api.audio_stop) unavailable(); lua_pushboolean(lua, api.audio_stop(static_cast<uint64_t>(entity_arg(lua, 1)))); return 1; }
+            if (service == "audio.volume") { if (!api.audio_volume) unavailable(); return result_void(api.audio_volume(string_arg(lua, 1), static_cast<float>(luaL_checknumber(lua, 2)))); }
+            if (service == "save.recover") { if (!api.save_recover) unavailable(); return result_void(api.save_recover(string_arg(lua, 1))); }
+            if (service == "save.write" || service == "settings.write" || service == "state.write")
+            {
+                size_t nodes = 0; std::set<const void*> ancestors;
+                const auto value = json_value(lua, service == "save.write" ? 2 : 1, 0, nodes, ancestors);
+                if (!value.is<picojson::object>()) throw std::runtime_error("save root must be an object");
+                const auto json = value.serialize(); if (json.size() > 1024 * 1024) throw std::runtime_error("save exceeds byte limit");
+                if (service == "save.write") { if (!api.save_write) unavailable(); return result_void(api.save_write(string_arg(lua, 1), json)); }
+                if (service == "state.write") { if (!api.state_write) unavailable(); return result_void(api.state_write(json)); }
+                if (!api.settings_write) unavailable(); return result_void(api.settings_write(json));
+            }
+            if (service == "save.read" || service == "settings.read" || service == "state.read")
+            {
+                std::expected<std::string, std::string> result;
+                if (service == "save.read") { if (!api.save_read) unavailable(); result = api.save_read(string_arg(lua, 1), lua_gettop(lua) >= 2 && lua_toboolean(lua, 2)); }
+                else if (service == "state.read") { if (!api.state_read) unavailable(); result = api.state_read(); }
+                else { if (!api.settings_read) unavailable(); result = api.settings_read(); }
+                if (!result) { lua_pushnil(lua); lua_pushlstring(lua, result.error().data(), result.error().size()); return 2; }
+                if (result->size() > 1024 * 1024) throw std::runtime_error("save exceeds byte limit");
+                picojson::value value; const auto error = picojson::parse(value, *result);
+                if (!error.empty() || !value.is<picojson::object>()) throw std::runtime_error("host returned invalid save object");
+                push_json(lua, value); return 1;
+            }
+            throw std::runtime_error("unknown runtime service");
+        });
+    }
+
+    void add_service(const char* field, const char* service)
+    {
+        lua_pushlightuserdata(state, this); lua_pushstring(state, service);
+        lua_pushcclosure(state, desktop_service, 2); lua_setfield(state, -2, field);
+    }
+
     void push_engine_api()
     {
         lua_createtable(state, 0, 12);
@@ -758,6 +1018,7 @@ struct LuaScriptSystem::Impl
         add_function("set_component", set_component);
         add_function("get_component", get_component);
         add_function("remove_component", remove_component);
+        for (const char* name : {"find_entity", "move", "overlaps", "change_scene", "sprite_frame", "sprite_visible", "lock_controls", "set_camera", "reset_camera", "safe_position", "triggers"}) add_service(name, name);
     }
 
     std::string pop_error()
@@ -998,27 +1259,7 @@ struct LuaScriptSystem::Impl
 
         // Give each script a private global table while retaining standard Lua libraries.
         lua_newtable(state);
-        push_engine_api();
-        lua_setfield(state, -2, "engine");
-        if (context.owner)
-        {
-            lua_newtable(state);
-            add_function("set_position", self_set_position);
-            add_function("get_position", self_get_position);
-            add_function("set_component", self_set_component);
-            add_function("get_component", self_get_component);
-            add_function("remove_component", self_remove_component);
-            lua_setfield(state, -2, "self");
-            lua_newtable(state);
-            for (const char* mode : {"pressed", "held", "released"})
-            {
-                lua_pushlightuserdata(state, this);
-                lua_pushstring(state, mode);
-                lua_pushcclosure(state, input_action, 2);
-                lua_setfield(state, -2, mode);
-            }
-            lua_setfield(state, -2, "input");
-        }
+        populate_host_globals(bool(context.owner));
         lua_newtable(state);
         if (declaration_validation || !module_root.empty()) push_root_safe_globals();
         else lua_pushglobaltable(state);

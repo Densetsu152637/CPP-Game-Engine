@@ -70,3 +70,4 @@ void test_deferred_destroy_and_component_removal_are_invisible_until_wall_finish
 void test_scheduler_logging();
 void test_entt_entity_generations_survive_reuse_and_clear();
 void test_entt_storage_growth_and_view_membership();
+void test_desktop2d_rendering();

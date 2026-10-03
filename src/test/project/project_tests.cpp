@@ -15,6 +15,10 @@
 
 #include "project/project.h"
 #include "test/test_assertions.h"
+void runGameplay2dTests();
+void runInputUiTests();
+void runPersistenceTests();
+void runAudioTests();
 
 namespace
 {
@@ -268,7 +272,7 @@ namespace
     void componentRegistryDrivesStableEditorMetadataAndSaveFailuresPreserveBytes()
     {
         const auto descriptors = project::componentDescriptors();
-        test::require(descriptors.size() == 3, "registry should expose the three authored component types");
+        test::require(descriptors.size() == 6, "registry should expose legacy and desktop 2D component types");
         test::require(descriptors[0].serializedName == "Transform" && descriptors[0].schemaVersion == 1 &&
             descriptors[0].properties.size() == 1 && descriptors[0].properties[0].name == "position" &&
             descriptors[0].properties[0].defaultValue == "[0,0,0]", "Transform descriptor should expose stable serialized metadata");
@@ -302,6 +306,39 @@ namespace
         test::require(session.save(*changed).has_value(), "save should succeed after injected failures are removed");
         test::require(readScene() != original, "successful retry should commit the edited scene");
     }
+    void desktopComponentsRoundTripAndRejectInvalidReferences()
+    {
+        TemporaryProject fixture;
+        fixture.write("scenes/main.json", R"({"schema":1,"scene_id":"scene:main","entities":[{"id":"object:player","name":"Player","components":{"Transform":{"position":[1,2,0]},"SpriteRenderer":{"texture":"asset:player-texture","size":[2,3],"pivot":[0,1],"tint":[0.5,1,1,0.25],"source":[0,0,1,1],"frames":[[0,0,1,1],[1,0,1,1]],"framesPerSecond":8,"loop":false,"layer":-2,"visible":true},"Collider2D":{"size":[1,2],"offset":[0,0.5],"trigger":true,"layer":2,"mask":3}}},{"id":"object:camera","name":"Camera","components":{"Camera2D":{"logicalSize":[320,180],"pixelsPerUnit":16,"center":[0,0],"follow":"object:player","pixelSnap":true}}}]})");
+        auto loaded = project::loadProject(fixture.root / "project.json");
+        test::require(loaded.has_value(), "desktop components should validate in an existing schema 1 project");
+        const auto original = loaded->scene;
+        test::require(original.entities[0].spriteRenderer->tint[3] == 0.25f &&
+            original.entities[0].collider2D->mask == 3 && original.entities[1].camera2D->follow == "object:player",
+            "desktop component fields must retain their authored values");
+        fixture.write("scenes/main.json", project::sceneJson(original));
+        const auto reloaded = project::loadProject(fixture.root / "project.json");
+        test::require(reloaded && reloaded->scene == original, "registered desktop components must round trip without loss");
+        auto serialized = project::sceneJson(original);
+        auto invalid = serialized;
+        invalid.replace(invalid.find("\"texture\":\"asset:player-texture\""),
+            std::string("\"texture\":\"asset:player-texture\"").size(), "\"texture\":\"asset:player-script\"");
+        fixture.write("scenes/main.json", invalid);
+        auto wrongKind = project::loadProject(fixture.root / "project.json");
+        test::require(!wrongKind, "sprite texture references must enforce declared asset kind");
+        requireCode(wrongKind.error(), "project.asset.kind.mismatch");
+        invalid = serialized;
+        invalid.replace(invalid.find("\"follow\":\"object:player\""),
+            std::string("\"follow\":\"object:player\"").size(), "\"follow\":\"object:missing\"");
+        fixture.write("scenes/main.json", invalid);
+        auto missingTarget = project::loadProject(fixture.root / "project.json");
+        test::require(!missingTarget, "camera follow target must be a positioned scene entity");
+        requireCode(missingTarget.error(), "scene.camera.follow.invalid");
+        invalid = serialized;
+        invalid.replace(invalid.find("\"size\":[2,3]"), std::string("\"size\":[2,3]").size(), "\"size\":[0,3]");
+        fixture.write("scenes/main.json", invalid);
+        test::require(!project::loadProject(fixture.root / "project.json"), "zero sprite size must be rejected");
+    }
 }
 
 int main()
@@ -313,6 +350,8 @@ int main()
         stableCatalogAndSessionConflictsAreEnforced();
         sharedResolversCanonicalizeAliasedRootsAndRejectEscapingLinks();
         componentRegistryDrivesStableEditorMetadataAndSaveFailuresPreserveBytes();
+        desktopComponentsRoundTripAndRejectInvalidReferences();
+        runGameplay2dTests(); runInputUiTests(); runPersistenceTests(); runAudioTests();
         std::cout << "[PASS] project format and validation tests\n";
         return 0;
     }

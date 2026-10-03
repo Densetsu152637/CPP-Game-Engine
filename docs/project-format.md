@@ -52,3 +52,44 @@ explicitly. The shared edit API supports typed position, script-reference, and
 mesh-renderer changes with expected revisions. Injected serialization and replace
 failures are tested to preserve the original scene bytes.
 
+## Desktop 2D components
+
+Schema 1 additionally accepts version 1 `SpriteRenderer`, `Camera2D`, and
+`Collider2D`. Legacy documents retain their existing behavior; an older engine
+rejects these new names explicitly. Unknown fields and unsupported component
+versions remain errors. Saving preserves these components through the shared
+registry even when the native editor has no dedicated control for a property.
+
+`SpriteRenderer` requires a texture asset ID. Optional `size` is a positive
+world-unit pair (default `[1,1]`), `pivot` is normalized from left/bottom
+(`[0.5,0.5]`), and `tint` is RGBA in `[0,1]` (`[1,1,1,1]`). `source` and each
+`frames` item are `[x,y,width,height]` atlas rectangles measured in texture pixels
+from its top-left. An omitted source covers the texture. `framesPerSecond`
+defaults to zero, `loop` to true, `layer` to zero, and `visible` to true. Atlas
+frames are limited to 4096 and positive dimensions within the 8192 pixel limit.
+Sprites require `Transform`.
+
+`Camera2D` supplies `logicalSize` (`[320,180]`), `pixelsPerUnit` (`16`), world-unit
+`center` (`[0,0]`), optional `follow` persistent entity ID, and `pixelSnap`
+(`true`). A scene permits one camera. A follow target must have a Transform in
+the same scene. Integer framebuffer scaling preserves authored pixels, with
+letterboxing; a framebuffer smaller than the logical size uses uniform
+fractional fit. Camera snapping does not change simulation positions.
+
+`Collider2D` requires positive world-unit `size`. Its optional `offset` is
+`[0,0]`, `trigger` is false, `layer` is the nonzero unsigned bitmask `1`, and
+`mask` is `4294967295`. Bodies are positioned by their Transform and the offset.
+Layer/mask values filter collision and trigger pairs.
+
+The asset catalog additionally accepts `font`, `audio`, and `scene`. References
+remain confined to the project root and retain the existing stable-ID rules.
+Font assets are bitmap-atlas JSON and audio assets are WAV. Scene assets point
+to authored scene JSON for runtime room changes.
+
+The optional manifest `inputBindings` object maps action names to arrays of
+physical tokens, for example `{"move_up":["Key:W","Gamepad:LeftYNegative"]}`.
+Tokens come from the shared desktop binding registry; mouse buttons, wheel,
+keyboard keys, gamepad buttons and signed axes are supported. Each action has
+1–16 unique tokens, with at most 128 actions. Legacy `inputActions` remains
+supported. Explicit inputBindings for an action override its legacy binding.
+

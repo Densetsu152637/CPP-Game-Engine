@@ -10,6 +10,7 @@
 #include <iostream>
 #include <thread>
 #include <vector>
+void runDesktopRuntimeTests();
 
 namespace
 {
@@ -431,6 +432,7 @@ int main()
         invalidDeclarationsFailBeforeWorldCreation();
         onCreateFailureCleansScriptAndSpawnedEntities();
         mutationIsOwnerThreadBound();
+        runDesktopRuntimeTests();
         std::cout << "[PASS] authored project runtime tests\n";
         return 0;
     }

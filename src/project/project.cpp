@@ -1,4 +1,5 @@
 #include "project.h"
+#include "../interaction/action_input.h"
 
 #include <algorithm>
 #include <cwctype>
@@ -291,18 +292,200 @@ namespace project
             {"mesh", PropertyType::AssetId, "", true},
             {"texture", PropertyType::OptionalAssetId, "", false}}};
 
-        const std::array<ComponentDescriptor, 3>& descriptors()
+        const std::array<PropertyDescriptor, 10> spriteProperties{{
+            {"texture", PropertyType::AssetId, "", true},
+            {"size", PropertyType::Float2, "[1,1]", false},
+            {"pivot", PropertyType::Float2, "[0.5,0.5]", false},
+            {"tint", PropertyType::Float4, "[1,1,1,1]", false},
+            {"source", PropertyType::Rectangle, "", false},
+            {"frames", PropertyType::RectangleArray, "[]", false},
+            {"framesPerSecond", PropertyType::Float, "0", false},
+            {"loop", PropertyType::Boolean, "true", false},
+            {"layer", PropertyType::Integer, "0", false},
+            {"visible", PropertyType::Boolean, "true", false}}};
+        const std::array<PropertyDescriptor, 5> cameraProperties{{
+            {"logicalSize", PropertyType::UInt2, "[320,180]", false},
+            {"pixelsPerUnit", PropertyType::Float, "16", false},
+            {"center", PropertyType::Float2, "[0,0]", false},
+            {"follow", PropertyType::OptionalEntityId, "", false},
+            {"pixelSnap", PropertyType::Boolean, "true", false}}};
+        const std::array<PropertyDescriptor, 5> colliderProperties{{
+            {"size", PropertyType::Float2, "[1,1]", true},
+            {"offset", PropertyType::Float2, "[0,0]", false},
+            {"trigger", PropertyType::Boolean, "false", false},
+            {"layer", PropertyType::Integer, "1", false},
+            {"mask", PropertyType::Integer, "4294967295", false}}};
+
+        const std::array<ComponentDescriptor, 6>& descriptors()
         {
-            static const std::array<ComponentDescriptor, 3> value{{
+            static const std::array<ComponentDescriptor, 6> value{{
                 {"Transform", 1, transformProperties},
                 {"Script", 1, scriptProperties},
-                {"MeshRenderer", 1, meshRendererProperties}}};
+                {"MeshRenderer", 1, meshRendererProperties},
+                {"SpriteRenderer", 1, spriteProperties},
+                {"Camera2D", 1, cameraProperties},
+                {"Collider2D", 1, colliderProperties}}};
             return value;
         }
 
         bool hasTransform(const SceneEntity& entity) { return entity.transform.has_value(); }
         bool hasScript(const SceneEntity& entity) { return entity.script.has_value(); }
         bool hasMeshRenderer(const SceneEntity& entity) { return entity.meshRenderer.has_value(); }
+        bool hasSpriteRenderer(const SceneEntity& entity) { return entity.spriteRenderer.has_value(); }
+        bool hasCamera2D(const SceneEntity& entity) { return entity.camera2D.has_value(); }
+        bool hasCollider2D(const SceneEntity& entity) { return entity.collider2D.has_value(); }
+
+        bool numberValue(const Value& value, const std::filesystem::path& file,
+            const std::string& path, double minimum, double maximum, double& result, Diagnostics& diagnostics,
+            bool integral = false)
+        {
+            if (!value.is<double>() || !std::isfinite(value.get<double>()) ||
+                value.get<double>() < minimum || value.get<double>() > maximum ||
+                (integral && std::floor(value.get<double>()) != value.get<double>()))
+            {
+                add(diagnostics, "project.field.range", file, path, "Number is outside the supported range or type");
+                return false;
+            }
+            result = value.get<double>();
+            return true;
+        }
+
+        template <typename T, size_t N>
+        bool arrayValue(const Value& value, const std::filesystem::path& file, const std::string& path,
+            std::array<T, N>& result, double minimum, double maximum, Diagnostics& diagnostics)
+        {
+            if (!value.is<picojson::array>() || value.get<picojson::array>().size() != N)
+            { add(diagnostics, "project.field.type", file, path, "Expected an array with the declared number of values"); return false; }
+            bool valid = true;
+            for (size_t index = 0; index < N; ++index)
+            {
+                double parsed = 0;
+                if (numberValue(value.get<picojson::array>()[index], file,
+                    path + "[" + std::to_string(index) + "]", minimum, maximum, parsed,
+                    diagnostics, std::is_integral_v<T>)) result[index] = static_cast<T>(parsed);
+                else valid = false;
+            }
+            return valid;
+        }
+
+        bool boolField(const Object& fields, const char* name, const std::filesystem::path& file,
+            const std::string& path, bool& result, Diagnostics& diagnostics)
+        {
+            const auto* value = member(fields, name);
+            if (!value) return true;
+            if (!value->is<bool>())
+            { add(diagnostics, "project.field.type", file, path + "." + name, "Expected a boolean"); return false; }
+            result = value->get<bool>();
+            return true;
+        }
+
+        bool rectangleValue(const Value& value, const std::filesystem::path& file, const std::string& path,
+            PixelRectangle& rectangle, Diagnostics& diagnostics)
+        {
+            if (!arrayValue(value, file, path, rectangle, 0, 8192, diagnostics)) return false;
+            if (!rectangle[2] || !rectangle[3] || rectangle[0] + rectangle[2] > 8192 || rectangle[1] + rectangle[3] > 8192)
+            { add(diagnostics, "project.sprite.rectangle", file, path, "Atlas rectangle must have positive dimensions within the texture limit"); return false; }
+            return true;
+        }
+
+        bool parseSpriteComponent(const Value& value, const std::filesystem::path& file,
+            const std::string& path, unsigned version, SceneEntity& entity, Diagnostics& diagnostics)
+        {
+            const auto* fields = object(value);
+            if (!fields) { add(diagnostics, "project.component.type", file, path, "SpriteRenderer must be an object"); return false; }
+            checkFields(*fields, {"version", "texture", "size", "pivot", "tint", "source", "frames", "framesPerSecond", "loop", "layer", "visible"}, file, path, diagnostics);
+            componentVersion(*fields, file, path, version, diagnostics);
+            SpriteRenderer parsed;
+            bool valid = stringField(*fields, "texture", file, path, parsed.texture, diagnostics);
+            if (const auto* item = member(*fields, "size")) valid &= arrayValue(*item, file, path + ".size", parsed.size, 0.000001, 1000000, diagnostics);
+            if (const auto* item = member(*fields, "pivot")) valid &= arrayValue(*item, file, path + ".pivot", parsed.pivot, 0, 1, diagnostics);
+            if (const auto* item = member(*fields, "tint")) valid &= arrayValue(*item, file, path + ".tint", parsed.tint, 0, 1, diagnostics);
+            if (const auto* item = member(*fields, "source"))
+            {
+                PixelRectangle rectangle{};
+                valid &= rectangleValue(*item, file, path + ".source", rectangle, diagnostics);
+                parsed.source = rectangle;
+            }
+            if (const auto* item = member(*fields, "frames"))
+            {
+                if (!item->is<picojson::array>() || item->get<picojson::array>().size() > 4096)
+                { add(diagnostics, "project.sprite.frames", file, path + ".frames", "Expected at most 4096 atlas rectangles"); valid = false; }
+                else for (size_t index = 0; index < item->get<picojson::array>().size(); ++index)
+                {
+                    PixelRectangle frame{};
+                    valid &= rectangleValue(item->get<picojson::array>()[index], file,
+                        path + ".frames[" + std::to_string(index) + "]", frame, diagnostics);
+                    parsed.frames.push_back(frame);
+                }
+            }
+            double number = 0;
+            if (const auto* item = member(*fields, "framesPerSecond"))
+            {
+                valid &= numberValue(*item, file, path + ".framesPerSecond", 0, 1000, number, diagnostics);
+                parsed.framesPerSecond = static_cast<float>(number);
+            }
+            if (const auto* item = member(*fields, "layer"))
+            {
+                valid &= numberValue(*item, file, path + ".layer", -1000000, 1000000, number, diagnostics, true);
+                parsed.layer = static_cast<int>(number);
+            }
+            valid &= boolField(*fields, "loop", file, path, parsed.loop, diagnostics);
+            valid &= boolField(*fields, "visible", file, path, parsed.visible, diagnostics);
+            if (valid) entity.spriteRenderer = std::move(parsed);
+            return valid;
+        }
+
+        bool parseCameraComponent(const Value& value, const std::filesystem::path& file,
+            const std::string& path, unsigned version, SceneEntity& entity, Diagnostics& diagnostics)
+        {
+            const auto* fields = object(value);
+            if (!fields) { add(diagnostics, "project.component.type", file, path, "Camera2D must be an object"); return false; }
+            checkFields(*fields, {"version", "logicalSize", "pixelsPerUnit", "center", "follow", "pixelSnap"}, file, path, diagnostics);
+            componentVersion(*fields, file, path, version, diagnostics);
+            Camera2D parsed;
+            bool valid = true;
+            if (const auto* item = member(*fields, "logicalSize")) valid &= arrayValue(*item, file, path + ".logicalSize", parsed.logicalSize, 1, 8192, diagnostics);
+            if (const auto* item = member(*fields, "center")) valid &= arrayValue(*item, file, path + ".center", parsed.center, -1000000, 1000000, diagnostics);
+            if (const auto* item = member(*fields, "pixelsPerUnit"))
+            {
+                double number = 0;
+                valid &= numberValue(*item, file, path + ".pixelsPerUnit", 0.000001, 1000000, number, diagnostics);
+                parsed.pixelsPerUnit = static_cast<float>(number);
+            }
+            if (member(*fields, "follow"))
+            {
+                std::string follow;
+                valid &= stringField(*fields, "follow", file, path, follow, diagnostics);
+                parsed.follow = std::move(follow);
+            }
+            valid &= boolField(*fields, "pixelSnap", file, path, parsed.pixelSnap, diagnostics);
+            if (valid) entity.camera2D = std::move(parsed);
+            return valid;
+        }
+
+        bool parseColliderComponent(const Value& value, const std::filesystem::path& file,
+            const std::string& path, unsigned version, SceneEntity& entity, Diagnostics& diagnostics)
+        {
+            const auto* fields = object(value);
+            if (!fields) { add(diagnostics, "project.component.type", file, path, "Collider2D must be an object"); return false; }
+            checkFields(*fields, {"version", "size", "offset", "trigger", "layer", "mask"}, file, path, diagnostics);
+            componentVersion(*fields, file, path, version, diagnostics);
+            Collider2D parsed;
+            bool valid = true;
+            const auto* size = member(*fields, "size");
+            if (!size) { add(diagnostics, "project.field.type", file, path + ".size", "Collider2D requires size"); valid = false; }
+            else valid &= arrayValue(*size, file, path + ".size", parsed.size, 0.000001, 1000000, diagnostics);
+            if (const auto* item = member(*fields, "offset")) valid &= arrayValue(*item, file, path + ".offset", parsed.offset, -1000000, 1000000, diagnostics);
+            for (const auto* name : {"layer", "mask"}) if (const auto* item = member(*fields, name))
+            {
+                double number = 0;
+                valid &= numberValue(*item, file, path + "." + name, std::string_view(name) == "layer" ? 1 : 0, UINT32_MAX, number, diagnostics, true);
+                (std::string_view(name) == "layer" ? parsed.layer : parsed.mask) = static_cast<std::uint32_t>(number);
+            }
+            valid &= boolField(*fields, "trigger", file, path, parsed.trigger, diagnostics);
+            if (valid) entity.collider2D = parsed;
+            return valid;
+        }
 
         bool parseTransformComponent(const Value& value, const std::filesystem::path& file,
             const std::string& path, const unsigned version, SceneEntity& entity, Diagnostics& diagnostics)
@@ -363,12 +546,60 @@ namespace project
             out << '}';
         }
 
-        const std::array<RegisteredComponent, 3>& componentRegistry()
+        template <typename T, size_t N>
+        void writeArray(std::ostream& out, const std::array<T, N>& values)
         {
-            static const std::array<RegisteredComponent, 3> value{{
+            out << '[';
+            for (size_t index = 0; index < N; ++index)
+            { if (index) out << ','; out << std::setprecision(std::numeric_limits<float>::max_digits10) << values[index]; }
+            out << ']';
+        }
+
+        void writeSprite(std::ostream& out, const SceneEntity& entity, unsigned version)
+        {
+            const auto& value = *entity.spriteRenderer;
+            out << "\"SpriteRenderer\":{\"version\":" << version << ",\"texture\":" << quote(value.texture) << ",\"size\":";
+            writeArray(out, value.size);
+            out << ",\"pivot\":"; writeArray(out, value.pivot);
+            out << ",\"tint\":"; writeArray(out, value.tint);
+            if (value.source) { out << ",\"source\":"; writeArray(out, *value.source); }
+            out << ",\"frames\":[";
+            for (size_t index = 0; index < value.frames.size(); ++index)
+            { if (index) out << ','; writeArray(out, value.frames[index]); }
+            out << "],\"framesPerSecond\":" << value.framesPerSecond << ",\"loop\":" << (value.loop ? "true" : "false")
+                << ",\"layer\":" << value.layer << ",\"visible\":" << (value.visible ? "true" : "false") << '}';
+        }
+
+        void writeCamera(std::ostream& out, const SceneEntity& entity, unsigned version)
+        {
+            const auto& value = *entity.camera2D;
+            out << "\"Camera2D\":{\"version\":" << version << ",\"logicalSize\":";
+            writeArray(out, value.logicalSize);
+            out << ",\"pixelsPerUnit\":" << value.pixelsPerUnit << ",\"center\":";
+            writeArray(out, value.center);
+            if (value.follow) out << ",\"follow\":" << quote(*value.follow);
+            out << ",\"pixelSnap\":" << (value.pixelSnap ? "true" : "false") << '}';
+        }
+
+        void writeCollider(std::ostream& out, const SceneEntity& entity, unsigned version)
+        {
+            const auto& value = *entity.collider2D;
+            out << "\"Collider2D\":{\"version\":" << version << ",\"size\":";
+            writeArray(out, value.size);
+            out << ",\"offset\":"; writeArray(out, value.offset);
+            out << ",\"trigger\":" << (value.trigger ? "true" : "false") << ",\"layer\":" << value.layer
+                << ",\"mask\":" << value.mask << '}';
+        }
+
+        const std::array<RegisteredComponent, 6>& componentRegistry()
+        {
+            static const std::array<RegisteredComponent, 6> value{{
                 {&descriptors()[0], parseTransformComponent, writeTransform, hasTransform},
                 {&descriptors()[1], parseScriptComponent, writeScript, hasScript},
-                {&descriptors()[2], parseMeshRendererComponent, writeMeshRenderer, hasMeshRenderer}}};
+                {&descriptors()[2], parseMeshRendererComponent, writeMeshRenderer, hasMeshRenderer},
+                {&descriptors()[3], parseSpriteComponent, writeSprite, hasSpriteRenderer},
+                {&descriptors()[4], parseCameraComponent, writeCamera, hasCamera2D},
+                {&descriptors()[5], parseColliderComponent, writeCollider, hasCollider2D}}};
             return value;
         }
 
@@ -570,6 +801,26 @@ namespace project
                 scene.entities.push_back(std::move(entity));
             }
         }
+        size_t cameras = 0;
+        for (size_t index = 0; index < scene.entities.size(); ++index)
+        {
+            const auto& entity = scene.entities[index];
+            const auto path = "entities[" + std::to_string(index) + "].components";
+            if ((entity.spriteRenderer || entity.collider2D) && !entity.transform)
+                add(diagnostics, "scene.entity.transform.missing", displayFile, path, "SpriteRenderer and Collider2D require a Transform");
+            if (entity.camera2D)
+            {
+                ++cameras;
+                if (entity.camera2D->follow)
+                {
+                    const auto target = std::find_if(scene.entities.begin(), scene.entities.end(), [&](const auto& item)
+                    { return item.id == *entity.camera2D->follow; });
+                    if (target == scene.entities.end() || !target->transform)
+                        add(diagnostics, "scene.camera.follow.invalid", displayFile, path + ".Camera2D.follow", "Camera follow must reference a positioned entity in this scene");
+                }
+            }
+        }
+        if (cameras > 1) add(diagnostics, "scene.camera.multiple", displayFile, "entities", "Only one active Camera2D may be authored per scene");
         if (!diagnostics.empty()) return std::unexpected(std::move(diagnostics));
         return scene;
     }
@@ -602,6 +853,20 @@ namespace project
         Diagnostics diagnostics;
         for (size_t i = 0; i < scene->entities.size(); ++i)
         {
+            if (const auto& sprite = scene->entities[i].spriteRenderer)
+            {
+                const auto texture = canonicalProject.assets.find(sprite->texture);
+                const auto field = "entities[" + std::to_string(i) + "].components.SpriteRenderer.texture";
+                if (texture == canonicalProject.assets.end())
+                    add(diagnostics, "project.asset.unknown", scene->source, field, "Sprite texture asset is not declared");
+                else if (texture->second.kind != "texture")
+                    add(diagnostics, "project.asset.kind.mismatch", scene->source, field, "SpriteRenderer.texture must reference a texture asset");
+                else
+                {
+                    std::filesystem::path resolved;
+                    resolveFile(canonicalProject.root, texture->second.path.generic_string(), scene->source, field, resolved, diagnostics);
+                }
+            }
             const auto& renderer = scene->entities[i].meshRenderer;
             if (renderer)
             {
@@ -664,7 +929,7 @@ namespace project
         if (!fields)
             return std::unexpected(one("project.document.type", displayFile, "", "Project manifest must be an object"));
 
-        checkFields(*fields, {"schema", "name", "startup_scene", "assets", "inputActions"}, displayFile, "", diagnostics);
+        checkFields(*fields, {"schema", "name", "startup_scene", "assets", "inputActions", "inputBindings"}, displayFile, "", diagnostics);
         Project project;
         project.root = root;
         project.manifest = relativePath(root, file);
@@ -694,8 +959,9 @@ namespace project
                     const auto foldedId = folded(asset.id);
                     if (!ids.insert(foldedId).second)
                         add(diagnostics, "project.asset.id.duplicate", displayFile, path + ".id", "Asset ID is duplicated (IDs are case-insensitive)");
-                    if (asset.kind != "script" && asset.kind != "mesh" && asset.kind != "texture")
-                        add(diagnostics, "project.asset.kind.unsupported", displayFile, path + ".kind", "Supported asset kinds are script, mesh, and texture");
+                    if (asset.kind != "script" && asset.kind != "mesh" && asset.kind != "texture" &&
+                        asset.kind != "font" && asset.kind != "audio" && asset.kind != "scene")
+                        add(diagnostics, "project.asset.kind.unsupported", displayFile, path + ".kind", "Unsupported asset kind");
                     asset.path = std::filesystem::path(authoredPath).lexically_normal();
                     const auto foldedPath = folded(asset.path.generic_string());
                     if (!paths.insert(foldedPath).second)
@@ -725,6 +991,30 @@ namespace project
                 }
                 project.inputActions.emplace(name, key);
             }
+        }
+        if (const auto* bindingsValue = member(*fields, "inputBindings"))
+        {
+            const auto* bindings = object(*bindingsValue);
+            if (!bindings) add(diagnostics, "project.field.type", displayFile, "inputBindings", "Expected an object mapping action names to binding arrays");
+            else for (const auto& [name, bindingValue] : *bindings)
+            {
+                const auto path = "inputBindings." + name;
+                if (name.empty() || name.size() > 64 || !bindingValue.is<picojson::array>() ||
+                    bindingValue.get<picojson::array>().empty() || bindingValue.get<picojson::array>().size() > 16)
+                { add(diagnostics, "project.input_binding.invalid", displayFile, path, "Action names require 1-16 physical bindings"); continue; }
+                std::set<std::string> unique;
+                for (const auto& token : bindingValue.get<picojson::array>())
+                {
+                    if (!token.is<std::string>() || !interaction::findBinding(token.get<std::string>()))
+                    { add(diagnostics, "project.input_binding.unsupported", displayFile, path, "Unsupported physical binding token"); continue; }
+                    const auto& text = token.get<std::string>();
+                    if (!unique.insert(text).second)
+                    { add(diagnostics, "project.input_binding.duplicate", displayFile, path, "Binding token is duplicated for this action"); continue; }
+                    project.inputBindings[name].push_back(text);
+                }
+            }
+            if (project.inputBindings.size() > 128)
+                add(diagnostics, "project.input_binding.limit", displayFile, "inputBindings", "At most 128 actions may be declared");
         }
         std::string startup;
         if (stringField(*fields, "startup_scene", displayFile, "", startup, diagnostics))

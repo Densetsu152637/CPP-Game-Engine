@@ -80,3 +80,33 @@ comparison. They print human text and are not part of the JSON command contract.
 Run `powershell -File tools/test-cli.ps1` after a headless build to exercise the
 command/exit contract, deterministic fixture, initialization, and a packaged
 runtime launched from a different working directory.
+
+Desktop 2D projects additionally accept `inputBindings`, PNG sprites, bitmap font
+atlases, WAV audio and scene assets. A visible run uses the live runtime scene,
+animated atlas frames, authored pixel camera and gameplay text panels. Physical
+keyboard, mouse buttons/wheel and the first GLFW-recognized gamepad feed the shared
+action mapper. Pointer coordinates account for framebuffer scaling and letterbox
+offsets. Resize/minimize and focus loss retain the existing frame/input lifecycle.
+
+`run ... --user-data <directory>` selects a host data root for saves and separate
+settings. The default is the platform user-data directory with a deterministic
+profile ID derived from the project name; changing the name selects a different
+profile. Player data never belongs in the packaged project. `--input action:tick`
+also accepts actions declared only through `inputBindings` and combines injection
+with physical input in visible runs. Headless runs advance the same PCM mixer
+offline; visible runs with audio assets initialize native desktop playback and
+report device errors explicitly. Native audio is not opened for projects without
+audio assets.
+
+For a longer interactive inspection, use a larger bounded tick count, for example:
+
+```text
+engine run examples/desktop-2d/project.json --ticks 36000 --shaders build/debug-vk1/shaders
+make VULKAN=1 desktop2d-smoke
+```
+
+The GPU target verifies transparent sprite/background preservation, translucent
+overlap, glyph clipping, painter order and camera resize/letterboxing with Vulkan
+validation. Mobile source lists include the shared new modules for compile
+compatibility; desktop input, UI and audio authoring do not establish new mobile
+runtime support.
