@@ -20,7 +20,10 @@ void clampScroll(PanelSnapshot& p) { p.scrollOffset=std::clamp(p.scrollOffset,0.
 bool validUtf8(std::string_view text) { std::size_t i=0; char32_t cp=0; while(i<text.size()) if(!decode(text,i,cp)) return false; return true; }
 UiModel::UiModel(GlyphAdvance advance):m_advance(std::move(advance)) {}
 bool UiModel::layout(PanelSnapshot& p) {
-    p.lines.clear(); std::string line; float width=0; std::size_t i=0;
+    const float rowHeight = p.lineHeight * p.scale;
+    const float defaultAdvance = p.glyphAdvance * p.scale;
+    if(!std::isfinite(rowHeight) || rowHeight <= 0 || !std::isfinite(defaultAdvance) || defaultAdvance <= 0) return false;
+    p.lines.clear(); std::string line; double width=0; std::size_t i=0;
     auto append=[&] { if(p.lines.size()<4096) p.lines.push_back(line); line.clear(); width=0; };
     while(i<p.text.size()&&p.lines.size()<4096) {
         auto begin=i; char32_t cp=0; if(!decode(p.text,i,cp)) break;
@@ -28,12 +31,15 @@ bool UiModel::layout(PanelSnapshot& p) {
         if(cp=='\n') { append(); continue; }
         float advance=m_advance?m_advance(p.fontAsset,cp):p.glyphAdvance;
         if(!std::isfinite(advance)||advance<0) advance=p.glyphAdvance;
+        const bool positiveAdvance = advance > 0;
         advance*=p.scale;
+        if(!std::isfinite(advance) || (positiveAdvance && advance <= 0)) return false;
         if(width+advance>p.rect.width&&!line.empty()) append();
         line.append(p.text.substr(begin,i-begin)); width+=advance;
     }
     if(p.lines.size()<4096) append();
-    p.contentHeight=(static_cast<float>(p.lines.size()+p.choices.size()))*p.lineHeight*p.scale;
+    p.contentHeight=(static_cast<float>(p.lines.size()+p.choices.size()))*rowHeight;
+    if(!std::isfinite(p.contentHeight)) return false;
     p.clip=p.rect; clampScroll(p); return i==p.text.size()&&p.lines.size()<4096;
 }
 void UiModel::capture() { m_suppressed.insert(m_raw.held.begin(),m_raw.held.end()); m_suppressed.insert(m_raw.pressed.begin(),m_raw.pressed.end()); m_transition=true; }
@@ -74,9 +80,12 @@ void UiModel::tick(const interaction::ActionFrame& input) {
     if(inside&&input.wheelY!=0) scroll(p.id,-input.wheelY*p.lineHeight*p.scale*3);
     bool click=pressed(p.pointerAction)&&inside;
     if(click&&!p.choices.empty()) {
-        float local=input.pointerY-p.rect.y+p.scrollOffset-static_cast<float>(p.lines.size())*p.lineHeight*p.scale;
-        if(local<0) click=false;
-        else { auto row=static_cast<std::size_t>(local/(p.lineHeight*p.scale)); if(row>=p.choices.size()) click=false; else {p.selected=row;m_events.push_back({p.id,"selection",p.selected});} }
+        const double rowHeight = static_cast<double>(p.lineHeight * p.scale);
+        const double local = static_cast<double>(input.pointerY) - p.rect.y + p.scrollOffset - static_cast<double>(p.lines.size()) * rowHeight;
+        const double rowIndex = local / rowHeight;
+        // Bound the floating result before conversion; tiny valid rows may yield huge indices.
+        if(!std::isfinite(rowIndex) || rowIndex < 0 || rowIndex >= static_cast<double>(p.choices.size())) click=false;
+        else { const auto row=static_cast<std::size_t>(rowIndex);p.selected=row;m_events.push_back({p.id,"selection",p.selected}); }
     }
     if(pressed(p.confirmAction)||click) m_events.push_back({p.id,"confirm",p.selected});
     while(m_events.size()>256) m_events.pop_front();

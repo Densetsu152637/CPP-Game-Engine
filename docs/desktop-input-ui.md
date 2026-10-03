@@ -52,7 +52,7 @@ including long unbroken strings, and honors newlines. `GlyphAdvance` can supply
 font atlas metrics by font asset and scalar; otherwise monospaced configurable
 advances are used. `lines`, `contentHeight`, `clip`, and `scrollOffset` expose
 renderer geometry; renderer clips drawing to `clip`. Scroll is clamped after
-text replacement or resizing. Invalid text and geometry are rejected atomically.
+text replacement or resizing. Invalid text and geometry are rejected atomically. Effective font advances and row heights must remain finite and positive after scaling; scalar glyph callbacks may return zero for combining marks. Pointer choice indices are bounded before integer conversion, including for very small valid row heights.
 Bounds are 64 panels, 64 choices per panel, 64 KiB text, fewer than 4096 laid-out
 lines, 256 queued events, and 16384 logical pixels per rectangle dimension.
 Text exceeding the layout bound is rejected rather than silently truncated.

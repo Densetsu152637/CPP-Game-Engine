@@ -2,6 +2,7 @@
 #include "project/gameplay_ui.h"
 #include "test/test_assertions.h"
 #include <cmath>
+#include <limits>
 
 void runInputUiTests() {
     using test::require;
@@ -31,4 +32,21 @@ void runInputUiTests() {
     input={};input.pressed={"ui_confirm"};input.held=input.pressed;ui.tick(input);auto event=ui.pollEvent();require(event&&event->type=="confirm"&&event->selection==1,"confirm reports selected choice");
     input={};input.pressed={"ui_back"};input.held=input.pressed;ui.tick(input);require(ui.panels().size()==1&&ui.panels().front().focused,"cancel pops modal and restores focus");ui.pollEvent();ui.tick(input);require(ui.panels().size()==1,"held dismissal cannot close parent");ui.tick({});ui.tick(input);require(ui.panels().empty()&&ui.gameplayFrame().pressed.empty(),"closing final modal cannot leak dismiss");ui.tick(input);require(ui.gameplayFrame().held.empty(),"closed dismiss held stays suppressed");ui.tick({});ui.tick(input);require(ui.gameplayFrame().pressed.contains("ui_back"),"neutral returns gameplay control");
     ui.clear();ui.tick({});panel.id="pointer";panel.text="";panel.rect={10,10,100,100};panel.choices={"one","two"};require(ui.open(panel),"pointer choice panel opens");ui.tick({});input={};input.pressed={"ui_click"};input.pointerX=0;input.pointerY=0;ui.tick(input);require(!ui.pollEvent(),"outside pointer ignored");input.pointerX=20;input.pointerY=35;ui.tick(input);event=ui.pollEvent();require(event&&event->type=="selection"&&event->selection==1,"inside pointer selects row");ui.pollEvent();ui.clear();require(ui.panels().empty()&&!ui.pollEvent()&&ui.gameplayFrame().pressed.empty(),"scene fault clear removes overlays events and input leakage");
+    UiModel metricUi;
+    PanelOptions tiny; tiny.id="tiny";tiny.text="";tiny.choices={"one"};tiny.lineHeight=1e-20f;
+    require(metricUi.open(tiny),"finite positive tiny line height remains supported");metricUi.tick({});
+    ActionFrame tinyClick;tinyClick.pressed={"ui_click"};tinyClick.pointerX=1;tinyClick.pointerY=1;
+    metricUi.tick(tinyClick);require(!metricUi.pollEvent(),"huge floating pointer row rejected before integer conversion");
+    tiny.id="underflow";tiny.lineHeight=std::numeric_limits<float>::denorm_min();tiny.scale=.5f;
+    require(!metricUi.open(tiny)&&metricUi.panels().size()==1,"underflowed effective line height rejected atomically");
+    tiny.id="advance-underflow";tiny.lineHeight=20;tiny.glyphAdvance=std::numeric_limits<float>::denorm_min();
+    require(!metricUi.open(tiny),"underflowed effective glyph advance rejected");
+    tiny.id="advance-overflow";tiny.scale=16;tiny.glyphAdvance=std::numeric_limits<float>::max();
+    require(!metricUi.open(tiny),"overflowed effective glyph advance rejected");
+    UiModel atlasOverflow([](std::string_view,char32_t){return std::numeric_limits<float>::max();});
+    PanelOptions atlasPanel;atlasPanel.id="atlas-overflow";atlasPanel.text="x";atlasPanel.scale=16;
+    require(!atlasOverflow.open(atlasPanel),"overflowed callback advance rejected");
+    UiModel atlasUnderflow([](std::string_view,char32_t){return std::numeric_limits<float>::denorm_min();});
+    atlasPanel.id="atlas-underflow";atlasPanel.scale=.5f;
+    require(!atlasUnderflow.open(atlasPanel),"underflowed positive callback advance rejected");
 }
