@@ -100,22 +100,27 @@ jobs:
           done
           [[ "${booted:-}" == 1 ]] || { cat "$RUNNER_TEMP/android-emulator.log"; exit 1; }
           home_package=""
+          last_home_component=""
           setup_ready=false
           last_setup_probe_error=""
           for attempt in $(seq 1 120); do
-            if [[ -z "$home_package" ]]; then
-              if home_resolution="$(timeout 5s "$adb" shell cmd package resolve-activity --brief \
-                -a android.intent.action.MAIN -c android.intent.category.HOME 2>&1)"; then
-                home_component="$(tr -d '\r' <<< "$home_resolution" | tail -n 1)"
-                if [[ "$home_component" == */* ]]; then
-                  home_package="${home_component%%/*}"
+            # Android may first resolve HOME to setup wizard, then switch to
+            # the launcher after provisioning. Never compare against a stale result.
+            home_package=""
+            if home_resolution="$(timeout 5s "$adb" shell cmd package resolve-activity --brief \
+              -a android.intent.action.MAIN -c android.intent.category.HOME 2>&1)"; then
+              home_component="$(tr -d '\r' <<< "$home_resolution" | tail -n 1)"
+              if [[ "$home_component" == */* ]]; then
+                home_package="${home_component%%/*}"
+                if [[ "$home_component" != "$last_home_component" ]]; then
                   echo "Resolved Android HOME activity: $home_component"
-                else
-                  last_setup_probe_error="HOME resolver returned: $home_resolution"
+                  last_home_component="$home_component"
                 fi
               else
-                last_setup_probe_error="HOME activity lookup failed: $home_resolution"
+                last_setup_probe_error="HOME resolver returned: $home_resolution"
               fi
+            else
+              last_setup_probe_error="HOME activity lookup failed: $home_resolution"
             fi
             if [[ -n "$home_package" ]]; then
               if setup_probe="$(timeout 5s "$adb" shell 'printf "%s %s\\n" "$(settings get global device_provisioned)" "$(settings get secure user_setup_complete)"; dumpsys activity activities | grep -E "mResumedActivity|topResumedActivity" || true' 2>&1)"; then
@@ -313,6 +318,8 @@ jobs:
           echo "VULKAN_SDK=$RUNNER_TEMP/VulkanSDK/${VULKAN_SDK_VERSION}/macOS" >> "$GITHUB_ENV"
           echo "${RUNNER_TEMP}/VulkanSDK/${VULKAN_SDK_VERSION}/macOS/bin" >> "$GITHUB_PATH"
           cmake --version
+      - name: Validate iOS test scheme product fixtures
+        run: python3 mobile/ios/test-write-test-scheme.py
       - name: Build iOS Simulator app
         shell: bash
         run: bash mobile/ios/build.sh
