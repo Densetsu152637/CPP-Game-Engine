@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "name": "Desktop 2D pure progression checks",
+  "startup_scene": "scenes/pure.scene.json",
+  "assets": [
+    {
+      "id": "asset:pure-tests",
+      "path": "scripts/pure-tests.lua",
+      "kind": "script"
+    }
+  ]
+}

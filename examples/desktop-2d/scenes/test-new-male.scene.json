@@ -1,0 +1,695 @@
+{
+  "schema": 1,
+  "scene_id": "scene:room-a",
+  "entities": [
+    {
+      "id": "room:A",
+      "name": "room:A",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        }
+      }
+    },
+    {
+      "id": "entry",
+      "name": "entry",
+      "components": {
+        "Transform": {
+          "position": [
+            -4,
+            0,
+            0
+          ]
+        }
+      }
+    },
+    {
+      "id": "camera",
+      "name": "camera",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        "Camera2D": {
+          "logicalSize": [
+            320,
+            180
+          ],
+          "pixelsPerUnit": 16,
+          "center": [
+            0,
+            0
+          ],
+          "follow": "actor:player",
+          "pixelSnap": true
+        }
+      }
+    },
+    {
+      "id": "floor",
+      "name": "floor",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            0,
+            0
+          ]
+        },
+        "SpriteRenderer": {
+          "texture": "asset:sprites",
+          "size": [
+            16,
+            8
+          ],
+          "source": [
+            96,
+            16,
+            16,
+            16
+          ],
+          "layer": 0
+        }
+      }
+    },
+    {
+      "id": "solid:left",
+      "name": "solid:left",
+      "components": {
+        "Transform": {
+          "position": [
+            -8,
+            0,
+            0
+          ]
+        },
+        "Collider2D": {
+          "size": [
+            0.5,
+            8.5
+          ],
+          "layer": 2,
+          "mask": 9
+        },
+        "SpriteRenderer": {
+          "texture": "asset:sprites",
+          "size": [
+            0.5,
+            8.5
+          ],
+          "source": [
+            112,
+            16,
+            16,
+            16
+          ],
+          "layer": 2
+        }
+      }
+    },
+    {
+      "id": "solid:right",
+      "name": "solid:right",
+      "components": {
+        "Transform": {
+          "position": [
+            8,
+            0,
+            0
+          ]
+        },
+        "Collider2D": {
+          "size": [
+            0.5,
+            8.5
+          ],
+          "layer": 2,
+          "mask": 9
+        },
+        "SpriteRenderer": {
+          "texture": "asset:sprites",
+          "size": [
+            0.5,
+            8.5
+          ],
+          "source": [
+            112,
+            16,
+            16,
+            16
+          ],
+          "layer": 2
+        }
+      }
+    },
+    {
+      "id": "solid:top",
+      "name": "solid:top",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            4,
+            0
+          ]
+        },
+        "Collider2D": {
+          "size": [
+            16,
+            0.5
+          ],
+          "layer": 2,
+          "mask": 9
+        },
+        "SpriteRenderer": {
+          "texture": "asset:sprites",
+          "size": [
+            16,
+            0.5
+          ],
+          "source": [
+            112,
+            16,
+            16,
+            16
+          ],
+          "layer": 2
+        }
+      }
+    },
+    {
+      "id": "solid:bottom",
+      "name": "solid:bottom",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            -4,
+            0
+          ]
+        },
+        "Collider2D": {
+          "size": [
+            16,
+            0.5
+          ],
+          "layer": 2,
+          "mask": 9
+        },
+        "SpriteRenderer": {
+          "texture": "asset:sprites",
+          "size": [
+            16,
+            0.5
+          ],
+          "source": [
+            112,
+            16,
+            16,
+            16
+          ],
+          "layer": 2
+        }
+      }
+    },
+    {
+      "id": "solid:obstacle",
+      "name": "solid:obstacle",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            1.6,
+            0
+          ]
+        },
+        "Collider2D": {
+          "size": [
+            1.5,
+            1.5
+          ],
+          "layer": 2,
+          "mask": 9
+        },
+        "SpriteRenderer": {
+          "texture": "asset:sprites",
+          "size": [
+            1.5,
+            1.5
+          ],
+          "source": [
+            112,
+            16,
+            16,
+            16
+          ],
+          "layer": 2
+        }
+      }
+    },
+    {
+      "id": "actor:player",
+      "name": "actor:player",
+      "components": {
+        "Transform": {
+          "position": [
+            -4,
+            0,
+            0
+          ]
+        },
+        "Script": {
+          "asset": "asset:test-new-male"
+        },
+        "Collider2D": {
+          "size": [
+            0.65,
+            0.65
+          ],
+          "layer": 1,
+          "mask": 6
+        },
+        "SpriteRenderer": {
+          "texture": "asset:sprites",
+          "size": [
+            1,
+            1
+          ],
+          "source": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "layer": 20,
+          "frames": [
+            [
+              0,
+              0,
+              16,
+              16
+            ],
+            [
+              16,
+              0,
+              16,
+              16
+            ],
+            [
+              32,
+              0,
+              16,
+              16
+            ],
+            [
+              48,
+              0,
+              16,
+              16
+            ]
+          ],
+          "framesPerSecond": 6,
+          "loop": true
+        }
+      }
+    },
+    {
+      "id": "actor:dove1",
+      "name": "actor:dove1",
+      "components": {
+        "Transform": {
+          "position": [
+            -4.6,
+            0.6,
+            0
+          ]
+        },
+        "Collider2D": {
+          "size": [
+            0.4,
+            0.4
+          ],
+          "layer": 8,
+          "mask": 2
+        },
+        "SpriteRenderer": {
+          "texture": "asset:sprites",
+          "size": [
+            0.8,
+            0.8
+          ],
+          "source": [
+            64,
+            0,
+            16,
+            16
+          ],
+          "layer": 15,
+          "frames": [
+            [
+              64,
+              0,
+              16,
+              16
+            ],
+            [
+              80,
+              0,
+              16,
+              16
+            ],
+            [
+              96,
+              0,
+              16,
+              16
+            ],
+            [
+              112,
+              0,
+              16,
+              16
+            ]
+          ],
+          "framesPerSecond": 6,
+          "loop": true
+        }
+      }
+    },
+    {
+      "id": "actor:dove2",
+      "name": "actor:dove2",
+      "components": {
+        "Transform": {
+          "position": [
+            -5.2,
+            0.6,
+            0
+          ]
+        },
+        "Collider2D": {
+          "size": [
+            0.4,
+            0.4
+          ],
+          "layer": 8,
+          "mask": 2
+        },
+        "SpriteRenderer": {
+          "texture": "asset:sprites",
+          "size": [
+            0.8,
+            0.8
+          ],
+          "source": [
+            64,
+            0,
+            16,
+            16
+          ],
+          "layer": 15,
+          "frames": [
+            [
+              64,
+              0,
+              16,
+              16
+            ],
+            [
+              80,
+              0,
+              16,
+              16
+            ],
+            [
+              96,
+              0,
+              16,
+              16
+            ],
+            [
+              112,
+              0,
+              16,
+              16
+            ]
+          ],
+          "framesPerSecond": 6,
+          "loop": true
+        }
+      }
+    },
+    {
+      "id": "actor:scene-dove",
+      "name": "actor:scene-dove",
+      "components": {
+        "Transform": {
+          "position": [
+            0,
+            3,
+            0
+          ]
+        },
+        "SpriteRenderer": {
+          "texture": "asset:sprites",
+          "size": [
+            1.2,
+            1.2
+          ],
+          "source": [
+            64,
+            0,
+            16,
+            16
+          ],
+          "layer": 30,
+          "frames": [
+            [
+              64,
+              0,
+              16,
+              16
+            ],
+            [
+              80,
+              0,
+              16,
+              16
+            ],
+            [
+              96,
+              0,
+              16,
+              16
+            ],
+            [
+              112,
+              0,
+              16,
+              16
+            ]
+          ],
+          "framesPerSecond": 6,
+          "loop": true,
+          "visible": false
+        }
+      }
+    },
+    {
+      "id": "interact:book",
+      "name": "interact:book",
+      "components": {
+        "Transform": {
+          "position": [
+            -2,
+            0,
+            0
+          ]
+        },
+        "Collider2D": {
+          "size": [
+            1.3,
+            1.3
+          ],
+          "trigger": true,
+          "layer": 4,
+          "mask": 1
+        },
+        "SpriteRenderer": {
+          "texture": "asset:sprites",
+          "size": [
+            1.3,
+            1.3
+          ],
+          "source": [
+            0,
+            16,
+            16,
+            16
+          ],
+          "layer": 5
+        }
+      }
+    },
+    {
+      "id": "interact:quest",
+      "name": "interact:quest",
+      "components": {
+        "Transform": {
+          "position": [
+            2,
+            0,
+            0
+          ]
+        },
+        "Collider2D": {
+          "size": [
+            1.3,
+            1.3
+          ],
+          "trigger": true,
+          "layer": 4,
+          "mask": 1
+        },
+        "SpriteRenderer": {
+          "texture": "asset:sprites",
+          "size": [
+            1.3,
+            1.3
+          ],
+          "source": [
+            16,
+            16,
+            16,
+            16
+          ],
+          "layer": 5
+        }
+      }
+    },
+    {
+      "id": "interact:rest",
+      "name": "interact:rest",
+      "components": {
+        "Transform": {
+          "position": [
+            -4,
+            2,
+            0
+          ]
+        },
+        "Collider2D": {
+          "size": [
+            1.3,
+            1.3
+          ],
+          "trigger": true,
+          "layer": 4,
+          "mask": 1
+        },
+        "SpriteRenderer": {
+          "texture": "asset:sprites",
+          "size": [
+            1.3,
+            1.3
+          ],
+          "source": [
+            32,
+            16,
+            16,
+            16
+          ],
+          "layer": 5
+        }
+      }
+    },
+    {
+      "id": "interact:exit",
+      "name": "interact:exit",
+      "components": {
+        "Transform": {
+          "position": [
+            6,
+            0,
+            0
+          ]
+        },
+        "Collider2D": {
+          "size": [
+            1.3,
+            1.3
+          ],
+          "trigger": true,
+          "layer": 4,
+          "mask": 1
+        },
+        "SpriteRenderer": {
+          "texture": "asset:sprites",
+          "size": [
+            1.3,
+            1.3
+          ],
+          "source": [
+            48,
+            16,
+            16,
+            16
+          ],
+          "layer": 5
+        }
+      }
+    },
+    {
+      "id": "effect:glow",
+      "name": "effect:glow",
+      "components": {
+        "Transform": {
+          "position": [
+            -2,
+            0,
+            0
+          ]
+        },
+        "SpriteRenderer": {
+          "texture": "asset:sprites",
+          "size": [
+            2,
+            2
+          ],
+          "source": [
+            64,
+            16,
+            16,
+            16
+          ],
+          "layer": 6,
+          "frames": [
+            [
+              64,
+              16,
+              16,
+              16
+            ],
+            [
+              80,
+              16,
+              16,
+              16
+            ]
+          ],
+          "framesPerSecond": 6,
+          "loop": true
+        }
+      }
+    }
+  ]
+}

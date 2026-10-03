@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "ticks": 120,
+  "input": [
+    "move_right:5",
+    "ui_confirm:6",
+    "interact:6",
+    "ui_down:8",
+    "ui_confirm:9",
+    "ui_back:16",
+    "ui_back:18"
+  ],
+  "newMarker": "DESKTOP2D_WALKTHROUGH_PASS:",
+  "restoreMarker": "DESKTOP2D_RESTART_PASS:"
+}
