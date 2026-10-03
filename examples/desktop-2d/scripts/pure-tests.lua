@@ -27,6 +27,12 @@ return {on_create=function()
         assert(P.restore(migrated).version == 2)
         local newer=P.copy(s); newer.version=99; assert(not P.restore(newer))
         local missing=P.copy(s); missing.reveals["passage:missing"]=true; assert(not P.restore(missing))
+        local checkpoint=P.copy(s); checkpoint.room="room:B"; checkpoint.position={x=3.25,y=-2.25}; checkpoint.acceptedChoice=2
+        local restored=assert(P.restore(checkpoint))
+        assert(restored.room == "room:B" and restored.position.x == 3.25 and restored.position.y == -2.25 and restored.acceptedChoice == 2)
+        restored.position.x=99; assert(checkpoint.position.x == 3.25, "restore aliased source snapshot")
+        checkpoint.position.x="bad"; assert(not P.restore(checkpoint))
+        checkpoint.position.x=3.25; checkpoint.acceptedChoice=99; assert(not P.restore(checkpoint))
         assert(P.restore(s).variant == variant)
     end
     print("DESKTOP2D_PURE_PASS")

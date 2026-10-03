@@ -67,7 +67,7 @@ must likewise return to neutral before acting.
 4. Reach the green rest marker at (-4,2). Rest gathers the birds, and a successful
    durable write produces explicit SAVE CONFIRMED and a cue. A failure shows
    SAVE FAILED and does not play the success cue. Quit/restart and press L:
-   the room, choice, quest, reveal IDs and provenance return.
+   the room, exact safe saved position, accepted choice, quest, reveal IDs and provenance return.
 5. H runs a cancellable developer injury/descent. Escape restores control with
    no healing award; waiting three seconds completes the event once. B ordinary
    defeat enters retry state and cannot grant authored healing. Replaying H
@@ -109,7 +109,7 @@ from the executable directory also checks project paths independent of cwd.
 The exact new-game commands emitted by the runner are:
 
 ```powershell
-& ./build/debug-vk0/bin/CPPGameEngine.exe run ./examples/desktop-2d/project-test-new-male.json --headless --ticks 120 --user-data ./build/check-male --input move_right:5 --input ui_confirm:6 --input interact:6 --input ui_down:8 --input ui_confirm:9 --input ui_back:16 --input ui_back:18
+& ./build/debug-vk0/bin/CPPGameEngine.exe run ./examples/desktop-2d/project-test-new-male.json --headless --ticks 360 --user-data ./build/check-male --input move_right:5 --input ui_confirm:6 --input interact:6 --input ui_down:8 --input ui_confirm:9 --input ui_back:16 --input ui_back:18
 & ./build/debug-vk0/bin/CPPGameEngine.exe run ./examples/desktop-2d/project-test-restore-male.json --headless --ticks 120 --user-data ./build/check-male
 ```
 
@@ -118,13 +118,21 @@ new/restore runs log DESKTOP2D_WALKTHROUGH_PASS:<variant> and
 DESKTOP2D_RESTART_PASS:<variant>. The restore script additionally reports
 DESKTOP2D_RESTART_RESTORE_PASS immediately after verifying on-disk data/settings.
 A missing injected UI action fails the corresponding assertion and faults the
-session; merely reaching 120 ticks is insufficient.
+session; merely reaching the tick limit is insufficient.
+
+The final durable checkpoint deliberately uses nondefault room B, position
+(3.25,-2.25), and accepted choice 2. Restore asserts the on-disk values before
+changing state, queues B from the A startup room, then verifies the accepted
+room, exact applied position, and choice on subsequent ticks. Position application
+runs only in the accepted target scene; a blocked saved position is rejected
+with visible feedback rather than silently moving to a different checkpoint.
 
 The headless controller checks real movement through a solid sweep, stable
 trigger overlaps/events, modal masking of an injected move, confirm/selection/
 cancel UI events, early reward rejection, duplicate acceptance/rewards, midquest
 save/read, shared reward provenance, scene cancellation, ordinary defeat,
-once-only healing, full settings/rebind persistence, two room transitions,
+three seconds of actual on_update timing with no early healing and exactly
+one completion, full settings/rebind persistence, two room transitions,
 missing scene rejection and progress preservation across separate processes.
 The new fixture does not overwrite an existing save automatically except during
 its deliberately isolated scripted walkthrough.

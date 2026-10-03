@@ -47,7 +47,7 @@ function M.new(options)
         close()
         local ok, err=engine.change_scene(ROOM_ASSETS[room], spawn or "entry", "actor:player")
         if not ok then status="ROOM FAILED: " .. tostring(err); return false end
-        s.room=room; s.flock=false; publish()
+        s.room=room; if not s.restorePending then s.flock=false end; publish()
         return true
     end
     local function save_rest()
@@ -62,16 +62,33 @@ function M.new(options)
         else status="SAVE FAILED. Previous save retained. " .. tostring(err) end
         return ok, err
     end
+    local function apply_saved_position()
+        if not s.position then return false, "snapshot has no saved position" end
+        local original=self.get_position()
+        self.set_position(s.position.x,s.position.y,0)
+        local safe, err=self.safe_position(2,.25)
+        if not safe or math.abs(safe.x-s.position.x) > .0001 or math.abs(safe.y-s.position.y) > .0001 then
+            self.set_position(original.x,original.y,original.z)
+            return false, err or "saved position overlaps a solid collider"
+        end
+        s.restorePending=false; publish()
+        status="LOAD CONFIRMED. Room, position, choice and progress restored."
+        return true
+    end
     local function restore()
         local snapshot, err=save.read("desktop-slot")
         if not snapshot then status="LOAD FAILED: " .. tostring(err); return false end
         local restored, reason=P.restore(snapshot)
         if not restored then status="LOAD REJECTED: " .. reason; return false end
+        local previous=s
         s=restored; s.mode="interactive"; s.restorePending=true; publish()
-        if s.room ~= current_room then return request_room(s.room) end
-        if s.position then self.set_position(s.position.x,s.position.y,0) end
-        s.restorePending=false; publish(); status="LOAD CONFIRMED. Stable progress restored."
-        return true
+        if s.room ~= current_room then
+            if request_room(s.room) then return true end
+            s=previous; publish(); return false
+        end
+        local applied, placement_error=apply_saved_position()
+        if not applied then s=previous; publish(); status="LOAD REJECTED: " .. tostring(placement_error) end
+        return applied
     end
     local function start_scene()
         if s.scene == "injury" or s.events["scene:healed"] then return end
@@ -89,7 +106,8 @@ function M.new(options)
         status="SCENE CANCELLED. Controls restored; no healing awarded."; publish()
     end
     local function finish_scene()
-        event("scene:injury"); event("scene:healed")
+        event("scene:injury")
+        if event("scene:healed") then s.healCompletions=(s.healCompletions or 0)+1; publish() end
         close(); require_ok(engine.lock_controls("authored-scene",false)); engine.reset_camera()
         local bird=engine.find_entity("actor:scene-dove"); if bird then engine.sprite_visible(bird,false) end
         status="SCENE COMPLETED ONCE. Followers remain two."; publish()
@@ -149,31 +167,50 @@ function M.new(options)
             verify_progress(s)
             local cfg, cfg_error=settings.read(); require_ok(cfg,cfg_error)
             assert(cfg.interactRebound and cfg.bindings.interact[1] == "Key:Q" and cfg.audio.music == .25, "settings/rebind lost at restart")
-            s.mode="restore-test"; s.phase=0; s.room=current_room
+            assert(s.room == "room:B", "saved room was not nondefault B")
+            assert(s.position and s.position.x == 3.25 and s.position.y == -2.25, "saved position lost")
+            assert(s.acceptedChoice == 2, "accepted dialogue choice lost")
+            assert(s.healCompletions == 1, "authored healing completion duplicated/lost")
+            s.mode="restore-test"; s.phase=0; s.restorePending=true
             print("DESKTOP2D_RESTART_RESTORE_PASS:" .. s.variant)
         elseif shared and shared.version then s=require_ok(P.restore(shared))
         else s=P.new(options.variant or "male"); s.mode=options.test == "new" and "new-test" or "interactive" end
-        if s.restorePending and s.room == current_room and s.position then
-            self.set_position(s.position.x,s.position.y,0); s.restorePending=false
-        end
-        s.room=current_room; publish()
+        if not s.restorePending then s.room=current_room end
+        publish()
         local saved_settings=settings.read()
         if saved_settings then preferences=saved_settings end
         require_ok(ui.open({id="hud",font="asset:font",text="DESKTOP 2D LAB",x=8,y=6,width=304,height=38,scale=1,modal=false}))
         loop_voice=audio.play("asset:loop",true,"music",.18)
         if not loop_voice then engine.log("MUSIC UNAVAILABLE; VISUAL WALKTHROUGH STILL WORKS") end
         initialized=true
+        if s.restorePending then
+            if s.room ~= current_room then
+                require_ok(request_room(s.room)) -- queue target; do not run its scene logic in this room
+                return true
+            end
+            local applied, placement_error=apply_saved_position()
+            if s.mode == "restore-test" then require_ok(applied,placement_error)
+            elseif not applied then status="LOAD REJECTED: " .. tostring(placement_error) end
+        end
+        return false
     end
     local function test_step()
         local phase=s.phase
         if s.mode == "restore-test" then
             if phase == 0 then
+                local p=self.get_position()
+                assert(current_room == "room:B" and s.room == "room:B", "saved room transition not accepted")
+                assert(math.abs(p.x-3.25) < .0001 and math.abs(p.y+2.25) < .0001, "saved position not applied after transition")
+                assert(s.acceptedChoice == 2 and not s.restorePending, "choice/restore completion lost")
                 local changed=event("quest:reward"); assert(not changed)
                 changed=event("story:reveal"); assert(not changed)
                 changed=event("scene:healed"); assert(not changed)
-                verify_progress(s); s.phase=1; publish(); require_ok(request_room("room:B")); return
+                verify_progress(s); s.phase=1; publish(); return
             elseif phase == 1 then
-                assert(current_room == "room:B"); verify_progress(s)
+                local p=self.get_position()
+                assert(current_room == "room:B" and s.acceptedChoice == 2)
+                assert(math.abs(p.x-3.25) < .0001 and math.abs(p.y+2.25) < .0001)
+                verify_progress(s)
                 s.mode="complete"; publish(); print("DESKTOP2D_RESTART_PASS:" .. s.variant)
             end
             return
@@ -219,7 +256,13 @@ function M.new(options)
             assert(s.scene == "idle" and not s.events["scene:healed"],"cancellation granted healing")
         elseif phase == 19 then event("encounter:defeat"); assert(s.scene == "retry" and not s.events["scene:healed"])
         elseif phase == 20 then start_scene(); assert(s.scene == "injury")
-        elseif phase == 21 then finish_scene(); verify_progress(s); assert(s.events["scene:healed"])
+        elseif phase == 21 then
+            if scene_time < 3 then
+                assert(s.scene == "injury" and not s.events["scene:healed"], "authored healing fired before three seconds")
+                return -- retain phase until the actual on_update timer finishes the scene
+            end
+            verify_progress(s)
+            assert(s.scene == "idle" and s.events["scene:healed"] and s.healCompletions == 1, "timed healing did not complete exactly once")
         elseif phase == 22 then require_ok(save_settings(true)); require_ok(save_rest())
         elseif phase == 23 then s.phase=24; publish(); require_ok(request_room("room:B")); return
         elseif phase == 24 then
@@ -232,7 +275,15 @@ function M.new(options)
         elseif phase == 26 then
             assert(current_room == "room:B"); s.phase=27; publish(); require_ok(request_room("room:A")); return
         elseif phase == 27 then
-            assert(current_room == "room:A"); verify_progress(s); require_ok(save_rest())
+            assert(current_room == "room:A"); verify_progress(s)
+        elseif phase == 28 then
+            s.phase=29; publish(); require_ok(request_room("room:B")); return
+        elseif phase == 29 then
+            assert(current_room == "room:B" and s.acceptedChoice == 2)
+            self.set_position(3.25,-2.25,0)
+            require_ok(self.safe_position(2,.25)); require_ok(save_rest())
+            local checkpoint=require_ok(save.read("desktop-slot"))
+            assert(checkpoint.room == "room:B" and checkpoint.position.x == 3.25 and checkpoint.position.y == -2.25 and checkpoint.acceptedChoice == 2)
             s.mode="complete"; publish(); print("DESKTOP2D_WALKTHROUGH_PASS:" .. s.variant)
         end
         s.phase=phase+1; publish()
@@ -253,7 +304,7 @@ function M.new(options)
     end
     return {
         on_update=function(dt)
-            if not initialized then initialize() end
+            if not initialized then if initialize() then return end end
             elapsed=elapsed+dt; consume_ui()
             if s.mode == "new-test" or s.mode == "restore-test" then test_step()
             elseif s.mode == "interactive" then
@@ -264,7 +315,7 @@ function M.new(options)
                     if contains(require_ok(self.overlaps()),"interact:rest") then save_rest(); show("dialogue",status)
                     else status="Reach the green rest marker to save." end
                 end
-                if input.pressed("load") then restore() end
+                if input.pressed("load") then restore(); return end
                 if input.pressed("new_game") then
                     s=P.new(s.variant); publish(); request_room("room:A")
                 end
@@ -286,7 +337,7 @@ function M.new(options)
                 local bird=engine.find_entity("actor:scene-dove")
                 if bird then engine.set_position(bird,0,preferences.reducedMotion and 0 or math.max(0,3-scene_time),0) end
                 require_ok(engine.set_camera(0,0))
-                if s.mode == "interactive" and scene_time >= 3 then finish_scene() end
+                if (s.mode == "interactive" or s.mode == "new-test") and scene_time >= 3 then finish_scene() end
             end
             follow(dt)
             if preferences.reducedMotion then

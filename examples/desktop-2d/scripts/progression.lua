@@ -30,6 +30,16 @@ function M.restore(value)
         type(restored.reveals) ~= "table" or type(restored.provenance) ~= "table" then
         return nil, "missing progress collections"
     end
+    if restored.position then
+        local p=restored.position
+        if type(p) ~= "table" or type(p.x) ~= "number" or type(p.y) ~= "number" or
+            p.x ~= p.x or p.y ~= p.y or math.abs(p.x) == math.huge or math.abs(p.y) == math.huge then
+            return nil, "invalid saved position"
+        end
+    end
+    if restored.acceptedChoice ~= nil and restored.acceptedChoice ~= 1 and restored.acceptedChoice ~= 2 then
+        return nil, "invalid saved choice"
+    end
     local valid = {available=true, active=true, completed=true, reward_recorded=true}
     if not valid[restored.quests.sample] then return nil, "unknown quest state" end
     for id in pairs(restored.reveals) do
