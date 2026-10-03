@@ -42,7 +42,7 @@ Feed the original action frame into `tick`, then query `gameplayFrame()` for
 world input. While any modal is open it consumes all gameplay controls. Opening,
 closing or clearing a panel also masks the current frame immediately, including
 opens during a script callback. Controls held across transitions stay suppressed
-through their release frame and rearm on a subsequent neutral frame. This
+through their release frame. An explicit release rearms the control for the next frame; a fully neutral frame also rearms it. This
 prevents dismissal from interacting with the object beneath or reopening the
 same overlay. `clear()` removes panels and queued events for scene changes or
 fault teardown while retaining the transition quarantine.

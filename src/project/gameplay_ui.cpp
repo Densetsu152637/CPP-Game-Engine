@@ -65,7 +65,13 @@ bool UiModel::scroll(std::string_view id,float delta) { if(!std::isfinite(delta)
 bool UiModel::modalActive() const { return std::any_of(m_panels.begin(),m_panels.end(),[](const auto& p){return p.modal;}); }
 void UiModel::tick(const interaction::ActionFrame& input) {
     m_raw=input; m_transition=false;
-    for(auto i=m_suppressed.begin();i!=m_suppressed.end();) { if(!input.held.contains(*i)&&!input.pressed.contains(*i)&&!input.released.contains(*i)) i=m_suppressed.erase(i); else ++i; }
+    m_releaseSuppressed.clear();
+    for(auto i=m_suppressed.begin();i!=m_suppressed.end();) {
+        if(!input.held.contains(*i) && !input.pressed.contains(*i)) {
+            if(input.released.contains(*i)) m_releaseSuppressed.insert(*i);
+            i=m_suppressed.erase(i);
+        } else ++i;
+    }
     if(m_panels.empty()||!input.focused) return;
     auto& p=m_panels.back();
     auto pressed=[&](const std::string& name){return input.pressed.contains(name)&&!m_suppressed.contains(name);};
@@ -93,7 +99,9 @@ void UiModel::tick(const interaction::ActionFrame& input) {
 interaction::ActionFrame UiModel::gameplayFrame() const {
     if(modalActive()||m_transition) { interaction::ActionFrame empty;empty.focused=m_raw.focused;return empty; }
     auto result=m_raw;
-    for(const auto& name:m_suppressed) {result.pressed.erase(name);result.held.erase(name);result.released.erase(name);result.values.erase(name);} return result;
+    for(const auto& name:m_suppressed) {result.pressed.erase(name);result.held.erase(name);result.released.erase(name);result.values.erase(name);}
+    for(const auto& name:m_releaseSuppressed) result.released.erase(name);
+    return result;
 }
 std::optional<UiEvent> UiModel::pollEvent() { if(m_events.empty()) return {};auto e=m_events.front();m_events.pop_front();return e; }
 void UiModel::clear() { capture();m_panels.clear();m_events.clear(); }

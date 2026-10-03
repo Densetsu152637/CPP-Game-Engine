@@ -32,6 +32,7 @@ class UiModel {
     std::vector<PanelSnapshot> m_panels;
     std::deque<UiEvent> m_events;
     std::set<std::string> m_suppressed;
+    std::set<std::string> m_releaseSuppressed; // Consume explicit release for this frame only.
     interaction::ActionFrame m_raw;
     bool m_transition = false;
     GlyphAdvance m_advance;

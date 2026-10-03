@@ -49,4 +49,20 @@ void runInputUiTests() {
     UiModel atlasUnderflow([](std::string_view,char32_t){return std::numeric_limits<float>::denorm_min();});
     atlasPanel.id="atlas-underflow";atlasPanel.scale=.5f;
     require(!atlasUnderflow.open(atlasPanel),"underflowed positive callback advance rejected");
+    UiModel releaseUi;
+    PanelOptions releasePanel;releasePanel.id="release";
+    require(releaseUi.open(releasePanel),"release regression modal opens");releaseUi.tick({});
+    ActionFrame dismiss;dismiss.pressed={"ui_back"};dismiss.held=dismiss.pressed;
+    releaseUi.tick(dismiss);
+    require(releaseUi.panels().empty()&&releaseUi.gameplayFrame().pressed.empty(),"dismiss press consumed on close");
+    dismiss.pressed.clear();releaseUi.tick(dismiss);
+    require(releaseUi.gameplayFrame().held.empty(),"genuine dismiss hold stays quarantined");
+    ActionFrame explicitRelease;explicitRelease.released={"ui_back"};releaseUi.tick(explicitRelease);
+    require(releaseUi.gameplayFrame().released.empty()&&releaseUi.gameplayFrame().held.empty(),"explicit dismiss release consumed in release frame");
+    dismiss.pressed={"ui_back"};releaseUi.tick(dismiss);
+    require(releaseUi.gameplayFrame().pressed.contains("ui_back")&&releaseUi.gameplayFrame().held.contains("ui_back"),"new press immediately after release reaches gameplay");
+    releaseUi.clear();releaseUi.tick({});releasePanel.id="parent";require(releaseUi.open(releasePanel),"release parent opens");
+    releasePanel.id="child";require(releaseUi.open(releasePanel),"release child opens");releaseUi.tick({});releaseUi.tick(dismiss);
+    require(releaseUi.panels().size()==1,"dismiss child retains parent");releaseUi.tick(explicitRelease);releaseUi.tick(dismiss);
+    require(releaseUi.panels().empty(),"next press after explicit release can dismiss parent");
 }
