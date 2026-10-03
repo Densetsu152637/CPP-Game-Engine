@@ -89,4 +89,14 @@ void runInputUiTests() {
     choiceUi.clear();choiceUi.tick({});choicePanel.id="tall-row";choicePanel.text="";choicePanel.lineHeight=30;choicePanel.rect.height=10;
     require(choiceUi.open(choicePanel),"row taller than viewport supported");choiceUi.tick({});navigation.pressed={"ui_down"};choiceUi.tick(navigation);
     require(choiceUi.panels().front().scrollOffset==60,"oversized selected row aligns top to clip");
+    const std::string unicodeAction="move \xE2\x86\x92";
+    const std::string legacyLongAction(80,'a');
+    BindingMap opaqueNames{{"move right",{"Key:Right"}},{unicodeAction,{"Key:Right"}},{legacyLongAction,{"Key:Right"}}};
+    require(validateBindings(opaqueNames).valid(),"spaces Unicode and legacy long action identities validate");
+    require(!validateBindings({{"",{"Key:Right"}}}).valid(),"empty action identity rejected");
+    ActionMapper opaqueMapper(opaqueNames);RawInput opaqueRaw;opaqueRaw.down={"Key:Right"};
+    auto opaqueFrame=opaqueMapper.sample(opaqueRaw);
+    for(const auto& [name,tokens]:opaqueNames) require(opaqueMapper.bindings().contains(name)&&opaqueFrame.pressed.contains(name)&&opaqueFrame.held.contains(name)&&opaqueFrame.values.at(name)==1,"opaque identity preserved exactly through binding and press");
+    opaqueRaw.down.clear();opaqueFrame=opaqueMapper.sample(opaqueRaw);
+    for(const auto& [name,tokens]:opaqueNames) require(opaqueFrame.released.contains(name),"opaque identity preserved exactly through release");
 }

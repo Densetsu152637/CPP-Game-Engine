@@ -23,6 +23,7 @@ must likewise return to neutral, without suppressing a keyboard binding of the
 same action. Neither OS repeat nor a device reconnect synthesizes a press.
 
 `BindingMap` is a value type suitable for host JSON settings serialization.
+Action names are nonempty opaque string identities: spaces, Unicode bytes and legacy names longer than 64 bytes are preserved exactly. Authored schemas enforce their own name length constraints. Physical binding token names remain the exact registry spellings.
 Validation accepts up to 256 actions, 16 bindings each, and reports invalid or
 duplicate tokens. Sharing a control between UI and gameplay produces advisory
 `BindingConflict` records; callers can request strict rejection. `rebind` is

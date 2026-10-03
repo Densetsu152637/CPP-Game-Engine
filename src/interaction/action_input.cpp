@@ -33,7 +33,7 @@ BindingValidation validateBindings(const BindingMap& bindings, bool strict) {
     BindingValidation result; std::map<std::string,std::vector<std::string>> owners;
     if(bindings.size()>256) result.errors.push_back("At most 256 actions are supported");
     for(const auto& [action,tokens]:bindings) {
-        if(action.empty()||action.size()>64||!std::all_of(action.begin(),action.end(),[](unsigned char c){return c>32&&c<127;})) result.errors.push_back("Invalid action name: "+action);
+        if(action.empty()) result.errors.push_back("Invalid action name: "+action);
         if(tokens.empty()||tokens.size()>16) result.errors.push_back("Action requires 1 to 16 bindings: "+action);
         std::set<std::string> unique;
         for(const auto& token:tokens) { if(!findBinding(token)) result.errors.push_back("Unknown binding: "+token); if(!unique.insert(token).second) result.errors.push_back("Duplicate binding: "+token); else owners[token].push_back(action); }
