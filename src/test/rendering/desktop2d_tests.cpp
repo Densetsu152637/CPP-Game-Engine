@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 void test_desktop2d_rendering()
 {
     using namespace rendering;
@@ -19,6 +20,20 @@ void test_desktop2d_rendering()
                       small.framebufferViewport.y == 5,
                   "Small window fractional fallback mismatch");
     test::require(makeCamera2DView({{320, 180}}, 0, 0).scale == 0, "Minimized camera must skip");
+    constexpr uint32_t maxAxis = std::numeric_limits<uint32_t>::max();
+    const auto largest = makeCamera2DView({{1, 1}}, maxAxis, maxAxis);
+    test::require(largest.framebufferViewport.width == maxAxis &&
+                      largest.framebufferViewport.height == maxAxis && largest.framebufferViewport.x == 0 &&
+                      largest.framebufferViewport.y == 0,
+                  "Maximum framebuffer dimensions must remain bounded without float-to-integer overflow");
+    const auto widest = makeCamera2DView({{maxAxis, 1}}, maxAxis, 1);
+    test::require(widest.framebufferViewport.width == maxAxis && widest.framebufferViewport.height == 1,
+                  "Extreme horizontal camera aspect must fit physical dimensions");
+    const auto fractionalExtreme = makeCamera2DView({{1, maxAxis}}, maxAxis, 1);
+    test::require(fractionalExtreme.framebufferViewport.width == 1 &&
+                      fractionalExtreme.framebufferViewport.height == 1 &&
+                      fractionalExtreme.framebufferViewport.x == (maxAxis - 1) / 2,
+                  "Extreme fractional camera aspect must retain a positive bounded viewport");
     Sprite2DDescription sprite;
     sprite.position = {2, 3};
     sprite.size = {4, 2};
@@ -81,6 +96,56 @@ void test_desktop2d_rendering()
     }
     test::require(loadFontAtlas(path, 16, 8).glyphs.size() == 1, "Font JSON import mismatch");
     rejects([&] { loadFontAtlas(path, 2, 2); });
+    auto fontError = [&](const std::string& json) {
+        {
+            std::ofstream file(path, std::ios::binary);
+            file << json;
+        }
+        try
+        {
+            loadFontAtlas(path, 16, 8);
+        }
+        catch (const std::invalid_argument& error)
+        {
+            return std::string(error.what());
+        }
+        throw std::runtime_error("Invalid font JSON was accepted");
+    };
+    auto nestedObjects = [](size_t count) {
+        std::string json;
+        for (size_t n = 0; n < count; ++n)
+            json += "{\"x\":";
+        json += "0";
+        json.append(count, '}');
+        return json;
+    };
+    test::require(fontError(nestedObjects(64)) == "Unknown font field",
+                  "64 nested objects must reach schema validation rather than depth rejection");
+    test::require(fontError(nestedObjects(65)) == "Font JSON nesting exceeds 64 containers",
+                  "65 nested objects must fail before recursive JSON parse");
+    test::require(fontError(nestedObjects(10000)) == "Font JSON nesting exceeds 64 containers",
+                  "Object-only excessive nesting must fail before JSON parse");
+    const auto mixed = std::string("{\"x\":") + std::string(63, '[') + "0" + std::string(63, ']') + "}";
+    test::require(fontError(mixed) == "Unknown font field", "64 mixed containers must pass depth preflight");
+    test::require(fontError(std::string("{\"x\":") + std::string(64, '[') + "0" + std::string(64, ']') +
+                            "}") == "Font JSON nesting exceeds 64 containers",
+                  "Object/array depths must share one limit");
+    test::require(fontError("{\"x\":[}") == "Font JSON has unbalanced containers",
+                  "Mismatched containers were accepted");
+    test::require(fontError("{\"x\":\"unterminated\\\"") == "Font JSON has unterminated string or containers",
+                  "Unterminated escaped string was accepted");
+    test::require(fontError("{\"x\":tru}").starts_with("Invalid font JSON:"),
+                  "Delimiter preflight must preserve JSON syntax validation");
+    const std::string quotedPrefix = R"({"schema":1,"texture":"asset:\"\\)";
+    const std::string quotedFont =
+        quotedPrefix + std::string(1000, '{') + std::string(1000, ']') +
+        R"(","lineHeight":8,"fallback":63,"glyphs":[{"codepoint":63,"source":[0,0,4,6],"advance":5,"bearing":[0,1]}]})";
+    {
+        std::ofstream file(path, std::ios::binary);
+        file << quotedFont;
+    }
+    test::require(loadFontAtlas(path, 16, 8).texture.size() > 2000,
+                  "Quoted braces and escaped quote/backslash must not affect JSON nesting");
     // A real RGBA PNG: each scanline is generated using a zlib uncompressed DEFLATE block.
     std::vector<uint8_t> png = {137, 80, 78, 71, 13, 10, 26, 10};
     auto append32 = [](std::vector<uint8_t>& v, uint32_t n) {
