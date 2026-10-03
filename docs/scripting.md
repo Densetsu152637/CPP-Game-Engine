@@ -125,7 +125,7 @@ Lua stack capacity and apply the same bounds before publishing tables. Malformed
 Lua values and unavailable injected services raise script errors. Save/session
 objects permit finite numbers, booleans, strings, nested string-keyed objects and
 dense arrays, bounded to 1 MiB, 24 nesting levels, 65,536 nodes, and 64 KiB per
-string. Cycles, sparse arrays, mixed key types and function/userdata values are
+string. JSON null, cycles, sparse arrays, mixed key types and function/userdata values are
 rejected. Lua still has no direct filesystem or OS access. Call `state.write({})`
 to explicitly reset session progression; game-specific reducers/events remain
 authored Lua responsibilities.

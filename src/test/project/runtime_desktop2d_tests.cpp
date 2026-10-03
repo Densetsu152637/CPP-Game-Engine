@@ -1,6 +1,7 @@
 #include "project/runtime.h"
 #include "project/desktop_input_bridge.h"
 #include "test/test_assertions.h"
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <fstream>
@@ -161,17 +162,21 @@ namespace
             ok,err=save.write('too-large',{text=string.rep('x',65537)});assert(ok==nil and err)
             local many={};for i=1,65536 do many[i]=true end;ok,err=save.write('too-many',{nodes=many});assert(ok==nil and err)
             local stored;stored,err=save.read('host-deep');assert(stored==nil and err)
+            stored,err=save.read('host-null');assert(stored==nil and err)
             assert(state.write({stillUsable=true}));assert(state.read().stillUsable)
         end})lua");
         auto options=fixture.options();picojson::value nested(picojson::object{{"leaf",picojson::value(true)}});
         for(int i=0;i<27;++i) nested=picojson::value(picojson::object{{"child",nested}});
         test::require(options.persistence->save("host-deep",nested.get<picojson::object>()).has_value(),"host persistence can store data deeper than Lua bridge policy");
         const auto original=options.persistence->load("host-deep")->at("child").serialize();
+        const picojson::object nullable{{"items",picojson::value(picojson::array{picojson::value(),picojson::value(true)})}};
+        test::require(options.persistence->save("host-null",nullable).has_value(),"host null fixture should save");
         project::Runtime runtime(fixture.project,options);test::require(runtime.start().has_value(),"JSON bridge fixture should start");
         const auto tick=runtime.tick();if(!tick) throw std::runtime_error(tick.error().front().message);
         test::require(runtime.running()&&!options.persistence->load("cycle")&&!options.persistence->load("too-deep")&&
             !options.persistence->load("too-large")&&!options.persistence->load("too-many"),"invalid JSON writes must reject without effects or faulting");
         test::require(options.persistence->load("host-deep")->at("child").serialize()==original,"over-limit Lua reads must preserve stored bytes/data");
+        test::require(options.persistence->load("host-null")->at("items").serialize()=="[null,true]","unsupported null reads must preserve stored array shape");
         test::require(runtime.stop().has_value(),"JSON bridge fixture should stop");
     }
 
@@ -197,14 +202,20 @@ namespace
     void rejectedCandidateTeardownCannotMutateHostServices()
     {
         Fixture fixture;
+        const std::vector<std::uint8_t> wav={'R','I','F','F',40,0,0,0,'W','A','V','E','f','m','t',' ',16,0,0,0,
+            1,0,1,0,0x80,0xbb,0,0,0,0x77,1,0,2,0,16,0,'d','a','t','a',4,0,0,0,0,0x40,0,0xc0};
+        fixture.write("cue.wav",std::string(wav.begin(),wav.end()));
+        fixture.project.assets.emplace("cue",project::Asset{"cue","cue.wav","audio"});
         fixture.write("main.lua", "return {on_destroy=function() error('source retirement failed') end}");
         fixture.write("target.lua", R"lua(return {on_destroy=function()
+            local voice,err=audio.play('cue',true);assert(voice==nil and err)
             local ok,err=save.write('candidate-sentinel',{rejected=true}); assert(ok==nil and err)
             ok,err=settings.write({audio={master=0.1}}); assert(ok==nil and err)
             ok,err=audio.volume('master',0.1); assert(ok==nil and err)
-            local voice;voice,err=audio.play('missing');assert(voice==nil and err)
+            engine.log('candidate-teardown-effects-denied')
         end})lua");
-        auto options = fixture.options();
+        auto options = fixture.options();std::vector<std::string> logs;
+        options.log=[&](std::string_view text){logs.emplace_back(text);};
         picojson::object originalSettings{{"unchanged",picojson::value(true)}};
         test::require(options.persistence->saveSettings(originalSettings).has_value(), "baseline settings should be durable");
         options.audio->setBusGain(audio::Bus::Master,0.75f);
@@ -216,6 +227,8 @@ namespace
         test::require(!options.persistence->load("candidate-sentinel") && options.persistence->loadSettings()->at("unchanged").get<bool>(),
             "rejected candidate destruction must preserve durable saves and settings");
         test::require(options.audio->voiceCount()==0, "rejected candidate must not start voices");
+        test::require(std::find(logs.begin(),logs.end(),"candidate-teardown-effects-denied")!=logs.end(),
+            "candidate destruction must execute all guarded effects against a real loaded clip and receive failures");
         auto clip=std::make_shared<audio::Clip>();clip->sampleRate=48000;clip->channels=1;clip->samples={1,1};
         test::require(options.audio->play(clip).has_value(), "baseline mixer probe should play");
         std::array<float,2> mixed{};options.audio->mix(mixed);

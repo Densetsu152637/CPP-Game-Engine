@@ -856,6 +856,7 @@ struct LuaScriptSystem::Impl
     static void validate_json(const picojson::value& value, unsigned depth, size_t& nodes)
     {
         if (depth > 24 || ++nodes > 65536) throw std::runtime_error("save object exceeds depth or node limit");
+        if (value.is<picojson::null>()) throw std::runtime_error("JSON null is unsupported by the Lua save bridge");
         if (value.is<double>() && !std::isfinite(value.get<double>())) throw std::runtime_error("save numbers must be finite");
         if (value.is<std::string>() && value.get<std::string>().size()>65536) throw std::runtime_error("string exceeds service limit");
         if (value.is<picojson::object>()) for(const auto& [key,item]:value.get<picojson::object>())
