@@ -178,10 +178,79 @@ void test_project_template_package_and_runtime_lookup_are_root_scoped()
     project.manifest = "project.json";
     project.scene.source = "scenes/main.json";
     project.assets.emplace("asset:main-script", project::Asset{"asset:main-script", "assets/scripts/main.lua", "script"});
+    write(templateRoot / "assets/scripts/main.lua", "require('helpers.move')\nreturn {}\n");
+    write(templateRoot / "assets/scripts/helpers/move.lua", "return {}\n");
+    write(templateRoot / "assets/image.png", "PNG transport fixture");
+    write(templateRoot / "assets/cue.wav", "WAV transport fixture");
+    write(templateRoot / "assets/font.json", "font transport fixture");
+    project.assets.emplace("asset:module", project::Asset{"asset:module", "assets/scripts/helpers/move.lua", "script"});
+    project.assets.emplace("asset:image", project::Asset{"asset:image", "assets/image.png", "texture"});
+    project.assets.emplace("asset:cue", project::Asset{"asset:cue", "assets/cue.wav", "audio"});
+    project.assets.emplace("asset:font", project::Asset{"asset:font", "assets/font.json", "font"});
     const auto runtime = temp.path / "engine.exe";
     write(runtime, "engine fixture");
     const auto package = tooling::packageProject(project, temp.path / "package", runtime);
     test::require(package && std::filesystem::exists(*package / "bin" / runtime.filename()), "package should include runnable engine binary");
+    auto read = [](const std::filesystem::path& path) { std::ifstream stream(path, std::ios::binary); return std::string(std::istreambuf_iterator<char>(stream), {}); };
+    test::require(read(*package / "PACKAGE.txt").find("engine-notices: omitted") != std::string::npos, "old API explicitly marks omitted engine notices");
+    for (const auto* asset : {"assets/scripts/helpers/move.lua", "assets/image.png", "assets/cue.wav", "assets/font.json"})
+        test::require(read(*package / asset) == read(templateRoot / asset), "declared Lua module and all new asset kinds are preserved byte-for-byte");
+    const auto graphicsRuntime = temp.path / "desktop-build/bin/engine.exe";
+    write(graphicsRuntime, "graphics engine fixture");
+    const auto shaders = graphicsRuntime.parent_path().parent_path() / "shaders";
+    const std::string spirv = std::string("\x03\x02\x23\x07", 4) + std::string(16, '\0');
+    write(shaders / "mesh_textured.vert.spv", spirv); write(shaders / "mesh_textured.frag.spv", spirv);
+    write(shaders / "triangle.vert.spv", spirv); write(shaders / "compiler-secret.txt", "do not export developer files");
+    const auto notices = temp.path / "actual-engine";
+    for (const auto* source : {"LICENSE", "third_party/entt/LICENSE", "third_party/glfw/LICENSE.md", "third_party/picojson/LICENSE", "third_party/stb/LICENSE"}) write(notices / source, std::string("pinned notice: ") + source);
+    write(notices / "third_party/lua/lua.h", "header code\n* Copyright (C) Lua fixture\n* Permission is hereby granted\n* SOFTWARE IS PROVIDED AS IS\n******************************************************************************/\n#endif\n");
+    const auto graphical = tooling::packageProject(project, temp.path / "graphical-package", graphicsRuntime, {}, notices);
+    test::require(graphical.has_value(), "runtime shader autodiscovery and explicit pinned notices should package");
+    test::require(read(*graphical / "shaders/mesh_textured.vert.spv") == spirv && read(*graphical / "shaders/triangle.vert.spv") == spirv, "known compiled shaders copied byte-for-byte");
+    test::require(!std::filesystem::exists(*graphical / "shaders/compiler-secret.txt"), "shader directory export is an allowlist");
+    for (const auto* destination : {"licenses/engine/LICENSE", "licenses/entt/LICENSE", "licenses/glfw/LICENSE.md", "licenses/picojson/LICENSE", "licenses/stb/LICENSE"}) test::require(read(*graphical / destination).starts_with("pinned notice:"), "package uses actual pinned notice contents");
+    const auto luaNotice = read(*graphical / "licenses/lua/LICENSE.txt");
+    test::require(luaNotice.find("Copyright (C) Lua fixture") != std::string::npos && luaNotice.find("Permission is hereby granted") != std::string::npos && luaNotice.find("header code") == std::string::npos, "Lua embedded copyright/permission notice extracted without source code");
+#ifdef _WIN32
+    const auto launcher = read(*graphical / "run.cmd");
+    test::require(launcher.find("\"%~dp0bin/engine.exe\"") != std::string::npos && launcher.find("\"%~dp0project.json\"") != std::string::npos && launcher.find("--shaders \"%~dp0shaders\"") != std::string::npos, "launcher passes absolute package-relative binary, manifest and shader paths");
+#else
+    const auto launcher = read(*graphical / "run.sh");
+    test::require(launcher.find("$package_dir/") != std::string::npos && launcher.find("--shaders \"$package_dir/shaders\"") != std::string::npos, "launcher passes absolute package-relative runtime paths");
+#endif
+    const auto explicitShaders = temp.path / "explicit-shaders";
+    write(explicitShaders / "mesh_textured.vert.spv", spirv); write(explicitShaders / "mesh_textured.frag.spv", spirv);
+    test::require(tooling::packageProject(project, temp.path / "explicit-package", runtime, explicitShaders, notices).has_value(), "explicit shader source packages outside runtime directory");
+    auto missing = tooling::packageProject(project, temp.path / "missing-shaders-package", runtime, temp.path / "missing-shaders", notices);
+    test::require(!missing && !std::filesystem::exists(temp.path / "missing-shaders-package"), "explicit missing shaders do not publish a partial package");
+    std::filesystem::remove(explicitShaders / "mesh_textured.frag.spv");
+    test::require(!tooling::packageProject(project, temp.path / "incomplete-package", runtime, explicitShaders, notices) && !std::filesystem::exists(temp.path / "incomplete-package"), "missing required fragment fails before publication");
+    write(explicitShaders / "mesh_textured.frag.spv", "not compiled SPIR-V");
+    test::require(!tooling::packageProject(project, temp.path / "invalid-shader-package", runtime, explicitShaders, notices), "invalid compiled shader rejected");
+    write(explicitShaders / "mesh_textured.frag.spv", spirv);
+    std::filesystem::remove(notices / "third_party/stb/LICENSE");
+    test::require(!tooling::packageProject(project, temp.path / "missing-notice-package", runtime, explicitShaders, notices) && !std::filesystem::exists(temp.path / "missing-notice-package"), "missing pinned notice prevents publication");
+    write(notices / "third_party/stb/LICENSE", "restored pinned notice");
+    project::Project colliding = project;
+    write(templateRoot / "licenses/lua/LICENSE.txt", "authored notice sentinel");
+    colliding.assets.emplace("asset:notice-collision", project::Asset{"asset:notice-collision", "licenses/lua/LICENSE.txt", "data"});
+    test::require(!tooling::packageProject(colliding, temp.path / "collision-package", runtime, explicitShaders, notices) && !std::filesystem::exists(temp.path / "collision-package"), "supplemental notices cannot overwrite declared authored assets");
+    const auto externalNotices = temp.path / "external-notices"; write(externalNotices / "LICENSE", "external notice sentinel");
+    std::filesystem::remove(notices / "third_party/stb/LICENSE"); std::filesystem::remove(notices / "third_party/stb");
+    externalDirectoryLink(notices / "third_party/stb", externalNotices);
+    test::require(!tooling::packageProject(project, temp.path / "linked-notice-package", runtime, explicitShaders, notices) && !std::filesystem::exists(temp.path / "linked-notice-package"), "actual regular license file reached through escaping source junction cannot publish");
+    std::filesystem::remove(notices / "third_party/stb"); write(notices / "third_party/stb/LICENSE", "restored pinned notice");
+    const auto external = temp.path / "outside.spv"; write(external, spirv);
+    std::filesystem::remove(explicitShaders / "mesh_textured.frag.spv");
+    const auto linkedShader = externalLink(explicitShaders / "mesh_textured.frag.spv", external);
+    // If Windows uses a junction fallback, place it at the required filename via the caller's shader directory.
+    if (linkedShader != explicitShaders / "mesh_textured.frag.spv")
+    {
+        std::filesystem::remove(explicitShaders / "external-link");
+        externalDirectoryLink(explicitShaders / "mesh_textured.frag.spv", temp.path);
+    }
+    test::require(!tooling::packageProject(project, temp.path / "linked-shader-package", runtime, explicitShaders, notices) && !std::filesystem::exists(temp.path / "linked-shader-package"), "runtime shader source links cannot escape shader root");
+    for (const auto& entry : std::filesystem::directory_iterator(temp.path)) test::require(entry.path().filename().string().find(".staging-") == std::string::npos, "failed supplemental packaging cleans task-owned staging");
     const auto script = tooling::locateRuntimeAsset(*package, "assets/scripts/main.lua");
     test::require(script && std::filesystem::exists(*script), "runtime lookup should resolve package assets");
     auto traversal = tooling::locateRuntimeAsset(*package, "../outside.lua");
