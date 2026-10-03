@@ -36,6 +36,20 @@ build/debug-vk0/bin/CPPGameEngine run examples/first-project/project.json --head
 build/debug-vk0/bin/CPPGameEngine editor examples/first-project/project.json
 ```
 
+The [desktop 2D synthetic lab](examples/desktop-2d/README.md) demonstrates the
+implemented Windows desktop runtime: RGBA sprites and atlas text, pixel-snapped
+cameras, deterministic collision and animation, modal input/UI, transactional
+rooms, PCM audio, and separate durable progression/settings. Its shared Lua
+walkthrough exercises both placeholder variants and cross-process restoration.
+See [desktop rendering](docs/desktop-2d-rendering.md),
+[gameplay mechanics](docs/gameplay2d.md), [input/UI](docs/desktop-input-ui.md),
+[audio and persistence](docs/desktop-services.md), and
+[desktop packaging](docs/desktop-packaging.md) for contracts and validation limits.
+This desktop scope does not select game canon or add Steam SDK integration.
+Windows playback is verified; physical audio audibility, subjective visual
+quality and physical gamepad interaction remain manual checks. Desktop extensions
+are not a claim of equivalent mobile or other-platform runtime support.
+
 See the [documentation index](docs/README.md) for project guides and API
 references, [command and packaging usage](docs/commands.md), the
 [project/scene contract](docs/project-format.md), and the [read-only MCP adapter](docs/mcp.md).
