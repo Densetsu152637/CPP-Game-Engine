@@ -53,7 +53,9 @@ ID and explicit Unicode glyphs:
 codepoints, atlas bounds, the explicit fallback glyph, and unknown fields.
 `bearing` is an offset from the top of the line in logical pixels; `advance` is
 the horizontal cursor distance. Empty rectangles allow spacing glyphs. JSON is
-capped at 4 MiB and 65,536 glyphs. The containing project must resolve `texture`
+capped at 4 MiB and 65,536 glyphs. A quote/escape-aware preflight caps combined
+object/array nesting at 64 containers before recursive JSON parsing. The containing
+project must resolve `texture`
 to a declared texture asset and diagnose missing/wrong-kind references.
 
 `makeTextGeometry` decodes strict UTF-8, rejecting overlong encodings, surrogates,

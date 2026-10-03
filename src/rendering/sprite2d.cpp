@@ -29,11 +29,16 @@ namespace rendering
             return result;
         const double fit =
             std::min(double(width) / desc.logicalSize[0], double(height) / desc.logicalSize[1]);
-        result.scale = static_cast<float>(fit >= 1 ? std::floor(fit) : fit);
-        const uint32_t vw =
-            std::max(1u, static_cast<uint32_t>(std::floor(desc.logicalSize[0] * result.scale)));
-        const uint32_t vh =
-            std::max(1u, static_cast<uint32_t>(std::floor(desc.logicalSize[1] * result.scale)));
+        const double scale = fit >= 1 ? std::floor(fit) : fit;
+        result.scale = static_cast<float>(scale);
+        // Float's rounded display scale can exceed UINT32_MAX. Compute dimensions
+        // from the precise scale and bound them by the physical axis before conversion.
+        const auto scaledDimension = [scale](uint32_t logical, uint32_t physical) {
+            const double pixels = std::clamp(std::floor(double(logical) * scale), 1.0, double(physical));
+            return static_cast<uint32_t>(pixels);
+        };
+        const uint32_t vw = scaledDimension(desc.logicalSize[0], width);
+        const uint32_t vh = scaledDimension(desc.logicalSize[1], height);
         result.framebufferViewport = {(width - vw) / 2, (height - vh) / 2, vw, vh};
         const float sx = 2 * desc.pixelsPerUnit / desc.logicalSize[0],
                     sy = -2 * desc.pixelsPerUnit / desc.logicalSize[1];

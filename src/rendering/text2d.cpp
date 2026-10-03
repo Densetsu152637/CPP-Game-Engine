@@ -14,6 +14,44 @@ namespace rendering
         {
             throw std::invalid_argument(text);
         }
+        // Bound recursion before the JSON parser sees any nested containers. Strings
+        // do not contribute depth, and escaped quotes/backslashes must not end them.
+        void checkFontJsonNesting(std::string_view json)
+        {
+            constexpr size_t MaxDepth = 64;
+            std::array<char, MaxDepth> containers{};
+            size_t depth = 0;
+            bool quoted = false, escaped = false;
+            for (const char c : json)
+            {
+                if (quoted)
+                {
+                    if (escaped)
+                        escaped = false;
+                    else if (c == '\\')
+                        escaped = true;
+                    else if (c == '"')
+                        quoted = false;
+                    continue;
+                }
+                if (c == '"')
+                    quoted = true;
+                else if (c == '{' || c == '[')
+                {
+                    if (depth == MaxDepth)
+                        invalid("Font JSON nesting exceeds 64 containers");
+                    containers[depth++] = c;
+                }
+                else if (c == '}' || c == ']')
+                {
+                    if (!depth || (c == '}' ? containers[depth - 1] != '{' : containers[depth - 1] != '['))
+                        invalid("Font JSON has unbalanced containers");
+                    --depth;
+                }
+            }
+            if (quoted || depth)
+                invalid("Font JSON has unterminated string or containers");
+        }
         bool scalar(uint32_t c)
         {
             return c <= 0x10ffff && !(c >= 0xd800 && c <= 0xdfff);
@@ -76,9 +114,15 @@ namespace rendering
         std::ifstream input(path, std::ios::binary | std::ios::ate);
         if (!input || input.tellg() < 0 || input.tellg() > 4 * 1024 * 1024)
             invalid("Font JSON cannot be read or exceeds 4 MiB");
+        const auto length = static_cast<size_t>(input.tellg());
         input.seekg(0);
+        std::string json(length, '\0');
+        input.read(json.data(), static_cast<std::streamsize>(length));
+        if (!input)
+            invalid("Font JSON read failed");
+        checkFontJsonNesting(json);
         picojson::value doc;
-        const auto error = picojson::parse(doc, input);
+        const auto error = picojson::parse(doc, json);
         if (!error.empty())
             throw std::invalid_argument("Invalid font JSON: " + error);
         const auto& o = object(doc);
