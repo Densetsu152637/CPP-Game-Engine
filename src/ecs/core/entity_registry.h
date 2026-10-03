@@ -6,15 +6,13 @@
 
 #include "entity.h"
 #include <entt/entity/registry.hpp>
-#include "../../structs/arraylist.h"
 
 class EntityRegistry
 {
-    ArrayList<EntityRecord> m_records;
     entt::basic_registry<uint64_t> m_registry;
     size_t m_generation = 0;
-
-    void record(uint64_t entity, bool alive);
+    // Deferred reservations advance monotonically even when EnTT has sparse live slots.
+    size_t m_nextIndex = 0;
 
 public:
     Entity create();
@@ -27,10 +25,19 @@ public:
     bool isValidHandle(const Entity& entity) const;
     bool isKnownHandle(const Entity& entity) const;
     Entity makeHandle(size_t index) const;
-    static Entity makeHandle(const EntityRecord& record, size_t index);
+
+    template <typename Func>
+    void eachAlive(Func&& func) const
+    {
+        const auto* entities = m_registry.storage<uint64_t>();
+        for (const auto [entity] : entities->each())
+        {
+            using Traits = entt::entt_traits<uint64_t>;
+            func(Entity{Traits::to_entity(entity), Traits::to_version(entity) + 1});
+        }
+    }
 
     size_t generation() const;
     size_t aliveCount() const;
     size_t nextIndex() const;
-    const ArrayList<EntityRecord>& records() const;
 };

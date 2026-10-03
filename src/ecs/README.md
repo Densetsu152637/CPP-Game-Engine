@@ -24,8 +24,9 @@ membership (`entt::basic_sparse_set`), and multi-component intersections
 (`entt::basic_runtime_view`). Component type IDs use EnTT's type index. Builds
 must define `ENTT_USE_ATOMIC` consistently for concurrent type registration.
 
-`EntityRegistry` is a compatibility adapter; it no longer implements a free
-list. Its records are an iteration snapshot, while validity checks consult EnTT.
+`EntityRegistry` adapts the engine handle format to EnTT identity and iterates
+live entities directly from EnTT. A scalar high-water index preserves deferred
+reservation behavior; EnTT owns entity generations and live membership.
 `Entity::packed()` / `Entity::fromPacked()` preserve the 32-bit index and 32-bit
 engine generation for script handles. Clearing an ECS retains EnTT generations,
 so old handles cannot revive when slots are reused.

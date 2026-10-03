@@ -157,6 +157,15 @@ void test_entt_entity_generations_survive_reuse_and_clear()
     require(!ecs.try_get<Velocity>(original), "destroyed handle exposed a component");
     require(!ecs.hasComponent<Velocity>(reused), "new entity inherited a destroyed component");
     require(!ecs.hasTag<RenderableTag>(reused), "new entity inherited a destroyed tag");
+    ECS sparseEntities;
+    const Entity firstLive = sparseEntities.createEntity();
+    const Entity hole = sparseEntities.createEntity();
+    const Entity lastLive = sparseEntities.createEntity();
+    sparseEntities.destroyEntity(hole);
+    ArrayList<Entity> liveEntities = sparseEntities.view<>().allEntities();
+    require(liveEntities.length() == 2 && liveEntities.contains(firstLive) && liveEntities.contains(lastLive),
+        "entity-only view did not enumerate live native entities across a hole");
+    require(!liveEntities.contains(hole), "entity-only view included a destroyed entity");
     ecs.emplaceComponent<Velocity>(reused, 11);
     ecs.destroyEntity(original);
     require(ecs.hasEntity(reused), "stale destroy removed the recycled entity");
@@ -165,7 +174,28 @@ void test_entt_entity_generations_survive_reuse_and_clear()
     require(!ecs.hasEntity(reused), "clear allowed a stale entity handle to revive");
     require(!ecs.hasEntity(original), "clear reset the original entity generation");
     require(ecs.hasEntity(afterClear), "entity created after clear was invalid");
-    require(ecs.view<>().size() == 1, "entity registry count was wrong after clear/reuse");
+    auto entityView = ecs.view<>();
+    require(entityView.size() == 1, "entity registry count was wrong after clear/reuse");
+    liveEntities = entityView.allEntities();
+    require(liveEntities.length() == 1 && liveEntities[0] == afterClear,
+        "entity-only view retained entities from before clear");
+
+    ecs.beginStructuralDeferral();
+    const Entity canceledReservation = ecs.createEntity();
+    ecs.endStructuralDeferral();
+    ecs.discardDeferredStructuralChanges();
+    require(!ecs.knowsEntityHandle(canceledReservation), "discarded reservation remained a known handle");
+    const Entity immediateAfterCancellation = ecs.createEntity();
+    require(immediateAfterCancellation != canceledReservation,
+        "immediate entity creation revived a canceled reservation");
+    ecs.beginStructuralDeferral();
+    const Entity afterCanceledReservation = ecs.createEntity();
+    ecs.endStructuralDeferral();
+    ecs.flushDeferredStructuralChanges();
+    require(afterCanceledReservation.index > canceledReservation.index,
+        "discarded reservation did not advance the deferred high-water index");
+    require(ecs.hasEntity(afterCanceledReservation), "entity after a canceled reservation did not activate");
+    require(!ecs.hasEntity(canceledReservation), "canceled reservation revived after a later activation");
 
     for (const bool grouped : {false, true})
     {

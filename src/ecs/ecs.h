@@ -172,7 +172,6 @@ class ECS
     bool m_validatingDeferredStructural = false;
     std::vector<Entity> m_deferredReservedEntities;
 
-    static Entity make_handle(const EntityRecord& record, const size_t& index);
     Entity make_handle(const size_t& index) const;
     bool is_alive_index(size_t index) const;
     bool is_known_handle(const Entity& entity) const;
@@ -236,7 +235,9 @@ class ECS
     }
 
     size_t alive_entity_count() const;
-    const ArrayList<EntityRecord>& entity_records() const;
+    template <typename Func>
+    void each_alive_entity(Func&& func) const
+    { m_entities.eachAlive(std::forward<Func>(func)); }
     bool structural_changes_deferred() const;
     void bumpComponentQueryGeneration()
     {

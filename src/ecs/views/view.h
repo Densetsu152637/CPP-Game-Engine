@@ -435,15 +435,10 @@ private:
     template <typename Func>
     void iterate_all_entities(Func& func)
     {
-        const ArrayList<EntityRecord>& records = m_ecs->entity_records();
-        for (size_t i = 0; i < records.length(); ++i)
+        m_ecs->each_alive_entity([this, &func](const Entity& entity)
         {
-            const EntityRecord& record = records[i];
-            if (!record.alive)
-                continue;
-
-            invoke_entity_only_callback(m_ecs->make_handle(record, i), func);
-        }
+            invoke_entity_only_callback(entity, func);
+        });
     }
 
     template <typename PoolTuple>

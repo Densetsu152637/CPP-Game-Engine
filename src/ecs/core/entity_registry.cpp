@@ -1,6 +1,7 @@
-// Entity allocation and generation reuse are owned by EnTT. Records are a
-// compatibility snapshot for existing entity-only iteration, never a free list.
+// Entity allocation, generations, and live iteration are owned by EnTT.
 #include "entity_registry.h"
+
+#include <algorithm>
 
 namespace
 {
@@ -11,20 +12,14 @@ namespace
     { return {Traits::to_entity(entity), Traits::to_version(entity) + 1}; }
 }
 
-void EntityRegistry::record(const uint64_t entity, const bool alive)
-{
-    const Entity value = handle(entity);
-    while (m_records.length() <= value.index)
-        m_records.append(EntityRecord{});
-    m_records[value.index] = EntityRecord{value.version, alive};
-}
-
-Entity EntityRegistry::makeHandle(const EntityRecord& value, const size_t index)
-{ return {index, value.version}; }
 Entity EntityRegistry::makeHandle(const size_t index) const
-{ return index < m_records.length() ? makeHandle(m_records[index], index) : Entity{}; }
+{
+    if (index >= m_nextIndex) return {};
+    const auto version = m_registry.current(static_cast<uint64_t>(index));
+    return {index, version + 1};
+}
 bool EntityRegistry::isAliveIndex(const size_t index) const
-{ return index < m_records.length() && isValidHandle(makeHandle(index)); }
+{ return index < m_nextIndex && isValidHandle(makeHandle(index)); }
 bool EntityRegistry::isValidHandle(const Entity& entity) const
 { return entity.valid() && entity.version != 0 && entity.index < Traits::entity_mask && m_registry.valid(native(entity)); }
 bool EntityRegistry::isKnownHandle(const Entity& entity) const
@@ -32,7 +27,7 @@ bool EntityRegistry::isKnownHandle(const Entity& entity) const
 Entity EntityRegistry::create()
 {
     const auto entity = m_registry.create();
-    record(entity, true);
+    m_nextIndex = std::max(m_nextIndex, static_cast<size_t>(Traits::to_entity(entity)) + 1);
     ++m_generation;
     return handle(entity);
 }
@@ -46,25 +41,25 @@ bool EntityRegistry::activateReserved(const Entity& entity)
         m_registry.destroy(created);
         return false;
     }
-    record(created, true);
+    m_nextIndex = std::max(m_nextIndex, static_cast<size_t>(entity.index) + 1);
     ++m_generation;
     return true;
 }
 void EntityRegistry::invalidateReserved(const Entity& entity)
 {
     if (!entity.valid() || entity.version == 0 || entity.index >= Traits::entity_mask || isValidHandle(entity)) return;
-    if (m_registry.current(static_cast<uint32_t>(entity.index)) != entity.version - 1) return;
+    const auto current = m_registry.current(static_cast<uint64_t>(entity.index));
+    if (current != entity.version - 1 && current != Traits::version_mask) return;
     const auto created = m_registry.create(native(entity));
     if (created != native(entity)) return;
-    const auto version = m_registry.destroy(created);
-    record(Traits::construct(static_cast<uint32_t>(entity.index), version), false);
+    m_registry.destroy(created);
+    m_nextIndex = std::max(m_nextIndex, entity.index + 1);
     ++m_generation;
 }
 bool EntityRegistry::destroy(const Entity& entity)
 {
     if (!isValidHandle(entity)) return false;
-    const auto version = m_registry.destroy(native(entity));
-    record(Traits::construct(static_cast<uint32_t>(entity.index), version), false);
+    m_registry.destroy(native(entity));
     ++m_generation;
     return true;
 }
@@ -72,11 +67,8 @@ void EntityRegistry::clear()
 {
     // Keep EnTT's generations so pre-clear handles can never alias new entities.
     m_registry.clear();
-    for (size_t index = 0; index < m_records.length(); ++index)
-        record(Traits::construct(static_cast<uint32_t>(index), m_registry.current(index)), false);
     ++m_generation;
 }
 size_t EntityRegistry::generation() const { return m_generation; }
 size_t EntityRegistry::aliveCount() const { return m_registry.storage<uint64_t>()->free_list(); }
-size_t EntityRegistry::nextIndex() const { return m_records.length(); }
-const ArrayList<EntityRecord>& EntityRegistry::records() const { return m_records; }
+size_t EntityRegistry::nextIndex() const { return m_nextIndex; }

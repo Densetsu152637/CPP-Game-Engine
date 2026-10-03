@@ -51,9 +51,3 @@ struct Entity
 
 // Sentinel for invalid/null entity (EnTT-compatible naming)
 inline constexpr Entity INVALID_ENTITY{};
-
-struct EntityRecord
-{
-    uint32_t version = 1;
-    bool alive = false;
-};

@@ -6,9 +6,6 @@
 
 #include <algorithm>
 
-Entity ECS::make_handle(const EntityRecord& record, const size_t& index)
-{ return EntityRegistry::makeHandle(record, index); }
-
 Entity ECS::make_handle(const size_t& index) const
 { return m_entities.makeHandle(index); }
 
@@ -34,9 +31,6 @@ bool ECS::is_valid_handle(const Entity& entity) const
 size_t ECS::alive_entity_count() const
 { return m_entities.aliveCount(); }
 
-const ArrayList<EntityRecord>& ECS::entity_records() const
-{ return m_entities.records(); }
-
 Entity ECS::createEntity()
 {
     if (!structural_changes_deferred())
@@ -59,7 +53,7 @@ Entity ECS::createEntityImmediate()
 Entity ECS::reserveEntityForDeferredCreate()
 {
     std::lock_guard lock(m_structuralMutex);
-    const Entity entity{ m_nextDeferredEntityIndex++, EntityRecord {}.version };
+    const Entity entity{ m_nextDeferredEntityIndex++, 1 };
     m_deferredReservedEntities.push_back(entity);
     return entity;
 }
@@ -226,15 +220,11 @@ void ECS::remove_tags_for_entity(const size_t entityIndex)
 
 void ECS::appendAliveEntities(ArrayList<Entity>& entities) const
 {
-    const ArrayList<EntityRecord>& records = entity_records();
-    entities.reserve(records.length());
-
-    for (size_t index = 0; index < records.length(); ++index)
+    entities.reserve(m_entities.aliveCount());
+    m_entities.eachAlive([&entities](const Entity& entity)
     {
-        const EntityRecord& record = records[index];
-        if (record.alive)
-            entities.append(make_handle(record, index));
-    }
+        entities.append(entity);
+    });
 }
 
 void ECS::swapSimBuffers()
