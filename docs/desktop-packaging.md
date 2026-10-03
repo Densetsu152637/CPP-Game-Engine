@@ -27,6 +27,12 @@ Missing notices, escaping source links/junctions or copy failures prevent
 publication. The engine root is never guessed from the authored project root.
 Projects remain responsible for their own content/asset licenses.
 
+Lua dependency indexing uses the restricted runtime's canonical candidate order:
+script-directory `module.lua`, script-directory `module/init.lua`, project-root
+`module.lua`, then project-root `module/init.lua`. Root-qualified names such as
+`require('scripts.progression')` therefore package exactly the files used by
+runtime playback, including nested `init.lua` modules. Dependency records retain
+the declared stable asset IDs. Missing, unindexed or escaping modules fail.
 The package still includes the manifest, startup scene, all indexed declared
 assets and declared Lua module assets. `PACKAGE.txt` records runtime, shader and
 notice status. `run.cmd` and `run.sh` derive an absolute directory from their own
