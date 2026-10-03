@@ -15,6 +15,8 @@
 
 - [ECS design](../src/ecs/README.md): EnTT backend, entity/component storage,
   views, and job behavior.
+- [ECS and legacy utility cleanup](ecs-modernization.md): removed unused APIs,
+  preserved features, current ECS usage, and validation checks.
 - [Lua scripting](scripting.md): script lifecycle, host API, and project-script
   restrictions.
 - [Vulkan rendering](vulkan.md): desktop rendering backend, frame submission,
