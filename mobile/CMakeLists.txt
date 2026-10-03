@@ -60,7 +60,6 @@ set(ENGINE_SOURCES
     "${ROOT}/src/rendering/uniform_registry.cpp"
     "${ROOT}/src/scripting/lua_script_system.cpp"
     "${ROOT}/src/structs/smartstring.cpp"
-    "${ROOT}/src/structs/sparse_bit_field.cpp"
     "${ROOT}/src/structs/vector.cpp"
     "${ROOT}/src/tooling/iteration.cpp"
     "${ROOT}/src/util/string_search.cpp"

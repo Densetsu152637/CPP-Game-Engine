@@ -12,7 +12,6 @@
 #include "rendering/ecs_rendering.h"
 #include "rendering/uniform_registry.h"
 #include "structs/arraylist.h"
-#include "structs/sparse_bit_field.h"
 #include "test/rendering/rendering_test_fakes.h"
 #include "test/test_assertions.h"
 
