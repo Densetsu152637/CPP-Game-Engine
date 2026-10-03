@@ -21,7 +21,6 @@
 #include "core/entity.h"
 #include "core/entity_registry.h"
 #include "core/structural_command_buffer.h"
-#include "pools/tag_pool.h"
 #include "views/view_cache.h"
 #include "../structs/arraylist.h"
 #include "../structs/templates.h"
@@ -49,9 +48,8 @@ namespace ecs
         struct EntityFilter
         {
             EntityFilterMode mode = EntityFilterMode::Include;
-            size_t size = 0;
-            void (*appendEntities)(const ECS&, ArrayList<Entity>&) = nullptr;
-            bool (*matches)(const ECS&, const Entity&) = nullptr;
+            const BackendSet* membership = nullptr;
+            bool active = false;
         };
 
         template <typename T>
@@ -159,7 +157,7 @@ class ECS
     EntityRegistry m_entities;
     ComponentStorageRegistry m_components;
     ecs::DynamicComponentStorage m_dynamicComponents;
-    std::unordered_map<ecs::ComponentTypeId, TagPool> m_tags;
+    std::unordered_map<ecs::ComponentTypeId, ecs::BackendSet> m_tags;
     size_t m_componentQueryGeneration = 0;
     bool m_applyingDeferredStructural = false;
     bool m_deferredComponentQueryDirty = false;
@@ -258,7 +256,7 @@ class ECS
     }
 
     template <typename T>
-    TagPool* tag_pool_if_exists()
+    ecs::BackendSet* tag_pool_if_exists()
     {
         const auto it = m_tags.find(tag_type_id<T>());
         if (it == m_tags.end())
@@ -268,7 +266,7 @@ class ECS
     }
 
     template <typename T>
-    const TagPool* tag_pool_if_exists() const
+    const ecs::BackendSet* tag_pool_if_exists() const
     {
         const auto it = m_tags.find(tag_type_id<T>());
         if (it == m_tags.end())
@@ -278,64 +276,8 @@ class ECS
     }
 
     template <typename T>
-    TagPool& tag_pool()
+    ecs::BackendSet& tag_pool()
     { return m_tags[tag_type_id<T>()]; }
-
-    template <typename Component>
-    static void append_component_entities_for_filter(const ECS& ecs, ArrayList<Entity>& entities)
-    { ecs.template appendComponentEntities<Component>(entities); }
-
-    template <typename Component>
-    static bool component_matches_filter(const ECS& ecs, const Entity& entity)
-    { return ecs.template hasComponent<Component>(entity); }
-
-    template <typename Component>
-    static void append_render_component_entities_for_filter(const ECS& ecs, ArrayList<Entity>& entities)
-    { ecs.template appendRenderComponentEntities<Component>(entities); }
-
-    template <typename Component>
-    static bool render_component_matches_filter(const ECS& ecs, const Entity& entity)
-    { return ecs.template hasRenderComponent<Component>(entity); }
-
-    template <typename Tag>
-    static void append_tag_entities_for_filter(const ECS& ecs, ArrayList<Entity>& entities)
-    { ecs.template appendTagEntities<Tag>(entities); }
-
-    template <typename Tag>
-    static bool tag_matches_filter(const ECS& ecs, const Entity& entity)
-    { return ecs.template hasTag<Tag>(entity); }
-
-    template <typename Component>
-    size_t componentEntityCount() const;
-
-    template <typename T>
-    size_t renderComponentEntityCount() const;
-
-    template <typename T>
-    bool hasComponentIndex(size_t entityIndex) const;
-
-    template <typename T>
-    bool hasRenderComponent(const Entity& entity) const;
-
-    template <typename T>
-    bool hasRenderComponentIndex(size_t entityIndex) const;
-
-    template <typename T>
-    void appendComponentEntities(ArrayList<Entity>& entities) const;
-
-    template <typename T>
-    void appendRenderComponentEntities(ArrayList<Entity>& entities) const;
-
-    template <typename T>
-    size_t tagEntityCount() const;
-
-    template <typename T>
-    bool hasTagIndex(size_t entityIndex) const;
-
-    template <typename T>
-    void appendTagEntities(ArrayList<Entity>& entities) const;
-
-    void appendAliveEntities(ArrayList<Entity>& entities) const;
 
     ArrayList<Entity> filteredEntities(const ArrayList<ecs::query_detail::EntityFilter>& filters) const;
 
@@ -349,11 +291,7 @@ class ECS
     ecs::query_detail::EntityFilter tag_filter(ecs::query_detail::EntityFilterMode mode) const;
 
     template <typename Arg>
-    void append_query_filter(ArrayList<ecs::query_detail::EntityFilter>& filters, ViewStorage storage) const;
-
-    template <typename Arg>
-    void append_exclude_query_filter(ArrayList<ecs::query_detail::EntityFilter>& filters, ViewStorage storage) const;
-
+    ecs::query_detail::EntityFilter query_filter(ecs::query_detail::EntityFilterMode mode, ViewStorage storage) const;
 public:
 
     ECS() = default;
@@ -558,7 +496,7 @@ public:
     bool hasTag(const Entity& entity) const;
 
     template <typename T>
-    const TagPool* tagPoolIfExists() const
+    const ecs::BackendSet* tagPoolIfExists() const
     { return tag_pool_if_exists<T>(); }
 
     template <typename... Filters>
@@ -899,7 +837,10 @@ bool ECS::addTagImmediate(const Entity& entity)
     if (!is_valid_handle(entity))
         return false;
 
-    const bool changed = tag_pool<T>().add(entity.index);
+    ecs::BackendSet& pool = tag_pool<T>();
+    const bool changed = !pool.contains(entity.index);
+    if (changed)
+        pool.push(entity.index);
     if (changed)
         ++m_tagGeneration;
     return changed;
@@ -929,7 +870,7 @@ bool ECS::removeTagImmediate(const Entity& entity)
     if (!is_valid_handle(entity))
         return false;
 
-    TagPool* pool = tag_pool_if_exists<T>();
+    ecs::BackendSet* pool = tag_pool_if_exists<T>();
     const bool changed = nullptr != pool && pool->remove(entity.index);
     if (changed)
         ++m_tagGeneration;
@@ -942,289 +883,94 @@ bool ECS::hasTag(const Entity& entity) const
     if (!is_valid_handle(entity))
         return false;
 
-    const TagPool* pool = tag_pool_if_exists<T>();
+    const ecs::BackendSet* pool = tag_pool_if_exists<T>();
     return nullptr != pool && pool->contains(entity.index);
-}
-
-template <typename T>
-size_t ECS::componentEntityCount() const
-{
-    const ecs::IArchetypePool* archetypePool = archetypePoolForComponent<T>();
-    if (nullptr != archetypePool)
-        return archetypePool->componentSize(ecs::component_type_id<component_key_t<T>>());
-
-    const pool_t<T>* pool = storage_if_exists<T>();
-    return nullptr == pool ? 0 : pool->size();
-}
-
-template <typename T>
-size_t ECS::renderComponentEntityCount() const
-{
-    const ecs::IArchetypePool* archetypePool = renderArchetypePoolForComponent<T>();
-    if (nullptr != archetypePool)
-        return archetypePool->componentSize(ecs::component_type_id<component_key_t<T>>());
-
-    const render_pool_t<T>* pool = render_storage_if_exists<T>();
-    return nullptr == pool ? 0 : pool->size();
-}
-
-template <typename T>
-bool ECS::hasComponentIndex(const size_t entityIndex) const
-{
-    if (!is_alive_index(entityIndex))
-        return false;
-
-    const ecs::IArchetypePool* archetypePool = archetypePoolForComponent<T>();
-    if (nullptr != archetypePool)
-    {
-        return archetypePool->hasComponent(
-            entityIndex,
-            ecs::component_type_id<component_key_t<T>>()
-        );
-    }
-
-    const pool_t<T>* pool = storage_if_exists<T>();
-    return nullptr != pool && pool->contains(entityIndex);
-}
-
-template <typename T>
-bool ECS::hasRenderComponent(const Entity& entity) const
-{
-    if (!is_valid_handle(entity))
-        return false;
-
-    return hasRenderComponentIndex<T>(entity.index);
-}
-
-template <typename T>
-bool ECS::hasRenderComponentIndex(const size_t entityIndex) const
-{
-    if (!is_alive_index(entityIndex))
-        return false;
-
-    const ecs::IArchetypePool* archetypePool = renderArchetypePoolForComponent<T>();
-    if (nullptr != archetypePool)
-    {
-        return archetypePool->hasComponent(
-            entityIndex,
-            ecs::component_type_id<component_key_t<T>>()
-        );
-    }
-
-    const render_pool_t<T>* pool = render_storage_if_exists<T>();
-    return nullptr != pool && pool->contains(entityIndex);
 }
 
 template <typename Component>
 ecs::query_detail::EntityFilter ECS::component_filter(const ecs::query_detail::EntityFilterMode mode) const
 {
-    return ecs::query_detail::EntityFilter {
-        mode,
-        componentEntityCount<Component>(),
-        &append_component_entities_for_filter<Component>,
-        &component_matches_filter<Component>
-    };
+    const ecs::IArchetypePool* archetypePool = archetypePoolForComponent<Component>();
+    if (nullptr != archetypePool)
+        return { mode, &archetypePool->componentBackend(ecs::component_type_id<component_key_t<Component>>()), true };
+    const pool_t<Component>* pool = storage_if_exists<Component>();
+    return { mode, nullptr == pool ? nullptr : &pool->backend(), true };
 }
 
 template <typename Component>
 ecs::query_detail::EntityFilter ECS::render_component_filter(const ecs::query_detail::EntityFilterMode mode) const
 {
-    return ecs::query_detail::EntityFilter {
-        mode,
-        renderComponentEntityCount<Component>(),
-        &append_render_component_entities_for_filter<Component>,
-        &render_component_matches_filter<Component>
-    };
+    const ecs::IArchetypePool* archetypePool = renderArchetypePoolForComponent<Component>();
+    if (nullptr != archetypePool)
+        return { mode, &archetypePool->componentBackend(ecs::component_type_id<component_key_t<Component>>()), true };
+    const render_pool_t<Component>* pool = render_storage_if_exists<Component>();
+    return { mode, nullptr == pool ? nullptr : &pool->backend(), true };
 }
 
 template <typename Tag>
 ecs::query_detail::EntityFilter ECS::tag_filter(const ecs::query_detail::EntityFilterMode mode) const
 {
-    return ecs::query_detail::EntityFilter {
-        mode,
-        tagEntityCount<Tag>(),
-        &append_tag_entities_for_filter<Tag>,
-        &tag_matches_filter<Tag>
-    };
+    const ecs::BackendSet* pool = tag_pool_if_exists<Tag>();
+    return { mode, pool, true };
 }
 
 template <typename Arg>
-void ECS::append_exclude_query_filter(
-    ArrayList<ecs::query_detail::EntityFilter>& filters,
+ecs::query_detail::EntityFilter ECS::query_filter(
+    const ecs::query_detail::EntityFilterMode mode,
     const ViewStorage storage
 ) const
 {
-    using Target = ecs::excluded_filter_t<Arg>;
-
-    if constexpr (std::is_void_v<Target>)
-    {
-        (void)filters;
-        (void)storage;
-    }
-    else if constexpr (ecs::query_detail::is_tag_v<Target>)
-    {
-        filters.append(tag_filter<ecs::tag_name_t<Target>>(ecs::query_detail::EntityFilterMode::Exclude));
-    }
-    else if constexpr (ecs::query_detail::is_shared_v<Target>)
-    {
-        using Component = ecs::query_detail::shared_component_t<Target>;
-        if (ViewStorage::Rendering == storage)
-            filters.append(render_component_filter<Component>(ecs::query_detail::EntityFilterMode::Exclude));
-        else
-            filters.append(component_filter<Component>(ecs::query_detail::EntityFilterMode::Exclude));
-    }
-    else if constexpr (ecs::query_detail::is_dirty_v<Target>)
-    {
-        using Component = ecs::query_detail::dirty_component_t<Target>;
-        if (ViewStorage::Rendering == storage)
-            filters.append(render_component_filter<Component>(ecs::query_detail::EntityFilterMode::Exclude));
-        else
-            filters.append(component_filter<Component>(ecs::query_detail::EntityFilterMode::Exclude));
-    }
-    else if constexpr (ecs::query_detail::is_query_component_v<Target>)
-    {
-        using Component = std::remove_cvref_t<Target>;
-        if (ViewStorage::Rendering == storage)
-            filters.append(render_component_filter<Component>(ecs::query_detail::EntityFilterMode::Exclude));
-        else
-            filters.append(component_filter<Component>(ecs::query_detail::EntityFilterMode::Exclude));
-    }
-}
-
-template <typename Arg>
-void ECS::append_query_filter(ArrayList<ecs::query_detail::EntityFilter>& filters, const ViewStorage storage) const
-{
     using CleanArg = std::remove_cvref_t<Arg>;
-
     if constexpr (ecs::query_detail::is_exclude_v<CleanArg>)
     {
-        append_exclude_query_filter<CleanArg>(filters, storage);
+        using Target = ecs::excluded_filter_t<CleanArg>;
+        if constexpr (ecs::query_detail::is_tag_v<Target>)
+            return tag_filter<ecs::tag_name_t<Target>>(mode);
+        else if constexpr (ecs::query_detail::is_shared_v<Target>)
+        {
+            using Component = ecs::query_detail::shared_component_t<Target>;
+            return ViewStorage::Rendering == storage ? render_component_filter<Component>(mode) : component_filter<Component>(mode);
+        }
+        else if constexpr (ecs::query_detail::is_dirty_v<Target>)
+        {
+            using Component = ecs::query_detail::dirty_component_t<Target>;
+            return ViewStorage::Rendering == storage ? render_component_filter<Component>(mode) : component_filter<Component>(mode);
+        }
+        else if constexpr (ecs::query_detail::is_query_component_v<Target>)
+        {
+            using Component = std::remove_cvref_t<Target>;
+            return ViewStorage::Rendering == storage ? render_component_filter<Component>(mode) : component_filter<Component>(mode);
+        }
+        else return { mode, nullptr, false };
     }
     else if constexpr (ecs::query_detail::is_tag_v<CleanArg>)
-    {
-        filters.append(tag_filter<ecs::tag_name_t<CleanArg>>(ecs::query_detail::EntityFilterMode::Include));
-    }
+        return tag_filter<ecs::tag_name_t<CleanArg>>(mode);
     else if constexpr (ecs::query_detail::is_shared_v<CleanArg>)
     {
         using Component = ecs::query_detail::shared_component_t<CleanArg>;
-        if (ViewStorage::Rendering == storage)
-            filters.append(render_component_filter<Component>(ecs::query_detail::EntityFilterMode::Include));
-        else
-            filters.append(component_filter<Component>(ecs::query_detail::EntityFilterMode::Include));
+        return ViewStorage::Rendering == storage ? render_component_filter<Component>(mode) : component_filter<Component>(mode);
     }
     else if constexpr (ecs::query_detail::is_dirty_v<CleanArg>)
     {
         using Component = ecs::query_detail::dirty_component_t<CleanArg>;
-        if (ViewStorage::Rendering == storage)
-            filters.append(render_component_filter<Component>(ecs::query_detail::EntityFilterMode::Include));
-        else
-            filters.append(component_filter<Component>(ecs::query_detail::EntityFilterMode::Include));
+        return ViewStorage::Rendering == storage ? render_component_filter<Component>(mode) : component_filter<Component>(mode);
     }
     else if constexpr (ecs::query_detail::is_query_component_v<CleanArg>)
     {
         using Component = CleanArg;
-        if (ViewStorage::Rendering == storage)
-            filters.append(render_component_filter<Component>(ecs::query_detail::EntityFilterMode::Include));
-        else
-            filters.append(component_filter<Component>(ecs::query_detail::EntityFilterMode::Include));
+        return ViewStorage::Rendering == storage ? render_component_filter<Component>(mode) : component_filter<Component>(mode);
     }
-}
-
-template <typename T>
-void ECS::appendComponentEntities(ArrayList<Entity>& entities) const
-{
-    const ecs::IArchetypePool* archetypePool = archetypePoolForComponent<T>();
-    if (nullptr != archetypePool)
-    {
-        const ecs::ComponentTypeId componentTypeId = ecs::component_type_id<component_key_t<T>>();
-        const size_t componentCount = archetypePool->componentSize(componentTypeId);
-        for (size_t denseIndex = 0; denseIndex < componentCount; ++denseIndex)
-        {
-            const size_t entityIndex = archetypePool->componentEntityAt(componentTypeId, denseIndex);
-            if (is_alive_index(entityIndex))
-                entities.append(make_handle(entityIndex));
-        }
-        return;
-    }
-
-    const pool_t<T>* pool = storage_if_exists<T>();
-    if (nullptr == pool)
-        return;
-
-    for (size_t denseIndex = 0; denseIndex < pool->size(); ++denseIndex)
-    {
-        const size_t entityIndex = pool->entity_at(denseIndex);
-        if (is_alive_index(entityIndex))
-            entities.append(make_handle(entityIndex));
-    }
-}
-
-template <typename T>
-void ECS::appendRenderComponentEntities(ArrayList<Entity>& entities) const
-{
-    const ecs::IArchetypePool* archetypePool = renderArchetypePoolForComponent<T>();
-    if (nullptr != archetypePool)
-    {
-        const ecs::ComponentTypeId componentTypeId = ecs::component_type_id<component_key_t<T>>();
-        const size_t componentCount = archetypePool->componentSize(componentTypeId);
-        for (size_t denseIndex = 0; denseIndex < componentCount; ++denseIndex)
-        {
-            const size_t entityIndex = archetypePool->componentEntityAt(componentTypeId, denseIndex);
-            if (is_alive_index(entityIndex))
-                entities.append(make_handle(entityIndex));
-        }
-        return;
-    }
-
-    const render_pool_t<T>* pool = render_storage_if_exists<T>();
-    if (nullptr == pool)
-        return;
-
-    for (size_t denseIndex = 0; denseIndex < pool->size(); ++denseIndex)
-    {
-        const size_t entityIndex = pool->entity_at(denseIndex);
-        if (is_alive_index(entityIndex))
-            entities.append(make_handle(entityIndex));
-    }
-}
-
-template <typename T>
-size_t ECS::tagEntityCount() const
-{
-    const TagPool* pool = tag_pool_if_exists<T>();
-    return nullptr == pool ? 0 : pool->size();
-}
-
-template <typename T>
-bool ECS::hasTagIndex(const size_t entityIndex) const
-{
-    if (!is_alive_index(entityIndex))
-        return false;
-
-    const TagPool* pool = tag_pool_if_exists<T>();
-    return nullptr != pool && pool->contains(entityIndex);
-}
-
-template <typename T>
-void ECS::appendTagEntities(ArrayList<Entity>& entities) const
-{
-    const TagPool* pool = tag_pool_if_exists<T>();
-    if (nullptr == pool)
-        return;
-
-    const ArrayList<size_t>& entityIndices = pool->entity_indices();
-    for (const size_t entityIndex : entityIndices)
-    {
-        if (is_alive_index(entityIndex))
-            entities.append(make_handle(entityIndex));
-    }
+    else return { mode, nullptr, false };
 }
 
 template <typename... Filters>
 ArrayList<Entity> ECS::matchingEntities() const
 {
     ArrayList<ecs::query_detail::EntityFilter> filters(sizeof...(Filters));
-    (append_query_filter<Filters>(filters, ViewStorage::Simulation), ...);
+    (filters.append(query_filter<Filters>(
+        ecs::query_detail::is_exclude_v<Filters> ? ecs::query_detail::EntityFilterMode::Exclude : ecs::query_detail::EntityFilterMode::Include,
+        ViewStorage::Simulation
+    )), ...);
     return filteredEntities(filters);
 }
 
@@ -1232,7 +978,10 @@ template <typename... Filters>
 ArrayList<Entity> ECS::renderMatchingEntities() const
 {
     ArrayList<ecs::query_detail::EntityFilter> filters(sizeof...(Filters));
-    (append_query_filter<Filters>(filters, ViewStorage::Rendering), ...);
+    (filters.append(query_filter<Filters>(
+        ecs::query_detail::is_exclude_v<Filters> ? ecs::query_detail::EntityFilterMode::Exclude : ecs::query_detail::EntityFilterMode::Include,
+        ViewStorage::Rendering
+    )), ...);
     return filteredEntities(filters);
 }
 

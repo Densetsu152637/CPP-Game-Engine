@@ -44,6 +44,7 @@ public:
     { return ecs::component_type_name<T>(); }
 
     ecs::BackendSet& backend() { return readSet().backend(); }
+    const ecs::BackendSet& backend() const { return readSet().backend(); }
 
     size_t size() const override
     { return readSet().size(); }

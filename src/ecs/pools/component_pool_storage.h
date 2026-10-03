@@ -43,6 +43,7 @@ public:
     { return m_storage; }
 
     ecs::BackendSet& backend() { return m_storage.backend(); }
+    const ecs::BackendSet& backend() const { return m_storage.backend(); }
 
     size_t size() const
     { return m_storage.size(); }

@@ -218,15 +218,6 @@ void ECS::remove_tags_for_entity(const size_t entityIndex)
         ++m_tagGeneration;
 }
 
-void ECS::appendAliveEntities(ArrayList<Entity>& entities) const
-{
-    entities.reserve(m_entities.aliveCount());
-    m_entities.eachAlive([&entities](const Entity& entity)
-    {
-        entities.append(entity);
-    });
-}
-
 void ECS::swapSimBuffers()
 { m_components.swapSimulationBuffers(); }
 
@@ -236,80 +227,52 @@ void ECS::swapRenderBuffers()
     ++m_renderQueryGeneration;
 }
 
-static void apply_entity_filter(
-    const ECS& ecs,
-    ArrayList<Entity>& entities,
-    const ecs::query_detail::EntityFilter& filter,
-    const bool keepMatches
-) {
-    ArrayList<Entity> filtered(entities.length());
-    for (const Entity& entity : entities)
-    {
-        const bool matches = nullptr != filter.matches && filter.matches(ecs, entity);
-        if (matches == keepMatches)
-            filtered.append(entity);
-    }
-
-    entities = std::move(filtered);
-}
-
 ArrayList<Entity> ECS::filteredEntities(const ArrayList<ecs::query_detail::EntityFilter>& filters) const
 {
-    ArrayList<ecs::query_detail::EntityFilter> includeFilters(filters.length());
-    ArrayList<ecs::query_detail::EntityFilter> excludeFilters(filters.length());
-
+    ecs::BackendView view;
+    bool hasInclude = false;
     for (const ecs::query_detail::EntityFilter& filter : filters)
     {
-        if (nullptr == filter.matches)
+        if (!filter.active)
             continue;
 
         if (ecs::query_detail::EntityFilterMode::Exclude == filter.mode)
-            excludeFilters.append(filter);
+        {
+            if (nullptr != filter.membership)
+                view.exclude(*filter.membership);
+        }
         else
-            includeFilters.append(filter);
+        {
+            if (nullptr == filter.membership)
+                return {};
+            view.iterate(*filter.membership);
+            hasInclude = true;
+        }
     }
-
-    includeFilters.sort([](
-        const ecs::query_detail::EntityFilter& lhs,
-        const ecs::query_detail::EntityFilter& rhs
-    )
-    {
-        return lhs.size < rhs.size;
-    });
-
-    excludeFilters.sort([](
-        const ecs::query_detail::EntityFilter& lhs,
-        const ecs::query_detail::EntityFilter& rhs
-    )
-    {
-        return lhs.size < rhs.size;
-    });
 
     ArrayList<Entity> entities;
-    if (includeFilters.empty())
+    if (!hasInclude)
     {
-        appendAliveEntities(entities);
+        entities.reserve(m_entities.aliveCount());
+        m_entities.eachAlive([&](const Entity& entity)
+        {
+            const bool excluded = std::any_of(filters.begin(), filters.end(), [&](const auto& filter)
+            {
+                return ecs::query_detail::EntityFilterMode::Exclude == filter.mode
+                    && nullptr != filter.membership
+                    && filter.membership->contains(entity.index);
+            });
+            if (!excluded)
+                entities.append(entity);
+        });
+        return entities;
     }
-    else
+
+    for (const auto backendEntity : view)
     {
-        if (0 == includeFilters[0].size || nullptr == includeFilters[0].appendEntities)
-            return entities;
-
-        entities.reserve(includeFilters[0].size);
-        includeFilters[0].appendEntities(*this, entities);
-        for (size_t filterIndex = 1; filterIndex < includeFilters.length() && !entities.empty(); ++filterIndex)
-            apply_entity_filter(*this, entities, includeFilters[filterIndex], true);
-    }
-
-    for (const ecs::query_detail::EntityFilter& filter : excludeFilters)
-    {
-        if (entities.empty())
-            break;
-
-        if (0 == filter.size)
-            continue;
-
-        apply_entity_filter(*this, entities, filter, false);
+        const size_t entityIndex = static_cast<size_t>(backendEntity);
+        if (is_alive_index(entityIndex))
+            entities.append(make_handle(entityIndex));
     }
 
     return entities;

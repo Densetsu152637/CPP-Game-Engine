@@ -44,8 +44,8 @@ The remaining pool/registry classes implement engine policies that EnTT does
 not supply: dirty transfer, double-buffer publication, shared-value interning,
 explicit tuple grouping and migration, structural deferral, and job scheduling.
 Shared-value pools intern a value once per equality group and keep the
-entity-to-group mapping in EnTT. The general-purpose `src/structs/sparse_set.h`
-and bit fields remain for non-ECS consumers; ECS storage no longer uses them.
+entity-to-group mapping in EnTT. The retired general-purpose sparse-set, page,
+and bit-field utilities are no longer part of the supported engine utility API.
 
 EnTT uses paged component storage. `denseComponents<T>()` therefore returns a
 lightweight range **by value**, not an `ArrayList&`; indexing and iteration still
@@ -63,6 +63,11 @@ same ECS component.
 struct PositionTag {};
 struct VelocityTag {};
 struct MeshTag {};
+struct MeshStruct
+{
+    int id;
+    bool operator==(const MeshStruct&) const = default;
+};
 
 using Position = ecs::BufferedAlias<Vector3f, PositionTag>;
 using Velocity = ecs::Alias<Vector3f, VelocityTag>;
@@ -143,8 +148,15 @@ pipeline as job declarations. Supported filters include:
   shared filter.
 - `ecs::Shared<T>`: include entities that have the shared alias component.
 
-The query pipeline sorts include and exclude filters by source size, starting
-from the smallest include set to reduce matching work.
+EnTT runtime views intersect native membership sets and start from their
+smallest include set. Excludes are native runtime-view filters. Queries with no
+include source enumerate live identities and check any exclusions by entity
+index. Missing include sources produce no matches; missing exclude sources have
+no effect.
+
+`tagPoolIfExists<T>()` exposes the tag's const EnTT sparse set directly. Iterate
+that range or use its native membership operations; tags do not maintain a
+separate entity-index snapshot.
 
 ## ECSProcessor
 
@@ -209,14 +221,12 @@ Supported declaration arguments:
 - `ecs::Exclude<T>`: filter, not passed to the callable.
 - `ecs::Shared<T>`: shared alias filter and component argument.
 
-Example from `src/components/systems.cpp`:
-
 ```cpp
-sim.queue_into_sim<Velocity3D, ecs::Dirty<Position3D>>(
-    "MOVEMENT_SYSTEM_3D",
-    [&engine](const Velocity3D& velocity, Position3D& position)
+sim.queue_into_sim<Velocity, ecs::Dirty<Position>>(
+    "movement",
+    [](const Velocity& velocity, Position& position)
     {
-        position = position + (velocity * engine.upsMs());
+        position = position + velocity;
     }
 );
 ```
@@ -236,9 +246,9 @@ Using the component type directly treats it like any other component. The job
 iterates entities in parallel.
 
 ```cpp
-sim.queue_into_sim<Velocity3D, ecs::Dirty<Position3D>, Mesh>(
+sim.queue_into_sim<Velocity, ecs::Dirty<Position>, Mesh>(
     "entity_mesh_iteration",
-    [](const Velocity3D& velocity, Position3D& position, Mesh& mesh)
+    [](const Velocity& velocity, Position& position, Mesh& mesh)
     {
         // One parallel task chunk can contain any entities.
     }
@@ -253,9 +263,9 @@ per unique shared value. Inside a shared batch, entities are visited
 sequentially.
 
 ```cpp
-sim.queue_into_sim<Velocity3D, ecs::Dirty<Position3D>, ecs::Shared<Mesh>>(
+sim.queue_into_sim<Velocity, ecs::Dirty<Position>, ecs::Shared<Mesh>>(
     "shared_mesh_iteration",
-    [](const Velocity3D& velocity, Position3D& position, Mesh& mesh)
+    [](const Velocity& velocity, Position& position, Mesh& mesh)
     {
         // Runs sequentially for entities using the same Mesh.
         // Different Mesh values can be processed in parallel.
@@ -332,9 +342,9 @@ oversubscribing the pool with nested parallel work.
 Render jobs are queued separately from simulation walls:
 
 ```cpp
-sim.queue_into_rendering<Position3D, ecs::Tag<ExampleTag>>(
+sim.queue_into_rendering<Position, ecs::Tag<ExampleTag>>(
     "draw",
-    [](const Position3D& position)
+    [](const Position& position)
     {
         // Render storage, const component refs.
     }
@@ -349,12 +359,12 @@ callables are const.
 components bound on the shader object:
 
 ```cpp
-shader.bindComponent<Position3D>("u_position");
-shader.bindComponent<Velocity3D>("u_velocity");
+shader.bindComponent<Position>("u_position");
+shader.bindComponent<Velocity>("u_velocity");
 
 rendering::queue_shader_rendering<
-    Position3D,
-    Velocity3D,
+    Position,
+    Velocity,
     ecs::Shared<Mesh>,
     ecs::Tag<ExampleTag>
 >(sim, "ENTITY_RENDERING_EXAMPLE", renderer, shader);

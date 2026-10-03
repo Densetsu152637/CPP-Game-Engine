@@ -48,6 +48,9 @@ public:
     size_t size() const override
     { return m_entityGroupIndex.size(); }
 
+    ecs::BackendSet& backend() { return m_entityGroupIndex.backend(); }
+    const ecs::BackendSet& backend() const { return m_entityGroupIndex.backend(); }
+
     bool contains(const size_t entityIndex) const
     { return m_entityGroupIndex.contains(entityIndex); }
 
@@ -161,8 +164,6 @@ public:
     {
         return m_entityGroupIndex.index_of(entityIndex);
     }
-
-    ecs::BackendSet& backend() { return m_entityGroupIndex.backend(); }
 
     void swapBuffers() override
     {}

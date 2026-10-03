@@ -117,6 +117,7 @@ public:
     { return ecs::component_type_name<T>(); }
 
     ecs::BackendSet& backend() { return m_storage.backend(); }
+    const ecs::BackendSet& backend() const { return m_storage.backend(); }
 
     size_t size() const override
     { return m_storage.size(); }

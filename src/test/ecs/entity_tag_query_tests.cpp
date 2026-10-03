@@ -14,7 +14,7 @@ void test_ecs_tags_track_entities_and_cleanup()
     require(!ecs.hasTag<RenderableTag>(second), "untagged entity reported tag");
     require(!ecs.addTag<RenderableTag>(first), "adding an existing tag should return false");
 
-    const TagPool* pool = ecs.tagPoolIfExists<RenderableTag>();
+    const ecs::BackendSet* pool = ecs.tagPoolIfExists<RenderableTag>();
     require(nullptr != pool, "tag pool was not created");
     require(pool->size() == 1, "tag pool had wrong size after add");
 
@@ -40,17 +40,24 @@ void test_tag_pool_keeps_dense_entities()
     ecs.addTag<RenderableTag>(third);
     ecs.removeTag<RenderableTag>(second);
 
-    const TagPool* pool = ecs.tagPoolIfExists<RenderableTag>();
+    const ecs::BackendSet* pool = ecs.tagPoolIfExists<RenderableTag>();
     require(nullptr != pool, "dense tag pool was not created");
     require(pool->size() == 2, "dense tag pool had wrong size after removal");
     require(pool->contains(first.index), "dense tag pool lost first tagged entity");
     require(!pool->contains(second.index), "dense tag pool kept removed entity");
     require(pool->contains(third.index), "dense tag pool lost swapped tagged entity");
 
-    const ArrayList<size_t>& entities = pool->entity_indices();
-    require(entities.length() == 2, "dense tag entity list had wrong length");
-    require(entities.contains(first.index), "dense tag entity list missed first entity");
-    require(entities.contains(third.index), "dense tag entity list missed third entity");
+    size_t rangeCount = 0;
+    bool foundFirst = false;
+    bool foundThird = false;
+    for (const auto entityIndex : *pool)
+    {
+        ++rangeCount;
+        foundFirst = foundFirst || static_cast<size_t>(entityIndex) == first.index;
+        foundThird = foundThird || static_cast<size_t>(entityIndex) == third.index;
+    }
+    require(rangeCount == 2, "native tag range had wrong size");
+    require(foundFirst && foundThird, "native tag range missed a surviving entity");
 }
 
 void test_entities_can_be_created_with_tags()
@@ -126,6 +133,21 @@ void test_filtered_query_uses_tags_and_excludes()
         "matchingEntities returned the wrong filtered entity"
     );
 
+    struct MissingQueryComponent {};
+    require(ecs.matchingEntities<MissingQueryComponent>().empty(), "missing included source should produce no matches");
+    require(ecs.matchingEntities<ecs::Exclude<MissingQueryComponent>>().length() == 4,
+        "missing excluded source should be ignored");
+    require(ecs.matchingEntities<Velocity, Velocity>().length() == 4,
+        "repeated include source changed the result");
+    require(ecs.matchingEntities<Velocity, ecs::Exclude<Velocity>>().empty(),
+        "contradictory include/exclude sources should produce no matches");
+    require(ecs.matchingEntities<ecs::Exclude<Health>>().length() == 3,
+        "exclude-only query did not enumerate live entities through identity");
+    require(ecs.matchingEntities<Entity>().length() == 4,
+        "Entity declaration should remain a non-filtering argument");
+    require(ecs.matchingEntities<ecs::ViewOf<Health>>().length() == 4,
+        "ViewOf declaration should remain a non-filtering argument");
+
     auto query = ecs.query<Velocity, ecs::Tag<RenderableTag>, ecs::Exclude<ecs::Tag<SelectedTag>>>();
     require(query.size() == 2, "filtered query had wrong initial size");
 
@@ -139,6 +161,47 @@ void test_filtered_query_uses_tags_and_excludes()
 
     ecs.addTag<SelectedTag>(third);
     require(query.size() == 1, "filtered query cache did not invalidate after tag change");
+
+    struct ExtraMembership {};
+    ECS mixed;
+    const Entity grouped = mixed.createEntity();
+    const Entity partial = mixed.createEntity();
+    mixed.emplaceComponent<Velocity>(grouped, 10);
+    mixed.emplaceComponent<Health>(grouped, 20);
+    mixed.emplaceComponent<Velocity>(partial, 30);
+    mixed.emplaceComponent<ExtraMembership>(partial);
+    mixed.registerArchetype<Velocity, Health>();
+    const auto mixedMatches = mixed.matchingEntities<Velocity, ExtraMembership>();
+    require(mixedMatches.length() == 1 && mixedMatches[0] == partial,
+        "native query did not intersect partial archetype and standalone membership");
+
+    for (const bool grouped : { false, true })
+    {
+        Threadpool renderPool(1, std::string("query-publication-test"));
+        ECSProcessor processor(renderPool);
+        ECS& rendered = processor.ecs();
+        if (grouped)
+            processor.registerRenderArchetype<Health, Velocity>();
+        processor.queue_into_rendering<Health>("query-publication", [](const Health&) {});
+
+        const Entity renderEntity = rendered.createEntity();
+        rendered.emplaceComponent<Velocity>(renderEntity, 1);
+        processor.simulate();
+        processor.render();
+        require(rendered.render_query<Health>().empty(), "unexpected initial render query membership");
+
+        rendered.emplaceComponent<Health>(renderEntity, 5);
+        processor.simulate();
+        require(rendered.render_query<Health>().empty(), "render query exposed component before publication");
+        processor.render();
+        require(rendered.render_query<Health>().size() == 1, "render query missed published component membership");
+
+        rendered.removeComponent<Health>(renderEntity);
+        processor.simulate();
+        require(rendered.render_query<Health>().size() == 1, "render query lost membership before removal publication");
+        processor.render();
+        require(rendered.render_query<Health>().empty(), "render query retained removed published membership");
+    }
 }
 
 void test_entt_entity_generations_survive_reuse_and_clear()

@@ -73,6 +73,7 @@ namespace ecs
         virtual ~IArchetypePool() = default;
         virtual const std::vector<ComponentTypeId>& componentTypes() const = 0;
         virtual BackendSet& componentBackend(ComponentTypeId componentTypeId) = 0;
+        virtual const BackendSet& componentBackend(ComponentTypeId componentTypeId) const = 0;
         virtual size_t size() const = 0;
         virtual size_t componentSize(ComponentTypeId componentTypeId) const = 0;
         virtual size_t componentEntityAt(ComponentTypeId componentTypeId, size_t componentDenseIndex) const = 0;
@@ -273,6 +274,13 @@ namespace ecs
         { return m_componentTypes; }
 
         BackendSet& componentBackend(const ComponentTypeId componentTypeId) override
+        {
+            const size_t index = componentIndex(componentTypeId);
+            if (N_POS == index) throw std::out_of_range("Archetype component does not exist");
+            return m_presentEntities[index];
+        }
+
+        const BackendSet& componentBackend(const ComponentTypeId componentTypeId) const override
         {
             const size_t index = componentIndex(componentTypeId);
             if (N_POS == index) throw std::out_of_range("Archetype component does not exist");

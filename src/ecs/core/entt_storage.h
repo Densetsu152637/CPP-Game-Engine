@@ -11,7 +11,7 @@ namespace ecs
 {
     using BackendEntity = uint64_t;
     using BackendSet = entt::basic_sparse_set<BackendEntity>;
-    using BackendView = entt::basic_runtime_view<BackendSet>;
+    using BackendView = entt::basic_runtime_view<const BackendSet>;
 
     // A compatibility facade over EnTT's paged storage. EnTT owns both the
     // component objects and the sparse/dense membership maps.
