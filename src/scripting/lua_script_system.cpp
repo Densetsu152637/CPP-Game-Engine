@@ -226,7 +226,7 @@ struct LuaScriptSystem::Impl
             lua_newtable(state);
             const std::vector<const char*> names = std::string_view(space) == "ui" ?
                 std::vector<const char*>{"open", "close", "set_text", "scroll", "event"} : std::string_view(space) == "audio" ?
-                std::vector<const char*>{"play", "stop", "volume"} : std::string_view(space) == "save" ? std::vector<const char*>{"read", "write", "recover"} : std::vector<const char*>{"read", "write"};
+                std::vector<const char*>{"play", "stop", "volume", "source", "configure", "control", "remove", "source_state", "listener", "observe", "unobserve", "emit"} : std::string_view(space) == "save" ? std::vector<const char*>{"read", "write", "recover"} : std::vector<const char*>{"read", "write"};
             for (const auto* field : names) { const auto service = std::string(space) + "." + field; add_service(field, service.c_str()); }
             lua_setfield(state, -2, space);
         }
@@ -790,6 +790,89 @@ struct LuaScriptSystem::Impl
         return std::string(value, size);
     }
 
+    static audio::SourceAction audio_action(lua_State* lua, int index)
+    {
+        const auto name = string_arg(lua, index);
+        if (name == "play") return audio::SourceAction::Play;
+        if (name == "pause") return audio::SourceAction::Pause;
+        if (name == "resume") return audio::SourceAction::Resume;
+        if (name == "stop") return audio::SourceAction::Stop;
+        throw std::runtime_error("audio action must be play, pause, resume or stop");
+    }
+    static void audio_number(lua_State* lua, int table, const char* name, float& value)
+    {
+        lua_getfield(lua, table, name);
+        if (!lua_isnil(lua, -1))
+        {
+            if (lua_type(lua, -1) != LUA_TNUMBER) throw std::runtime_error("audio fields must be numbers");
+            value = static_cast<float>(lua_tonumber(lua, -1));
+            if (!std::isfinite(value)) throw std::runtime_error("audio numbers must be finite");
+        }
+        lua_pop(lua, 1);
+    }
+    static void audio_vector(lua_State* lua, int table, const char* name, audio::Vec3& value)
+    {
+        lua_getfield(lua, table, name);
+        if (!lua_isnil(lua, -1))
+        {
+            if (!lua_istable(lua, -1)) throw std::runtime_error("audio vectors must be {x,y,z} tables");
+            const int vector = lua_absindex(lua, -1);
+            audio_number(lua, vector, "x", value[0]); audio_number(lua, vector, "y", value[1]); audio_number(lua, vector, "z", value[2]);
+        }
+        lua_pop(lua, 1);
+    }
+    static std::optional<std::int64_t> audio_entity(lua_State* lua, int table)
+    {
+        lua_getfield(lua, table, "entity");
+        std::optional<std::int64_t> value;
+        if (!lua_isnil(lua, -1))
+        {
+            if (!lua_isinteger(lua, -1) || lua_tointeger(lua, -1) <= 0) throw std::runtime_error("audio entity must be a positive integer handle");
+            value = lua_tointeger(lua, -1);
+        }
+        lua_pop(lua, 1); return value;
+    }
+    static LuaAudioSourceOptions audio_options(lua_State* lua, int table)
+    {
+        LuaAudioSourceOptions value;
+        if (lua_isnoneornil(lua, table)) return value;
+        if (!lua_istable(lua, table)) throw std::runtime_error("audio options must be a table");
+        table = lua_absindex(lua, table);
+        auto& o = value.playback;
+        audio_number(lua, table, "gain", o.gain); audio_number(lua, table, "pitch", o.pitch);
+        if (o.gain < 0 || o.gain > 1) throw std::runtime_error("audio gain must be in [0,1]");
+        const auto boolean = [&](const char* name, bool& target)
+        {
+            lua_getfield(lua, table, name);
+            if (!lua_isnil(lua, -1)) { if (!lua_isboolean(lua, -1)) throw std::runtime_error("audio flags must be booleans"); target = bool(lua_toboolean(lua, -1)); }
+            lua_pop(lua, 1);
+        };
+        boolean("loop", o.loop); boolean("spatial", o.spatial.enabled);
+        audio_vector(lua, table, "position", o.spatial.position);
+        audio_number(lua, table, "min_distance", o.spatial.minDistance);
+        audio_number(lua, table, "max_distance", o.spatial.maxDistance);
+        audio_number(lua, table, "rolloff", o.spatial.rolloff);
+        lua_getfield(lua, table, "bus");
+        if (!lua_isnil(lua, -1))
+        {
+            const auto bus = string_arg(lua, -1);
+            if (bus == "music") o.bus = audio::Bus::Music;
+            else if (bus == "effects") o.bus = audio::Bus::Effects;
+            else if (bus == "dialogue") o.bus = audio::Bus::Dialogue;
+            else throw std::runtime_error("source bus must be music, effects or dialogue");
+        }
+        lua_pop(lua, 1); lua_getfield(lua, table, "attenuation");
+        if (!lua_isnil(lua, -1))
+        {
+            const auto attenuation = string_arg(lua, -1);
+            if (attenuation == "none") o.spatial.attenuation = audio::Attenuation::None;
+            else if (attenuation == "linear") o.spatial.attenuation = audio::Attenuation::Linear;
+            else if (attenuation == "inverse") o.spatial.attenuation = audio::Attenuation::Inverse;
+            else throw std::runtime_error("unknown audio attenuation");
+        }
+        lua_pop(lua, 1); value.entity = audio_entity(lua, table); return value;
+    }
+
     static picojson::value json_value(lua_State* lua, int index, unsigned depth,
         size_t& nodes, std::set<const void*>& ancestors)
     {
@@ -989,6 +1072,49 @@ struct LuaScriptSystem::Impl
             }
             if (service == "audio.stop") { if (!api.audio_stop) unavailable(); lua_pushboolean(lua, api.audio_stop(static_cast<uint64_t>(entity_arg(lua, 1)))); return 1; }
             if (service == "audio.volume") { if (!api.audio_volume) unavailable(); return result_void(api.audio_volume(string_arg(lua, 1), static_cast<float>(luaL_checknumber(lua, 2)))); }
+            if (service == "audio.source" || service == "audio.configure" || service == "audio.listener" || service == "audio.control" || service == "audio.observe")
+            {
+                const int top = lua_gettop(lua);
+                try
+                {
+                    if (service == "audio.source")
+                    {
+                        if (!api.audio_source) unavailable();
+                        const auto result = api.audio_source(string_arg(lua, 1), audio_options(lua, 2));
+                        if (!result) return result_error(result.error()); lua_pushinteger(lua, *result); return 1;
+                    }
+                    if (service == "audio.configure")
+                    { if (!api.audio_configure) unavailable(); return result_void(api.audio_configure(entity_arg(lua, 1), audio_options(lua, 2))); }
+                    if (service == "audio.control")
+                    { if (!api.audio_control) unavailable(); return result_void(api.audio_control(entity_arg(lua, 1), audio_action(lua, 2))); }
+                    if (service == "audio.observe")
+                    {
+                        if (!api.audio_observe) unavailable();
+                        const auto result = api.audio_observe(string_arg(lua, 1), entity_arg(lua, 2), audio_action(lua, 3));
+                        if (!result) return result_error(result.error()); lua_pushinteger(lua, *result); return 1;
+                    }
+                    if (!api.audio_listener) unavailable();
+                    if (!lua_istable(lua, 1)) throw std::runtime_error("listener options must be a table");
+                    LuaAudioListener value;
+                    audio_vector(lua, 1, "position", value.listener.position);
+                    audio_vector(lua, 1, "forward", value.listener.forward); audio_vector(lua, 1, "up", value.listener.up);
+                    value.entity = audio_entity(lua, 1); return result_void(api.audio_listener(value));
+                }
+                catch (const std::exception& error) { lua_settop(lua, top); return result_error(error.what()); }
+            }
+            if (service == "audio.remove") { if (!api.audio_remove) unavailable(); lua_pushboolean(lua, api.audio_remove(entity_arg(lua, 1))); return 1; }
+            if (service == "audio.unobserve") { if (!api.audio_unobserve) unavailable(); lua_pushboolean(lua, api.audio_unobserve(entity_arg(lua, 1))); return 1; }
+            if (service == "audio.source_state")
+            {
+                if (!api.audio_source_state) unavailable(); const auto value = api.audio_source_state(entity_arg(lua, 1));
+                if (!value) { lua_pushnil(lua); return 1; }
+                lua_pushstring(lua, *value == audio::VoiceState::Playing ? "playing" : *value == audio::VoiceState::Paused ? "paused" : "stopped"); return 1;
+            }
+            if (service == "audio.emit")
+            {
+                if (!api.audio_emit) unavailable(); const auto result = api.audio_emit(string_arg(lua, 1));
+                if (!result) return result_error(result.error()); lua_pushinteger(lua, *result); return 1;
+            }
             if (service == "save.recover") { if (!api.save_recover) unavailable(); return result_void(api.save_recover(string_arg(lua, 1))); }
             if (service == "save.write" || service == "settings.write" || service == "state.write")
             {

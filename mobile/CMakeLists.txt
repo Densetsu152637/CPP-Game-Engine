@@ -56,6 +56,7 @@ set(ENGINE_SOURCES
     "${ROOT}/src/project/gameplay_ui.cpp"
     "${ROOT}/src/project/persistence.cpp"
     "${ROOT}/src/audio/audio.cpp"
+    "${ROOT}/src/audio/audio_sources.cpp"
     "${ROOT}/src/interaction/action_input.cpp"
     "${ROOT}/src/project/runtime.cpp"
     "${ROOT}/src/rendering/content.cpp"

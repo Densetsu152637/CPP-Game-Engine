@@ -26,6 +26,58 @@ namespace audio
         bool tag(std::span<const std::uint8_t> b, std::size_t p, const char* s)
         { return b[p] == s[0] && b[p + 1] == s[1] && b[p + 2] == s[2] && b[p + 3] == s[3]; }
         Error error(const char* code, const char* message) { return {code, message}; }
+        bool finite(const Vec3& v) { return std::all_of(v.begin(), v.end(), [](float n) { return std::isfinite(n); }); }
+        double length(const Vec3& v) { return std::hypot(double(v[0]), double(v[1]), double(v[2])); }
+        std::array<double, 3> right(const Listener& listener)
+        {
+            const auto& f = listener.forward; const auto& u = listener.up;
+            std::array<double, 3> r{double(f[1])*u[2]-double(f[2])*u[1],
+                double(f[2])*u[0]-double(f[0])*u[2], double(f[0])*u[1]-double(f[1])*u[0]};
+            const auto norm = std::hypot(r[0], r[1], r[2]);
+            if (norm > 0) for (auto& n : r) n /= norm;
+            return r;
+        }
+        std::array<float, 2> spatialGains(const SpatialOptions& source, const Listener& listener)
+        {
+            if (!source.enabled) return {1, 1};
+            std::array<double, 3> delta{};
+            for (unsigned i = 0; i < 3; ++i) delta[i] = double(source.position[i]) - listener.position[i];
+            const auto distance = std::hypot(delta[0], delta[1], delta[2]);
+            double gain = 1;
+            if (source.attenuation != Attenuation::None)
+            {
+                if (distance >= source.maxDistance) return {0, 0};
+                const auto d = std::max(distance, double(source.minDistance));
+                gain = source.attenuation == Attenuation::Linear ?
+                    std::clamp(1 - source.rolloff * (d - source.minDistance) / (double(source.maxDistance) - source.minDistance), 0.0, 1.0) :
+                    source.minDistance / (source.minDistance + source.rolloff * (d - source.minDistance));
+            }
+            const auto r = right(listener);
+            const auto pan = distance > 0 ? std::clamp((delta[0]*r[0]+delta[1]*r[1]+delta[2]*r[2])/distance, -1.0, 1.0) : 0;
+            return {float(gain * std::sqrt((1-pan)/2)), float(gain * std::sqrt((1+pan)/2))};
+        }
+    }
+    Result<void> validatePlayOptions(const PlayOptions& options)
+    {
+        const auto& s = options.spatial;
+        if (options.bus == Bus::Master || static_cast<unsigned>(options.bus) > 3 || options.owner.size() > 256 ||
+            !std::isfinite(options.pitch) || options.pitch < .125f || options.pitch > 8 ||
+            !finite(s.position) || !std::isfinite(s.minDistance) || s.minDistance <= 0 ||
+            !std::isfinite(s.maxDistance) || s.maxDistance <= s.minDistance ||
+            !std::isfinite(s.rolloff) || s.rolloff < 0 || static_cast<unsigned>(s.attenuation) > 2)
+            return std::unexpected(error("audio.play.invalid", "Invalid bus, owner, pitch or spatial options"));
+        return {};
+    }
+    Result<void> validateListener(const Listener& listener)
+    {
+        if (!finite(listener.position) || !finite(listener.forward) || !finite(listener.up) ||
+            length(listener.forward) < 1e-6 || length(listener.up) < 1e-6)
+            return std::unexpected(error("audio.listener.invalid", "Listener vectors must be finite and orientation nonzero"));
+        const auto& f = listener.forward; const auto& u = listener.up;
+        const auto cosine = (double(f[0])*u[0]+double(f[1])*u[1]+double(f[2])*u[2]) / (length(f)*length(u));
+        if (std::abs(cosine) > .999999)
+            return std::unexpected(error("audio.listener.invalid", "Listener forward and up must not be parallel"));
+        return {};
     }
     Result<std::shared_ptr<const Clip>> decodeWav(std::span<const std::uint8_t> b)
     {
@@ -87,6 +139,7 @@ namespace audio
         mutable std::mutex mutex;
         std::vector<Voice> voices;
         std::array<float, 4> gains{1, 1, 1, 1};
+        Listener listener;
         VoiceHandle next = 1;
         bool initialized = false;
         std::atomic<bool> stopping{false};
@@ -106,7 +159,8 @@ namespace audio
                 if (voice.paused) continue;
                 const auto& clip = *voice.clip; const auto frames = clip.samples.size() / clip.channels;
                 const auto gain = voice.options.gain * gains[0] * gains[static_cast<unsigned>(voice.options.bus)];
-                const double step = double(clip.sampleRate) / options.sampleRate;
+                const double step = double(clip.sampleRate) / options.sampleRate * voice.options.pitch;
+                const auto spatial = spatialGains(voice.options.spatial, listener);
                 for (std::size_t frame = 0; frame < output.size() / 2; ++frame)
                 {
                     if (voice.position >= frames)
@@ -119,10 +173,14 @@ namespace audio
                     const auto alpha = float(voice.position - first);
                     for (unsigned channel = 0; channel < 2; ++channel)
                     {
-                        const auto source = clip.channels == 1 ? 0 : channel;
-                        const auto a = clip.samples[first * clip.channels + source];
-                        const auto b = clip.samples[second * clip.channels + source];
-                        output[frame * 2 + channel] += (a + (b - a) * alpha) * gain;
+                        const auto sample = [&](std::size_t index)
+                        {
+                            if (voice.options.spatial.enabled && clip.channels == 2)
+                                return (clip.samples[index * 2] + clip.samples[index * 2 + 1]) * .5f;
+                            return clip.samples[index * clip.channels + (clip.channels == 1 ? 0 : channel)];
+                        };
+                        const auto a = sample(first), b = sample(second);
+                        output[frame * 2 + channel] += (a + (b - a) * alpha) * gain * spatial[channel];
                     }
                     voice.position += step;
                 }
@@ -192,8 +250,7 @@ namespace audio
             clip->samples.size() > MaxWavBytes / 2 || clip->samples.size() % clip->channels ||
             std::any_of(clip->samples.begin(), clip->samples.end(), [](float f) { return !std::isfinite(f) || f < -1 || f > 1; }))
             return std::unexpected(error("audio.clip.invalid", "Invalid PCM clip"));
-        if (options.bus == Bus::Master || static_cast<unsigned>(options.bus) > 3 || options.owner.size() > 256)
-            return std::unexpected(error("audio.play.invalid", "Voice bus or owner is invalid"));
+        if (const auto valid = validatePlayOptions(options); !valid) return std::unexpected(valid.error());
         std::lock_guard lock(impl->mutex);
         if (!impl->initialized) return std::unexpected(error("audio.not_initialized", "Initialize audio before playback"));
         if (!impl->failure.empty()) return std::unexpected(Error{"audio.device.failed", impl->failure});
@@ -210,6 +267,25 @@ namespace audio
     { std::lock_guard lock(impl->mutex); for (auto& v : impl->voices) if (v.handle == handle) { v.paused = false; return true; } return false; }
     bool AudioSystem::setGain(VoiceHandle handle, float gain)
     { std::lock_guard lock(impl->mutex); for (auto& v : impl->voices) if (v.handle == handle) { v.options.gain = gainValue(gain); return true; } return false; }
+    Result<bool> AudioSystem::configure(VoiceHandle handle, PlayOptions options)
+    {
+        if (const auto valid = validatePlayOptions(options); !valid) return std::unexpected(valid.error());
+        options.gain = gainValue(options.gain);
+        std::lock_guard lock(impl->mutex);
+        for (auto& voice : impl->voices) if (voice.handle == handle) { voice.options = std::move(options); return true; }
+        return false;
+    }
+    Result<void> AudioSystem::setListener(Listener listener)
+    {
+        if (const auto valid = validateListener(listener); !valid) return valid;
+        std::lock_guard lock(impl->mutex); impl->listener = listener; return {};
+    }
+    VoiceState AudioSystem::voiceState(VoiceHandle handle) const
+    {
+        std::lock_guard lock(impl->mutex);
+        for (const auto& voice : impl->voices) if (voice.handle == handle) return voice.paused ? VoiceState::Paused : VoiceState::Playing;
+        return VoiceState::Stopped;
+    }
     void AudioSystem::stopOwner(const std::string& owner)
     { std::lock_guard lock(impl->mutex); std::erase_if(impl->voices, [&](const auto& v) { return v.options.owner == owner; }); }
     void AudioSystem::stopAll() { std::lock_guard lock(impl->mutex); impl->voices.clear(); }

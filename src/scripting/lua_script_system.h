@@ -1,4 +1,5 @@
 #pragma once
+#include "../audio/audio_sources.h"
 
 #include <array>
 #include <cstdint>
@@ -48,6 +49,16 @@ struct LuaUiPanel
 };
 struct LuaUiEvent { std::string panel, type; std::size_t selection = 0; };
 struct LuaTriggerEvent { std::string first, second, phase; };
+struct LuaAudioSourceOptions
+{
+    audio::PlayOptions playback;
+    std::optional<std::int64_t> entity;
+};
+struct LuaAudioListener
+{
+    audio::Listener listener;
+    std::optional<std::int64_t> entity;
+};
 
 // Engine services are injected so scripts do not depend on a particular ECS implementation.
 struct EngineScriptApi
@@ -82,6 +93,15 @@ struct EngineScriptApi
     std::function<std::expected<std::uint64_t, std::string>(std::string_view, bool, std::string_view, float)> audio_play;
     std::function<bool(std::uint64_t)> audio_stop;
     std::function<std::expected<void, std::string>(std::string_view, float)> audio_volume;
+    std::function<std::expected<std::uint64_t, std::string>(std::string_view, const LuaAudioSourceOptions&)> audio_source;
+    std::function<std::expected<void, std::string>(std::uint64_t, const LuaAudioSourceOptions&)> audio_configure;
+    std::function<std::expected<void, std::string>(std::uint64_t, audio::SourceAction)> audio_control;
+    std::function<bool(std::uint64_t)> audio_remove;
+    std::function<std::optional<audio::VoiceState>(std::uint64_t)> audio_source_state;
+    std::function<std::expected<void, std::string>(const LuaAudioListener&)> audio_listener;
+    std::function<std::expected<std::uint64_t, std::string>(std::string_view, std::uint64_t, audio::SourceAction)> audio_observe;
+    std::function<bool(std::uint64_t)> audio_unobserve;
+    std::function<std::expected<std::size_t, std::string>(std::string_view)> audio_emit;
     // JSON crosses the host boundary; wrappers expose bounded Lua objects.
     std::function<std::expected<void, std::string>(std::string_view, std::string_view)> save_write;
     std::function<std::expected<std::string, std::string>(std::string_view, bool)> save_read;

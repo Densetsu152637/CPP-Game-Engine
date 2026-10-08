@@ -104,6 +104,13 @@ queries immediately and quarantines held controls until release.
 | `ui.event()` | Poll `{panel,type,selection}` with 1-based choice selection, or nil. |
 | `audio.play(asset,loop?,bus?,gain?)` | Play a WAV and return its voice handle; defaults are false, effects, and 1. |
 | `audio.stop(voice)` / `audio.volume(bus,gain)` | Stop a voice or set master/music/effects/dialogue gain in `[0,1]`. |
+| `audio.source(asset,options?)` | Create a silent reusable source from a declared WAV asset; return its source handle. |
+| `audio.configure(source,options)` | Replace the source's entire configuration while retaining playback position and pause state. Omitted fields use defaults. |
+| `audio.control(source,action)` | Apply `play`, `pause`, `resume` or `stop`. Play restarts the source's single voice. |
+| `audio.source_state(source)` / `audio.remove(source)` | Query `playing`, `paused`, `stopped` (nil for an unknown source), or remove it and its observers. |
+| `audio.listener(options)` | Set listener position/orientation and optional entity attachment. `{}` resets its configuration. |
+| `audio.observe(event,source,action)` / `audio.unobserve(observer)` | Subscribe source control to a named event, or cancel its returned observer handle. |
+| `audio.emit(event)` | Notify matching observers and return the count; playback errors return `nil,error`. |
 | `state.read()` / `state.write(object)` | Read/replace bounded session JSON shared by every entity in the current Runtime and preserved across room changes. |
 | `save.read(slot,backup?)` / `save.write(slot,object)` | Read/write a versioned durable player snapshot through the host-selected data root. |
 | `save.recover(slot)` | Explicitly replace a corrupted primary with a validated backup; newer formats remain protected. |
@@ -117,6 +124,46 @@ Bindings use the complete desired action map and cannot introduce undeclared
 actions. Settings validate before writing and apply to the live mapper/mixer
 after a successful durable write. Startup loads them independently of game saves;
 invalid settings report a diagnostic log while preserving default bindings.
+
+Audio source options are `{loop=false,bus="effects",gain=1,pitch=1,spatial=false,
+position={x=0,y=0,z=0},min_distance=1,max_distance=100,rolloff=1,
+attenuation="inverse",entity=nil}`. Bus choices are music/effects/dialogue;
+attenuation choices are none/linear/inverse. Set `spatial=true` for 3D panning
+and distance gain. `entity` is a live opaque entity handle and `position` is its
+offset, updated at tick boundaries. Listener options are `{position={x=0,y=0,z=0},
+forward={x=0,y=0,z=-1},up={x=0,y=1,z=0},entity=nil}`; entity following translates
+the listener while forward/up remain explicit world-space vectors. Pitch must be
+in `[0.125,8]`, gain in `[0,1]`; vectors and attenuation values must be finite.
+Source/listener configuration errors return `nil,error`.
+
+For example, with declared WAV asset `ambient` and collider entity `door-zone`:
+
+```lua
+local source
+return {
+    on_create = function()
+        source = assert(audio.source("ambient", {
+            loop = true, spatial = true, entity = self.id(),
+            gain = 0.6, min_distance = 1, max_distance = 20
+        }))
+        assert(audio.listener({ entity = engine.find_entity("player") }))
+        assert(audio.observe("trigger:door-zone:enter", source, "play"))
+        assert(audio.observe("trigger:door-zone:exit", source, "stop"))
+        assert(audio.observe("game-paused", source, "pause"))
+    end,
+    on_destroy = function() audio.remove(source) end
+}
+-- Other lifecycle callbacks can call audio.emit("game-paused").
+```
+
+Trigger notifications are emitted automatically after successful simulation,
+for both collider IDs in every enter/stay/exit pair. Play restarts; subscribe to
+enter to start a loop and exit to stop it. One source owns at most one voice.
+Use `audio.control(source,"play")` for explicit playback. Source handles must
+be used with the source API; `audio.stop` accepts legacy voice handles from
+`audio.play`. Sources and observers expire on scene retirement or faults and
+attached sources expire when their entity is destroyed. The detailed numeric,
+ownership and notification contracts are in [audio services](desktop-services.md).
 
 Service operations return `nil,error` for expected operational failures. JSON
 conversion limits, cycles, incompatible table shapes, and oversized host reads
@@ -132,8 +179,9 @@ authored Lua responsibilities.
 
 Scene preparation uses an isolated ECS/Lua state and a copy of shared session
 JSON. The previous scene remains playable if loading, startup or safe placement
-fails. Candidate `on_create` may prepare local UI and session state, but audio
-mutations, save writes/recovery and settings writes return errors until commit;
+fails. Candidate `on_create` may prepare local UI, session state, silent audio
+sources, subscriptions and listener configuration. Audio playback/control/emit,
+save writes/recovery and settings writes return errors until commit;
 perform these effects in the first accepted `on_update`. Declaration validation
 never invokes lifecycle functions or runtime services. Successful commit retires
 the previous scene's scripts, UI, control locks and audio voices. Teardown errors

@@ -74,6 +74,127 @@ namespace
         test::require(!rejected.start() && !fixture.options().persistence->load("forbidden"),
             "module declarations must reject effects and leave durable data untouched");
     }
+    void audioSourcesObserveTriggersAndFollowEntities()
+    {
+        Fixture fixture;
+        const std::vector<std::uint8_t> bytes = {'R','I','F','F',40,0,0,0,'W','A','V','E','f','m','t',' ',16,0,0,0,
+            1,0,1,0,0x80,0xbb,0,0,0,0x77,1,0,2,0,16,0,'d','a','t','a',4,0,0,0,0,0x40,0,0xc0};
+        fixture.write("cue.wav", std::string(bytes.begin(), bytes.end()));
+        fixture.project.assets.emplace("cue", project::Asset{"cue", "cue.wav", "audio"});
+        fixture.project.scene.entities[1].collider2D->trigger = true;
+        fixture.write("main.lua", R"lua(
+            local source, enter, exit, wake, tick
+            local config = {loop=true,spatial=true,entity=nil,min_distance=1,max_distance=10}
+            return {
+                on_create=function()
+                    config.entity=self.id()
+                    source=assert(audio.source('cue',config)); tick=0
+                    assert(audio.source_state(source)=='stopped')
+                    assert(audio.listener({}))
+                    enter=assert(audio.observe('trigger:wall:enter',source,'play'))
+                    exit=assert(audio.observe('trigger:wall:exit',source,'pause'))
+                    wake=assert(audio.observe('wake',source,'resume'))
+                    local bad,err=audio.source('cue',{pitch=0}); assert(not bad and err)
+                    bad,err=audio.source('cue',{gain=0/0}); assert(not bad and err)
+                    bad,err=audio.source('cue',{loop=1}); assert(not bad and err)
+                    bad,err=audio.source('missing',{}); assert(not bad and err)
+                    bad,err=audio.listener({forward={x=0,y=0,z=0}}); assert(not bad and err)
+                end,
+                on_update=function()
+                    tick=tick+1
+                    if tick==1 then self.set_position(2,0,0)
+                    elseif tick==2 then assert(audio.source_state(source)=='playing'); self.set_position(-2,0,0)
+                    elseif tick==3 then
+                        assert(audio.source_state(source)=='paused'); assert(audio.emit('wake')==1)
+                        assert(audio.unobserve(wake)); assert(audio.emit('wake')==0)
+                        local ok,err=audio.configure(source,{pitch=-1}); assert(not ok and err)
+                        assert(audio.source_state(source)=='playing')
+                    elseif tick==4 then
+                        assert(audio.listener({entity=self.id()})); config.gain=.5; assert(audio.configure(source,config))
+                    elseif tick==5 then assert(engine.destroy_entity(self.id())) end
+                end,
+                on_destroy=function() audio.remove(source); audio.unobserve(enter); audio.unobserve(exit) end
+            }
+        )lua");
+        auto options = fixture.options(); project::Runtime runtime(fixture.project, options);
+        const auto started = runtime.start(); if (!started) throw std::runtime_error(started.error().front().message);
+        test::require(options.audio->voiceCount() == 0, "source initialization stays silent until trigger");
+        const auto tick = [&] { const auto result = runtime.tick(); if (!result) throw std::runtime_error(result.error().front().message); };
+        std::array<float,2> frame{};
+        tick(); options.audio->mix(frame);
+        test::require(std::abs(frame[0]) < .0001f && std::abs(frame[1] - .25f) < .0001f, "trigger enter plays spatial entity source on completed tick");
+        tick(); options.audio->mix(frame); test::require(frame[0] == 0 && frame[1] == 0, "trigger exit pauses immediately");
+        tick(); options.audio->mix(frame);
+        test::require(std::abs(frame[0] + .25f) < .0001f && std::abs(frame[1]) < .0001f, "observer resume retains cursor and follows moved entity");
+        tick(); options.audio->mix(frame);
+        test::require(std::abs(frame[0] - .5f * .5f * std::sqrt(.5f)) < .0001f && frame[0] == frame[1], "attached listener and source share center with configured gain");
+        tick(); test::require(options.audio->voiceCount() == 0, "destroying attached entity releases source voice and observers");
+        test::require(runtime.stop().has_value(), "audio Lua teardown succeeds after entity cleanup");
+    }
+    void audioTriggerNamesAcceptFullColliderIds()
+    {
+        Fixture fixture;
+        const std::vector<std::uint8_t> bytes = {'R','I','F','F',40,0,0,0,'W','A','V','E','f','m','t',' ',16,0,0,0,
+            1,0,1,0,0x80,0xbb,0,0,0,0x77,1,0,2,0,16,0,'d','a','t','a',4,0,0,0,0,0x40,0,0xc0};
+        fixture.write("cue.wav", std::string(bytes.begin(), bytes.end()));
+        fixture.project.assets.emplace("cue", project::Asset{"cue", "cue.wav", "audio"});
+        auto& wall = fixture.project.scene.entities[1]; wall.id = std::string(256, 'x'); wall.collider2D->trigger = true;
+        auto binaryId = wall; binaryId.id = std::string("nul\0id", 6); fixture.project.scene.entities.push_back(binaryId);
+        fixture.write("main.lua", R"lua(local source
+            return {on_create=function()
+                source=assert(audio.source('cue',{loop=true}))
+                assert(audio.observe('trigger:'..string.rep('x',256)..':enter',source,'play'))
+            end,on_update=function() self.set_position(2,0,0) end}
+        )lua");
+        auto options = fixture.options(); project::Runtime runtime(fixture.project, options);
+        test::require(runtime.start().has_value(), "long collider IDs accepted");
+        const auto result = runtime.tick(); if (!result) throw std::runtime_error(result.error().front().message);
+        test::require(options.audio->voiceCount() == 1, "full-size trigger notification reaches observer and NUL ID does not fault scene");
+        test::require(runtime.stop().has_value() && options.audio->voiceCount() == 0, "trigger source cleanup");
+    }
+    void audioListenersRetireWithoutCandidateSideEffects()
+    {
+        Fixture fixture; auto options = fixture.options();
+        const std::vector<std::uint8_t> bytes = {'R','I','F','F',40,0,0,0,'W','A','V','E','f','m','t',' ',16,0,0,0,
+            1,0,1,0,0x80,0xbb,0,0,0,0x77,1,0,2,0,16,0,'d','a','t','a',4,0,0,0,0,0x40,0,0xc0};
+        fixture.write("cue.wav", std::string(bytes.begin(), bytes.end()));
+        fixture.project.assets.emplace("cue", project::Asset{"cue", "cue.wav", "audio"});
+        auto clip = std::make_shared<audio::Clip>(); clip->sampleRate = 48000; clip->channels = 1; clip->samples = {1};
+        audio::PlayOptions playback; playback.loop = true; playback.spatial.enabled = true; playback.spatial.position = {1,0,0};
+        const auto voice = options.audio->play(clip, playback); test::require(voice.has_value(), "external spatial probe created");
+        std::array<float,2> frame{};
+        const auto defaultListener = [&] { options.audio->mix(frame); test::require(frame[0] == 0 && frame[1] == 1, "retired listener resets default mixer orientation/position"); };
+        fixture.write("main.lua", "return {on_create=function() assert(audio.listener({position={x=100}})) end}");
+        project::Runtime runtime(fixture.project, options); test::require(runtime.start().has_value(), "listener scene starts");
+        options.audio->mix(frame); test::require(std::abs(frame[0] - 1.0f/99) < .0001f && frame[1] == 0, "active listener changes spatial probe");
+        fixture.write("target.lua", "return {on_create=function() assert(audio.listener({position={x=200}})); error('reject candidate') end}");
+        test::require(runtime.requestScene("room").has_value() && !runtime.tick() && runtime.running(), "candidate listener declaration failure keeps source active");
+        options.audio->mix(frame); test::require(std::abs(frame[0] - 1.0f/99) < .0001f && frame[1] == 0, "candidate preparation/teardown preserve live listener");
+        for (const auto& declaration : {
+            "assert(audio.listener({entity=e,position={x=3e38}}))",
+            "assert(audio.source('cue',{entity=e,spatial=true,position={x=3e38}}))"})
+        {
+            fixture.write("target.lua", "return {on_create=function() local e=engine.find_entity('camera'); "
+                "assert(engine.set_position(e,0,0,0)); " + std::string(declaration) + "; assert(engine.set_position(e,3e38,0,0)) end}");
+            test::require(runtime.requestScene("room").has_value(), "overflow candidate requested");
+            const auto rejected = runtime.tick();
+            test::require(!rejected && rejected.error().front().code == "runtime.audio.prepare" && runtime.running() && runtime.activeScene().id == "scene:main", "overflowing resolved audio rejected before source scene retirement");
+            options.audio->mix(frame); test::require(std::abs(frame[0] - 1.0f/99) < .0001f && frame[1] == 0, "rejected final candidate audio leaves live mixer listener intact");
+        }
+        fixture.write("target.lua", "return {}");
+        test::require(runtime.requestScene("room").has_value() && runtime.tick().has_value(), "transition without listener succeeds"); defaultListener();
+        test::require(runtime.stop().has_value(), "listener-free scene stops"); defaultListener();
+        test::require(runtime.start().has_value(), "restart after transition");
+        test::require(runtime.stageScriptReload("traveller", "return {on_create=function() assert(audio.listener({forward={z=1}})) end,on_update=function() error('fault') end}").has_value(), "faulting listener reload queued");
+        test::require(!runtime.tick() && !runtime.running(), "script fault reported"); defaultListener();
+        test::require(runtime.stop().has_value(), "fault cleanup completes");
+        fixture.write("main.lua", "return {on_create=function() assert(audio.listener({forward={z=1}})) end}");
+        fixture.write("target.lua", "return {on_create=function() assert(audio.listener({position={x=1}})) end}");
+        project::Runtime committed(fixture.project, options); test::require(committed.start().has_value(), "oriented listener starts");
+        test::require(committed.requestScene("room").has_value() && committed.tick().has_value(), "candidate listener commits");
+        options.audio->mix(frame); test::require(std::abs(frame[0] - std::sqrt(.5f)) < .0001f && frame[0] == frame[1], "candidate listener applied at commit boundary");
+        test::require(committed.stop().has_value(), "committed listener scene stops"); defaultListener(); options.audio->stop(*voice);
+    }
 
     void modalInputAndCollisionUseLiveSnapshots()
     {
@@ -260,6 +381,9 @@ namespace
 
 void runDesktopRuntimeTests()
 {
+    audioSourcesObserveTriggersAndFollowEntities();
+    audioTriggerNamesAcceptFullColliderIds();
+    audioListenersRetireWithoutCandidateSideEffects();
     cachedModulesResolveTheActiveEntityContext();
     modalInputAndCollisionUseLiveSnapshots();
     sceneCandidatesCopyStateAndPreserveOpaqueHandles();

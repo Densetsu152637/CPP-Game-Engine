@@ -40,6 +40,10 @@ namespace project
         std::map<std::string, SpriteRenderer> spriteState;
         std::map<std::string, std::uint32_t> forcedFrames;
         std::map<std::string, std::shared_ptr<const audio::Clip>> clips;
+        std::unique_ptr<audio::AudioSources> audioSources;
+        std::map<audio::SourceHandle, LuaAudioSourceOptions> sourceOptions;
+        std::optional<LuaAudioListener> audioListener;
+        bool ownsAudioListener = false;
         struct SceneRequest { std::string asset, spawn, traveller; };
         std::optional<SceneRequest> pendingScene;
         std::uint64_t revision = 1;
@@ -90,6 +94,79 @@ namespace project
                 const auto result = world.upsert(authored.id, {{p[0], p[1]}, collider.size, collider.offset, collider.trigger, collider.layer, collider.mask});
                 if (!result) throw std::runtime_error(result.error());
             }
+        }
+
+        std::expected<audio::Vec3, std::string> audioPosition(std::int64_t handle, audio::Vec3 offset) const
+        {
+            const auto found = positions.find(handle);
+            if (found == positions.end() || !simulator.ecs().hasEntity(find(handle)))
+                return std::unexpected("audio attachment requires a live entity with a position");
+            for (unsigned i = 0; i < 3; ++i) offset[i] += found->second[i];
+            return offset;
+        }
+        std::expected<audio::PlayOptions, std::string> resolvedAudioOptions(const LuaAudioSourceOptions& value) const
+        {
+            auto playback = value.playback;
+            if (value.entity)
+            {
+                const auto p = audioPosition(*value.entity, playback.spatial.position);
+                if (!p) return std::unexpected(p.error()); playback.spatial.position = *p;
+            }
+            return playback;
+        }
+        void synchronizeAudio()
+        {
+            if (!audioSources) return;
+            for (auto it = sourceOptions.begin(); it != sourceOptions.end();)
+            {
+                const auto playback = resolvedAudioOptions(it->second);
+                if (!playback) { audioSources->remove(it->first); it = sourceOptions.erase(it); continue; }
+                const auto configured = audioSources->configure(it->first, *playback);
+                if (!configured) throw std::runtime_error(configured.error().message);
+                ++it;
+            }
+            if (audioListener)
+            {
+                auto listener = audioListener->listener;
+                if (audioListener->entity)
+                {
+                    const auto p = audioPosition(*audioListener->entity, listener.position);
+                    if (!p) { audioListener.reset(); listener = {}; }
+                    else listener.position = *p;
+                }
+                const auto configured = options.audio->setListener(listener);
+                if (!configured) throw std::runtime_error(configured.error().message);
+                ownsAudioListener = true;
+            }
+        }
+        void resetAudioListener() noexcept
+        {
+            if (ownsAudioListener && options.audio) (void)options.audio->setListener({});
+            ownsAudioListener = false; audioListener.reset();
+        }
+        std::expected<void, std::string> validateAudioConfiguration() const
+        {
+            for (const auto& [source, value] : sourceOptions)
+            {
+                const auto playback = resolvedAudioOptions(value);
+                // Destroyed attachments are reaped on synchronization.
+                if (!playback) continue;
+                const auto valid = audio::validatePlayOptions(*playback);
+                if (!valid) return std::unexpected(valid.error().message);
+            }
+            if (audioListener)
+            {
+                auto listener = audioListener->listener;
+                if (audioListener->entity)
+                {
+                    const auto p = audioPosition(*audioListener->entity, listener.position);
+                    if (!p) return {}; // Synchronization resets a destroyed attachment.
+                    listener.position = *p;
+                }
+                const auto valid = audio::validateListener(listener);
+                if (!valid) return std::unexpected(valid.error().message);
+            }
+            return {};
         }
 
         static std::expected<picojson::object, std::string> parseObject(std::string_view text)
@@ -149,7 +226,7 @@ namespace project
         }
 
         void fault()
-        { faulted = true; ui.clear(); pendingScene.reset(); controlLocks.clear(); cameraCenter.reset(); if (options.audio) options.audio->stopOwner(audioOwner); }
+        { faulted = true; ui.clear(); pendingScene.reset(); controlLocks.clear(); cameraCenter.reset(); if (audioSources) audioSources->clear(); sourceOptions.clear(); resetAudioListener(); if (options.audio) options.audio->stopOwner(audioOwner); }
 
         EngineScriptApi makeApi()
         {
@@ -327,6 +404,61 @@ namespace project
                 if (!std::isfinite(gain) || gain < 0 || gain > 1) return std::unexpected("audio gain must be in [0,1]");
                 options.audio->setBusGain(*channelBus, gain); return {};
             };
+            api.audio_source = [this](std::string_view asset, const LuaAudioSourceOptions& value) -> std::expected<std::uint64_t, std::string>
+            {
+                if (!audioSources) return std::unexpected("audio service unavailable");
+                const auto clip = clips.find(std::string(asset)); if (clip == clips.end()) return std::unexpected("audio asset is not loaded");
+                const auto playback = resolvedAudioOptions(value); if (!playback) return std::unexpected(playback.error());
+                const auto source = audioSources->create(clip->second, *playback);
+                if (!source) return std::unexpected(source.error().message);
+                sourceOptions.emplace(*source, value); return *source;
+            };
+            api.audio_configure = [this](std::uint64_t source, const LuaAudioSourceOptions& value) -> std::expected<void, std::string>
+            {
+                if (!audioSources) return std::unexpected("audio service unavailable");
+                const auto playback = resolvedAudioOptions(value); if (!playback) return std::unexpected(playback.error());
+                const auto configured = audioSources->configure(source, *playback);
+                if (!configured) return std::unexpected(configured.error().message);
+                sourceOptions[source] = value; return {};
+            };
+            api.audio_control = [this](std::uint64_t source, audio::SourceAction action) -> std::expected<void, std::string>
+            {
+                if (preparing || !audioSources) return std::unexpected("audio control unavailable during scene preparation");
+                synchronizeAudio();
+                const auto result = audioSources->control(source, action);
+                if (!result) return std::unexpected(result.error().message); return {};
+            };
+            api.audio_remove = [this](std::uint64_t source) { sourceOptions.erase(source); return audioSources && audioSources->remove(source); };
+            api.audio_source_state = [this](std::uint64_t source) -> std::optional<audio::VoiceState>
+            { if (!audioSources || !audioSources->contains(source)) return std::nullopt; return audioSources->state(source); };
+            api.audio_listener = [this](const LuaAudioListener& value) -> std::expected<void, std::string>
+            {
+                if (!audioSources) return std::unexpected("audio service unavailable");
+                auto listener = value.listener;
+                if (value.entity)
+                {
+                    const auto p = audioPosition(*value.entity, listener.position);
+                    if (!p) return std::unexpected(p.error()); listener.position = *p;
+                }
+                const auto valid = audio::validateListener(listener); if (!valid) return std::unexpected(valid.error().message);
+                audioListener = value;
+                if (!preparing) { const auto applied = options.audio->setListener(listener); if (!applied) return std::unexpected(applied.error().message); ownsAudioListener = true; }
+                return {};
+            };
+            api.audio_observe = [this](std::string_view event, std::uint64_t source, audio::SourceAction action) -> std::expected<std::uint64_t, std::string>
+            {
+                if (!audioSources) return std::unexpected("audio service unavailable");
+                const auto result = audioSources->observe(std::string(event), source, action);
+                if (!result) return std::unexpected(result.error().message); return *result;
+            };
+            api.audio_unobserve = [this](std::uint64_t observer) { return audioSources && audioSources->unobserve(observer); };
+            api.audio_emit = [this](std::string_view event) -> std::expected<std::size_t, std::string>
+            {
+                if (preparing || !audioSources) return std::unexpected("audio notifications unavailable during scene preparation");
+                synchronizeAudio();
+                const auto result = audioSources->notify(event);
+                if (!result) return std::unexpected(result.error().message); return *result;
+            };
             api.save_write = [this](std::string_view slot, std::string_view json) -> std::expected<void, std::string>
             {
                 if (preparing || !options.persistence) return std::unexpected("save service unavailable during scene preparation");
@@ -384,6 +516,7 @@ namespace project
 
         void destroyEntities() noexcept
         {
+            audioSources.reset(); sourceOptions.clear(); resetAudioListener();
             auto& ecs = simulator.ecs();
             for (const auto& [id, packed] : entities)
             {
@@ -497,6 +630,7 @@ namespace project
         try
         {
             state.audioOwner = state.project.scene.id + "@" + std::to_string(++state.handles->scope);
+            if (state.options.audio) state.audioSources = std::make_unique<audio::AudioSources>(*state.options.audio, state.audioOwner);
             if (!state.preparing && state.options.persistence)
             {
                 const auto settings = state.options.persistence->loadSettings();
@@ -649,7 +783,24 @@ namespace project
             state.fault();
             return std::unexpected(runtimeError("runtime.ecs.commit", state.project.scene.source, error.what()));
         }
-        try { state.simulator.simulate(); state.synchronizeWorld(); state.triggerEvents = state.world.advanceTriggers(); }
+        try
+        {
+            state.simulator.simulate(); state.synchronizeWorld(); state.triggerEvents = state.world.advanceTriggers();
+            state.synchronizeAudio();
+            if (state.audioSources)
+                for (const auto& event : state.triggerEvents)
+                {
+                    const auto phase = event.phase == gameplay2d::TriggerPhase::Enter ? "enter" : event.phase == gameplay2d::TriggerPhase::Stay ? "stay" : "exit";
+                    for (const auto& id : {event.first, event.second})
+                    {
+                        // Embedded NUL IDs are valid scene data but cannot be
+                        // subscribed to through the public named-event API.
+                        if (id.find('\0') != std::string::npos) continue;
+                        const auto result = state.audioSources->notify("trigger:" + id + ":" + phase);
+                        if (!result) throw std::runtime_error(result.error().message);
+                    }
+                }
+        }
         catch (const std::exception& error) { state.fault(); return std::unexpected(runtimeError("runtime.simulation", state.project.scene.source, error.what())); }
         ++state.ticks;
         ++state.sceneTicks;
@@ -685,12 +836,18 @@ namespace project
                 if (!safe || !*safe) return std::unexpected(runtimeError("runtime.scene.spawn.blocked", *scenePath, "Target traveller placement overlaps a solid collider"));
             }
             candidate.m_impl->revision = state.revision + 1; candidate.m_impl->ticks = state.ticks;
+            const auto audioValidated = candidate.m_impl->validateAudioConfiguration();
+            if (!audioValidated)
+                return std::unexpected(runtimeError("runtime.audio.prepare", *scenePath, audioValidated.error()));
             // Retain the old state until candidate initialization and validation succeed.
             const auto retired = stop();
             if (!retired) return retired;
             inputScope.active = false;
             candidate.m_impl->preparing = false;
             m_impl.swap(candidate.m_impl);
+            try { m_impl->synchronizeAudio(); }
+            catch (const std::exception& error)
+            { m_impl->fault(); return std::unexpected(runtimeError("runtime.audio.commit", m_impl->project.scene.source, error.what())); }
         }
         return {};
     }
